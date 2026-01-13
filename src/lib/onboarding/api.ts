@@ -19,16 +19,11 @@ export async function sendOnboardingMessage(
   message: string,
   currentStep?: string
 ): Promise<OnboardingResponse> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  if (!supabaseUrl) {
-    throw new Error('NEXT_PUBLIC_SUPABASE_URL não configurado')
-  }
-
-  const response = await fetch(`${supabaseUrl}/functions/v1/onboarding-chat`, {
+  // Usar API route do Next.js como proxy para evitar problemas de CORS
+  const response = await fetch('/api/onboarding', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY}`,
     },
     body: JSON.stringify({
       session_id: sessionId,

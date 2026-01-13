@@ -175,7 +175,8 @@ nevo/
 │   └── seed.sql                   # Dados iniciais (blueprints)
 │
 ├── docs/                         # Documentação do projeto
-│   ├── mvp_nevo_plano_completo.plan.md
+│   ├── mvp_nevo_plano_completo.md
+│   ├── onboarding.md             # Especificação completa do onboarding chat-first
 │   ├── arquitetura.md
 │   ├── api.md
 │   ├── design-system.md
@@ -1497,7 +1498,13 @@ export class AIClient {
 
 ## 11. Onboarding Estilo ChatGPT (Mobile First)
 
-### 11.0 Regras Mobile First para Onboarding
+**📄 Documentação Detalhada**: Veja `/docs/onboarding.md` para especificação completa do fluxo de onboarding.
+
+### 11.0 Conceito Principal
+
+**A landing page DO Nevo É o onboarding**. O usuário chega e vê apenas um campo de texto central (estilo home do ChatGPT). Ao enviar a primeira mensagem, inicia-se um chat guiado que coleta dados do negócio. O cadastro (email/senha ou Google OAuth) acontece **no meio** da conversa, somente depois de gerar valor.
+
+### 11.1 Regras Mobile First para Onboarding
 
 - ✅ Tela cheia no mobile
 - ✅ Input fixo na parte inferior
@@ -1506,7 +1513,7 @@ export class AIClient {
 - ✅ Scroll suave
 - ✅ Animações otimizadas para mobile
 
-### 11.1 Design e UX
+### 11.2 Design e UX
 
 **Inspiração**: Interface do ChatGPT com:
 
@@ -1515,6 +1522,9 @@ export class AIClient {
 - Input fixo na parte inferior
 - Animações suaves
 - Design limpo e minimalista
+- Logo Nevo simples no topo
+- Headline central: "Como posso ajudar?"
+- Exemplos clicáveis (opcional)
 
 ### 11.2 Componente de Onboarding
 
@@ -1591,14 +1601,23 @@ export function OnboardingChat({ tenantId }: { tenantId: string }) {
 }
 ```
 
-### 11.3 Fluxo de Onboarding
+### 11.3 Fluxo de Onboarding (Detalhado em `/docs/onboarding.md`)
 
-1. **Boas-vindas** → Pergunta nome da empresa
-2. **Tipo de negócio** → Seleção de domínio (Personal Chef, Advocacia, etc.)
-3. **Canal** → WhatsApp ou Chat Próprio
-4. **Configuração de IA** → Seleção de provedor e inserção de key
-5. **Configuração básica** → Tom, idioma, etc.
-6. **Finalização** → Clonar blueprint e ativar
+**Estado Inicial**: Usuário anônimo (sem auth), cria `onboarding_session` anônima
+
+1. **PASSO 1 - Boas-vindas**: Após primeira mensagem do usuário, Nevo se apresenta
+2. **PASSO 2 - Detectar ramo**: IA sugere domínio, usuário confirma
+3. **PASSO 3 - Coleta de dados**: Nome do negócio, o que atende, o que não atende, modo de decisão, tom de voz
+4. **PASSO 4 - Momento de cadastro**: Após gerar valor ("já consigo montar seu fluxo")
+5. **PASSO 5 - Cadastro inline**:
+   - Opção 1: Email + Senha
+   - Opção 2: **Google OAuth** (novo)
+   - Opção 3: Continuar depois (opcional)
+6. **Após cadastro**: Migrar session → tenant + flow + variables, redirecionar para `/app/flow-editor`
+
+**Tabelas necessárias**:
+- `onboarding_sessions` (anônimas, expiram em 7 dias)
+- `onboarding_messages` (histórico do chat)
 
 ## 12. Chat Próprio (Alternativa ao WhatsApp)
 

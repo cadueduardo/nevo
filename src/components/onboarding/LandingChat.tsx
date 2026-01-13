@@ -38,23 +38,29 @@ export function LandingChat() {
     setIsLoading(true)
 
     try {
-      // Chamar Edge Function
-      const response = await sendOnboardingMessage(sessionId, content, currentStep)
+      // Chamar Edge Function - passar step atual ou undefined para primeira mensagem
+      const stepToSend = messages.length === 0 ? undefined : currentStep
+      const response = await sendOnboardingMessage(sessionId, content, stepToSend)
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: response.assistant_message,
         timestamp: new Date(),
+        actionOptions: response.action_options,
       }
 
       setMessages((prev) => [...prev, assistantMessage])
       setCurrentStep(response.next_step as OnboardingStep)
 
-      // TODO: Lidar com requires_action (botões, etc.)
-      if (response.requires_action === 'signup' && response.next_step === 'completed') {
-        // Redirecionar para dashboard após cadastro
-        // window.location.href = '/app/flow-editor'
+      // Redirecionar após cadastro completo
+      if (response.next_step === 'completed' && currentStep !== 'completed') {
+        // Primeira vez que completa - aguardar alguns segundos e redirecionar
+        setTimeout(() => {
+          // TODO: Implementar migração de dados e redirecionamento real
+          // Por enquanto, apenas mostra mensagem
+          console.log('Onboarding completo! Redirecionar para dashboard em breve.')
+        }, 3000)
       }
     } catch (error) {
       console.error('Error sending message:', error)
@@ -70,12 +76,18 @@ export function LandingChat() {
     }
   }
 
+  const handleActionClick = (action: string) => {
+    // Enviar ação como mensagem
+    handleSend(action)
+  }
+
   return (
     <ChatShell
       messages={messages}
       onSend={handleSend}
       isLoading={isLoading}
       typingPlaceholders={TYPING_PLACEHOLDERS}
+      onActionClick={handleActionClick}
       header={
         <div className="px-4 py-3 flex items-center justify-center">
           <h1 className="text-lg sm:text-xl font-semibold">Nevo</h1>

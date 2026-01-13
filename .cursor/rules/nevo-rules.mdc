@@ -113,3 +113,13 @@ A regra de tenant_id se aplica à todas operações.
 - Não salvar tokens ou segredos em texto puro.
 - Não incluir dados de exemplo em produção.
 - Não expor consultas SQL nos logs.
+
+# Uso do Supabase MCP (OBRIGATÓRIO)
+- **SEMPRE** usar o MCP do Supabase para qualquer operação relacionada ao banco de dados.
+- **SEMPRE** usar o MCP do Supabase para criar/atualizar migrations.
+- **SEMPRE** usar o MCP do Supabase para criar/atualizar Edge Functions.
+- **SEMPRE** usar o MCP do Supabase para executar queries SQL.
+- **SEMPRE** usar o MCP do Supabase para gerenciar tabelas, RLS policies, e extensões.
+- NÃO criar migrations manualmente em arquivos SQL sem aplicar via MCP.
+- NÃO criar Edge Functions manualmente sem deploy via MCP.
+- O MCP do Supabase está configurado e deve ser a interface única para operações no banco.
