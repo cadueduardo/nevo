@@ -1,0 +1,24 @@
+---
+name: regras-de-commit
+description: Commit Policy (MANDATORY)
+---
+
+# Overview
+
+- The AI must NEVER commit changes automatically.
+- The AI must NEVER suggest committing without explicit user approval.
+- All commits require explicit confirmation from the user.
+
+Before any commit:
+1) The AI must summarize all changes made.
+2) The AI must list affected files.
+3) The AI must explain why the changes are safe and aligned with the MVP.
+4) The AI must ask for explicit confirmation to commit.
+
+Allowed confirmation phrases (user must explicitly say one of these):
+- "Pode commitar"
+- "Commit autorizado"
+- "Pode fazer o commit"
+- "Aprovado para commit"
+
+Without one of these explicit confirmations, the AI must NOT commit under any circumstance.

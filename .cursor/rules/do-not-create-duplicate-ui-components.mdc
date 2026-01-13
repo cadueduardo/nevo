@@ -1,0 +1,19 @@
+---
+name: do-not-create-duplicate-ui-components
+description: UI/Component Reuse Policy (MANDATORY)
+---
+
+# Overview
+
+- Do NOT create duplicate UI components.
+- Before creating any new component, ALWAYS search the existing codebase for a similar component.
+- Prefer reusing and extending existing components over creating new ones.
+- All reusable UI components must live in /src/components/ui or /src/components/shared.
+- Feature-specific components must live in /src/features/<feature>/components.
+- If a new component is needed, it must be added to the global component library and exported from the component index.
+- Every new component must include:
+  - a clear name
+  - typed props (TypeScript)
+  - minimal styling
+  - documentation comment describing intended reuse
+- Never copy-paste a component to a new folder. Refactor to shared instead.
