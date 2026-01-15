@@ -6,12 +6,28 @@ interface OnboardingRequest {
   current_step?: string
 }
 
+export interface EditableItem {
+  id: string
+  label: string
+  value: string
+  type: 'service' | 'faq' | 'variable'
+}
+
+export interface SelectableOption {
+  id: string
+  label: string
+  value: string
+  selected?: boolean
+}
+
 interface OnboardingResponse {
   assistant_message: string
   next_step: string
   extracted_data?: Record<string, any>
   requires_action?: 'domain_confirmation' | 'signup' | null
   action_options?: string[]
+  editable_items?: EditableItem[]
+  selectable_options?: SelectableOption[]
 }
 
 export async function sendOnboardingMessage(
