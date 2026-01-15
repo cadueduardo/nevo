@@ -5,12 +5,30 @@ import { ChatThread } from './ChatThread'
 import { ChatComposer } from './ChatComposer'
 import { cn } from '@/lib/utils'
 
+export interface EditableItem {
+  id: string
+  label: string
+  value: string
+  type: 'service' | 'faq' | 'variable'
+}
+
+export interface SelectableOption {
+  id: string
+  label: string
+  value: string
+  selected?: boolean
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant'
+  kind?: 'text' | 'signup'
   content: string
   timestamp?: Date
   actionOptions?: string[]
+  editableItems?: EditableItem[]
+  selectableOptions?: SelectableOption[]
+  requiresAction?: string | null
 }
 
 interface ChatShellProps {
@@ -23,6 +41,8 @@ interface ChatShellProps {
   examples?: string[]
   onExampleClick?: (example: string) => void
   onActionClick?: (action: string) => void
+  onSignupSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
+  onSignupCancel?: () => void
   header?: ReactNode
   footer?: ReactNode
 }
@@ -37,6 +57,8 @@ export function ChatShell({
   examples = [],
   onExampleClick,
   onActionClick,
+  onSignupSubmit,
+  onSignupCancel,
   header,
   footer,
 }: ChatShellProps) {
@@ -83,6 +105,8 @@ export function ChatShell({
             messages={messages} 
             isLoading={isLoading}
             onActionClick={onActionClick}
+            onSignupSubmit={onSignupSubmit}
+            onSignupCancel={onSignupCancel}
           />
           {/* Input Area - Fixo na parte inferior quando há mensagens */}
           <div className="flex-shrink-0 bg-background px-4 py-4">
