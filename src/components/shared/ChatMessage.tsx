@@ -238,25 +238,52 @@ export function ChatMessage({
         {/* Botões de ação */}
         {!isUser && actionOptions && actionOptions.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-3">
-            {actionOptions.map((option, index) => (
-              <button
-                key={index}
-                onClick={() => onActionClick?.(option)}
-                className={cn(
-                  'px-4 py-2',
-                  'rounded-lg',
-                  'text-sm font-normal',
-                  'bg-background dark:bg-foreground/10',
-                  'text-foreground',
-                  'border border-border',
-                  'hover:bg-muted',
-                  'transition-colors',
-                  'focus:outline-none focus:ring-2 focus:ring-primary/20'
-                )}
-              >
-                {option}
-              </button>
-            ))}
+            {actionOptions.map((option, index) => {
+              if (option.startsWith('open_url|')) {
+                const [, label, url] = option.split('|')
+                if (!label || !url) return null
+                return (
+                  <a
+                    key={index}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={cn(
+                      'px-4 py-2',
+                      'rounded-lg',
+                      'text-sm font-normal',
+                      'bg-background dark:bg-foreground/10',
+                      'text-foreground',
+                      'border border-border',
+                      'hover:bg-muted',
+                      'transition-colors',
+                      'focus:outline-none focus:ring-2 focus:ring-primary/20'
+                    )}
+                  >
+                    {label}
+                  </a>
+                )
+              }
+              return (
+                <button
+                  key={index}
+                  onClick={() => onActionClick?.(option)}
+                  className={cn(
+                    'px-4 py-2',
+                    'rounded-lg',
+                    'text-sm font-normal',
+                    'bg-background dark:bg-foreground/10',
+                    'text-foreground',
+                    'border border-border',
+                    'hover:bg-muted',
+                    'transition-colors',
+                    'focus:outline-none focus:ring-2 focus:ring-primary/20'
+                  )}
+                >
+                  {option}
+                </button>
+              )
+            })}
           </div>
         )}
 

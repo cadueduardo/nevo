@@ -3,6 +3,19 @@ import { BusinessModelExtraction } from './extractors.ts'
 export interface BusinessModelData extends BusinessModelExtraction {
   faq?: Array<{ question: string; answer: string }>
   dynamic_variables?: Array<{ key: string; label: string; type: string; context?: string }>
+  services_duration_configured?: boolean
+  staff?: Array<{
+    name: string
+    use_business_schedule?: boolean
+    schedule?: {
+      days_of_week?: string[]
+      start_time?: string
+      end_time?: string
+      breaks?: Array<{ start: string; end: string }>
+      interval_minutes?: number
+    }
+  }>
+  staff_setup_index?: number
 }
 
 export interface FlowState {
@@ -19,6 +32,140 @@ function formatContextLabel(context?: 'booking' | 'quote' | 'both'): string | nu
   return 'Agendamento + Orçamento'
 }
 
+function isStaffScheduleComplete(staff: { schedule?: any; use_business_schedule?: boolean }): boolean {
+  if (staff.use_business_schedule) return true
+  const s = staff.schedule || {}
+  return Boolean(
+    Array.isArray(s.days_of_week) &&
+      s.days_of_week.length > 0 &&
+      s.start_time &&
+      s.end_time &&
+      s.interval_minutes
+  )
+}
+
+function getNextStaffStep(data: Partial<BusinessModelData>) {
+  const staff = Array.isArray(data.staff) ? data.staff : []
+  if (!staff.length) return null
+
+  for (let i = 0; i < staff.length; i += 1) {
+    const member = staff[i]
+    if (!member?.name) continue
+
+    if (member.use_business_schedule === undefined) {
+      return {
+        step: 'staff_schedule_mode',
+        message: `A agenda de **${member.name}** é a mesma do estabelecimento ou tem horário próprio?`,
+        action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+        requires_action: 'staff_schedule_mode',
+      }
+    }
+
+    if (!isStaffScheduleComplete(member)) {
+      if (!member.schedule?.days_of_week || member.schedule.days_of_week.length === 0) {
+        return {
+          step: 'staff_schedule_days',
+          message: `Em quais dias da semana **${member.name}** atende? (você pode selecionar nos checkboxes)`,
+          requires_action: 'schedule_days',
+        }
+      }
+      if (!member.schedule?.start_time || !member.schedule?.end_time) {
+        return {
+          step: 'staff_schedule_time',
+          message: `E qual é a faixa de horário que **${member.name}** atende? (ex.: 08:00 às 18:00)`,
+        }
+      }
+      if (!member.schedule?.interval_minutes) {
+        return {
+          step: 'staff_schedule_interval',
+          message: `Qual é o intervalo entre atendimentos para **${member.name}**?`,
+          action_options: ['15 min', '30 min', '45 min', '60 min', 'Outro intervalo'],
+          requires_action: 'schedule_interval',
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+function normalizeForMatch(value?: string): string {
+  return (value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+}
+
+function buildServiceExamples(businessType?: string, businessSegment?: BusinessModelData['business_segment']): string {
+  if (businessSegment) {
+    const examplesBySegment: Record<string, string> = {
+      juridico: 'direito de familia, direito trabalhista, direito do consumidor',
+      odontologia: 'limpeza, avaliacao, clareamento dental',
+      saude: 'consulta, retorno, exames',
+      psicologia: 'sessao individual, terapia de casal, avaliacao',
+      barbearia: 'corte, barba, sobrancelha',
+      beleza: 'corte, escova, coloracao',
+      imobiliaria: 'visita ao imovel, avaliacao, consultoria',
+      contabilidade: 'abertura de empresa, imposto de renda, consultoria contabil',
+      consultoria: 'diagnostico, plano de acao, acompanhamento',
+      educacao: 'aula experimental, matricula, reforco escolar',
+      tecnologia: 'diagnostico, implantacao, suporte tecnico',
+      outros: 'consulta, avaliacao, atendimento',
+    }
+
+    return examplesBySegment[businessSegment] || 'consulta, avaliacao, atendimento'
+  }
+
+  const normalized = normalizeForMatch(businessType)
+
+  const examplesByKeyword: Array<{ keywords: string[]; examples: string }> = [
+    {
+      keywords: ["advocacia", "advogado", "jurid", "escritorio de advocacia"],
+      examples: "direito de familia, direito trabalhista, direito do consumidor",
+    },
+    {
+      keywords: ["odont", "dent", "odonto"],
+      examples: "limpeza, avaliacao, clareamento dental",
+    },
+    {
+      keywords: ["clinica", "medic", "saude"],
+      examples: "consulta, retorno, exames",
+    },
+    {
+      keywords: ["psico", "terapia", "psicolog"],
+      examples: "sessao individual, terapia de casal, avaliacao",
+    },
+    {
+      keywords: ["barbearia", "barbeiro"],
+      examples: "corte, barba, sobrancelha",
+    },
+    {
+      keywords: ["salao", "beleza", "estetica", "cabeleireiro"],
+      examples: "corte, escova, coloracao",
+    },
+    {
+      keywords: ["imobiliaria", "corretor", "imovel"],
+      examples: "visita ao imovel, avaliacao, consultoria",
+    },
+    {
+      keywords: ["contabilidade", "contador", "contabil"],
+      examples: "abertura de empresa, imposto de renda, consultoria contabil",
+    },
+    {
+      keywords: ["consultoria", "consultor"],
+      examples: "diagnostico, plano de acao, acompanhamento",
+    },
+  ]
+
+  for (const entry of examplesByKeyword) {
+    if (entry.keywords.some((keyword) => normalized.includes(keyword))) {
+      return entry.examples
+    }
+  }
+
+  return "manicure, pedicure, alongamento de unhas"
+}
+
 export function determineNextStep(
   currentData: Partial<BusinessModelData>,
   _message: string,
@@ -30,6 +177,8 @@ export function determineNextStep(
   requires_action?: string
 } {
   const missing = currentState.missing_fields
+
+  const serviceExamples = buildServiceExamples(currentData.business_type, currentData.business_segment)
 
   if (missing.includes('business_type') || !currentData.business_type) {
     return {
@@ -58,6 +207,17 @@ export function determineNextStep(
 
   if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
+    (missing.includes('services') || !currentData.services || currentData.services.length === 0)
+  ) {
+    return {
+      step: 'services_list',
+      message:
+        `Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nQuais servicos voce oferece? (separe por virgulas)\nEx.: ${serviceExamples}.`,
+    }
+  }
+
+  if (
+    (currentData.context === 'booking' || currentData.context === 'both') &&
     missing.some((f) => f.startsWith('schedule.'))
   ) {
     if (missing.includes('schedule.days_of_week')) {
@@ -75,17 +235,48 @@ export function determineNextStep(
           'Boa. E qual é a **faixa de horário** que você atende? (ex.: 08:00 às 18:00)\n\nPergunto isso pra eu liberar os horários certos no agendamento.',
       }
     }
+    if (missing.includes('schedule.interval_minutes')) {
+      return {
+        step: 'schedule_interval',
+        message:
+          'Qual é o **intervalo entre atendimentos**?\n\nIsso define de quanto em quanto tempo os horários aparecem na agenda.',
+        action_options: ['15 min', '30 min', '45 min', '60 min', 'Outro intervalo'],
+        requires_action: 'schedule_interval',
+      }
+    }
   }
 
   if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
-    (missing.includes('services') || !currentData.services || currentData.services.length === 0)
+    Array.isArray(currentData.services) &&
+    currentData.services.length > 0 &&
+    currentData.schedule?.interval_minutes &&
+    !currentData.services_duration_configured
   ) {
     return {
-      step: 'services_list',
+      step: 'services_duration',
       message:
-        'Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nQuais serviços você oferece? (separe por vírgulas)\nEx.: manicure, pedicure, alongamento de unhas.',
+        'Algum serviço tem duração diferente do padrão? Se quiser, ajuste abaixo o tempo de cada serviço.',
+      action_options: ['Continuar'],
+      requires_action: 'services_duration',
     }
+  }
+
+  if (
+    (currentData.context === 'booking' || currentData.context === 'both') &&
+    (missing.includes('staff') || !currentData.staff || currentData.staff.length === 0)
+  ) {
+    return {
+      step: 'staff_mode',
+      message: 'Você atende sozinho ou tem colaboradores?',
+      action_options: ['Atendo sozinho', 'Tenho colaboradores'],
+      requires_action: 'staff_mode',
+    }
+  }
+
+  const nextStaffStep = getNextStaffStep(currentData)
+  if (nextStaffStep && (currentData.context === 'booking' || currentData.context === 'both')) {
+    return nextStaffStep
   }
 
   if (
@@ -219,13 +410,58 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
     sunday: 'Domingo',
   }
 
+  const formatSchedule = (schedule?: {
+    days_of_week?: string[]
+    start_time?: string
+    end_time?: string
+    breaks?: Array<{ start: string; end: string }>
+    interval_minutes?: number
+  }): string | null => {
+    if (
+      !schedule ||
+      !Array.isArray(schedule.days_of_week) ||
+      schedule.days_of_week.length === 0 ||
+      !schedule.start_time ||
+      !schedule.end_time
+    ) {
+      return null
+    }
+    const days = schedule.days_of_week.map((d) => daysLabels[d] || d).join(', ')
+    const time = `${schedule.start_time} às ${schedule.end_time}`
+    const interval = schedule.interval_minutes ? ` | ${schedule.interval_minutes} min` : ''
+    const breaks =
+      Array.isArray(schedule.breaks) && schedule.breaks.length > 0
+        ? ` | Pausa: ${schedule.breaks.map((b) => `${b.start} às ${b.end}`).join(', ')}`
+        : ''
+    return `${days} - ${time}${interval}${breaks}`
+  }
+
   parts.push('Deixa eu te contar rapidinho o que já entendi:\n')
 
   if (data.business_name) parts.push(`• Negócio: ${data.business_name}`)
   if (data.business_type) parts.push(`• Tipo: ${data.business_type}`)
 
   if (data.services && data.services.length > 0) {
-    parts.push(`• Serviços: ${data.services.map((s) => s.name).join(', ')}`)
+    parts.push(
+      `• Serviços: ${data.services
+        .map((s) => `${s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ''}`)
+        .join(', ')}`
+    )
+  }
+
+  if (data.staff && data.staff.length > 0) {
+    parts.push(`• Colaboradores: ${data.staff.map((s) => s.name).join(', ')}`)
+    const baseScheduleText = formatSchedule(data.schedule)
+    data.staff.forEach((member) => {
+      if (!member?.name) return
+      const staffSchedule = member.use_business_schedule ? data.schedule : member.schedule
+      const scheduleText = formatSchedule(staffSchedule)
+      if (scheduleText) {
+        parts.push(`  - ${member.name}: ${scheduleText}`)
+      } else if (member.use_business_schedule && baseScheduleText) {
+        parts.push(`  - ${member.name}: ${baseScheduleText}`)
+      }
+    })
   }
 
   // Agenda/horários: só mostrar se o usuário informou (não exibir "Não informado")
@@ -239,6 +475,9 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
     const days = data.schedule.days_of_week.map((d) => daysLabels[d] || d).join(', ')
     const time = `${data.schedule.start_time} às ${data.schedule.end_time}`
     parts.push(`• Agenda: ${days} - ${time}`)
+  }
+  if (data.schedule?.interval_minutes) {
+    parts.push(`• Intervalo: ${data.schedule.interval_minutes} min`)
   }
 
   if (data.service_area?.region || (data.service_area as any)?.coverage) {
@@ -305,7 +544,11 @@ export function generateFullStructure(data: Partial<BusinessModelData>): string 
   }
 
   if (data.services && data.services.length > 0) {
-    parts.push(`**Serviços:**\n${data.services.map((s, i) => `${i + 1}. ${s.name}`).join('\n')}\n`)
+    parts.push(
+      `**Serviços:**\n${data.services
+        .map((s, i) => `${i + 1}. ${s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ''}`)
+        .join('\n')}\n`
+    )
   }
 
   if (data.faq && data.faq.length > 0) {

@@ -10,7 +10,19 @@ export interface EditableItem {
   id: string
   label: string
   value: string
-  type: 'service' | 'faq' | 'variable'
+  type:
+    | 'service'
+    | 'service_duration'
+    | 'faq'
+    | 'variable'
+    | 'schedule'
+    | 'schedule_interval'
+    | 'service_area'
+    | 'tone_of_voice'
+    | 'policies'
+    | 'business_name'
+    | 'business_type'
+    | 'context'
 }
 
 export interface SelectableOption {
@@ -24,7 +36,7 @@ interface OnboardingResponse {
   assistant_message: string
   next_step: string
   extracted_data?: Record<string, any>
-  requires_action?: 'domain_confirmation' | 'signup' | null
+  requires_action?: string | null
   action_options?: string[]
   editable_items?: EditableItem[]
   selectable_options?: SelectableOption[]

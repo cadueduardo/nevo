@@ -4,6 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 import {
   extractBusinessModelWithAI,
+  extractServicesFromText,
   identifyMissingFields,
   parseServicesList,
   extractQuoteVariables,
@@ -50,14 +51,17 @@ function isLikelyBusinessInfoFirstMessage(message: string): boolean {
 
   // Cumprimentos curtos / mensagens vazias → não tratar como descrição do negócio
   if (text.length < 8) return false
+  const hasBusinessKeyword = /(manicure|barbearia|barbeiro|salão|salao|clínica|clinica|loja|restaurante|pizzaria|lanchonete|oficina|delivery)\b/.test(
+    text
+  )
   if (/^(oi|olá|ola|bom dia|boa tarde|boa noite|e aí|e ai|fala|hello)\b/.test(text) && text.length < 30) {
-    return false
+    if (!hasBusinessKeyword) return false
   }
 
   // Sinais de descrição de negócio / atendimento / horários / nome
   const patterns = [
     /\b(sou|tenho|trabalho|atuo|atendo|faço|faco|vendo|presto)\b/,
-    /\b(barbearia|barbeiro|salão|salao|clínica|clinica|loja|restaurante|pizzaria|lanchonete|oficina|delivery)\b/,
+    /\b(barbearia|barbeiro|salão|salao|clínica|clinica|loja|restaurante|pizzaria|lanchonete|oficina|delivery|manicure)\b/,
     /\b(chama|se chama|nome)\b/,
     /\b(seg|segunda|ter|terça|quarta|quinta|sexta|sáb|sábado|domingo)\b/,
     /\b(das|de)\s*\d{1,2}\b.*\b(as|às|até|ate)\b.*\d{1,2}\b/,
@@ -198,6 +202,15 @@ function buildEditableItems(data: any) {
     })
   }
 
+  if (data.schedule?.interval_minutes) {
+    items.push({
+      id: 'schedule_interval',
+      label: 'Intervalo entre atendimentos',
+      value: `${data.schedule.interval_minutes} min`,
+      type: 'schedule_interval',
+    })
+  }
+
   if (data.policies) {
     const note = typeof data.policies?.note === 'string' ? data.policies.note.trim() : ''
     items.push({
@@ -212,6 +225,64 @@ function buildEditableItems(data: any) {
     data.services.forEach((s: any, i: number) => items.push({ id: `service_${i}`, label: 'Serviço', value: s.name, type: 'service' }))
   }
   return items
+}
+
+function buildServiceItems(services: Array<{ name: string }> = []) {
+  return services.map((s, i) => ({
+    id: `service_${i}`,
+    label: 'Serviço',
+    value: s.name,
+    type: 'service',
+  }))
+}
+
+function buildServiceDurationItems(services: Array<{ name: string; duration_minutes?: number }> = [], defaultMinutes?: number) {
+  return services.map((s, i) => {
+    const minutes = s.duration_minutes ?? defaultMinutes
+    const value = minutes ? `${minutes} min` : ''
+    return {
+      id: `service_duration_${i}`,
+      label: s.name,
+      value,
+      type: 'service_duration',
+    }
+  })
+}
+
+function parseIntervalMinutes(message: string): number | null {
+  const match = message.match(/(\d{1,3})/)
+  if (!match) return null
+  const value = parseInt(match[1], 10)
+  if (Number.isNaN(value) || value < 5 || value > 240) return null
+  return value
+}
+
+function parseDurationMinutes(message: string): number | null {
+  const match = message.match(/(\d{1,3})/)
+  if (!match) return null
+  const value = parseInt(match[1], 10)
+  if (Number.isNaN(value) || value < 5 || value > 600) return null
+  return value
+}
+
+function findServiceIndexByText(services: Array<{ name: string }>, text: string): number {
+  const lower = (text || '').toLowerCase()
+  if (!lower) return -1
+  for (let i = 0; i < services.length; i += 1) {
+    const name = (services[i]?.name || '').toLowerCase()
+    if (name && lower.includes(name)) return i
+  }
+  return -1
+}
+
+function shouldReplaceServices(text: string): boolean {
+  const lower = (text || '').toLowerCase()
+  return (
+    lower.includes('meus serviços são') ||
+    lower.includes('meus servicos sao') ||
+    lower.includes('serviços:') ||
+    lower.includes('servicos:')
+  )
 }
 
 function attachSummaryPayload(resp: OnboardingResponse, data: any): OnboardingResponse {
@@ -310,6 +381,36 @@ function parseDaysFromText(message: string): string[] {
   return days
 }
 
+function parseStaffNames(message: string): string[] {
+  const text = (message || '')
+    .replace(/\r?\n/g, ',')
+    .replace(/;/g, ',')
+    .replace(/^(colaboradores?|funcion[aá]rios?|equipe|atendentes?)\s*:\s*/i, '')
+    .trim()
+  if (!text) return []
+
+  const parts = text
+    .split(',')
+    .flatMap((p) => p.split(/\s+e\s+/i))
+    .map((p) => p.trim())
+    .filter(Boolean)
+
+  const blacklist = ['eu', 'só eu', 'so eu', 'sozinho', 'sozinha', 'apenas eu', 'somente eu']
+  return parts.filter((name) => !blacklist.includes(name.toLowerCase()))
+}
+
+function getStaffSetupIndex(data: any): number {
+  const idx = Number(data?.staff_setup_index)
+  return Number.isFinite(idx) && idx >= 0 ? idx : 0
+}
+
+function updateStaffAtIndex(staff: any[], idx: number, patch: any) {
+  const next = Array.isArray(staff) ? [...staff] : []
+  if (!next[idx]) next[idx] = { name: '' }
+  next[idx] = { ...next[idx], ...patch }
+  return next
+}
+
 function parseTimeRange(message: string): { start: string; end: string } | null {
   const msg = (message || '').toLowerCase()
 
@@ -351,7 +452,7 @@ function parseBreaksFromText(message: string): Array<{ start: string; end: strin
 
   // Caso: "pausa ... 12:00 as 13:00" / "intervalo ... 12 às 13"
   const explicit = text.match(
-    /(?:pausa|intervalo|almo[cç]o).*?(?:das|de)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:h|hs)?\s*(?:às|as|a|até|ate|-)\s*(?:as|às)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:h|hs)?/i
+    /(?:pausa|intervalo|almo[cç]o|folga|descanso).*?(?:das|de)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:h|hs)?\s*(?:às|as|a|até|ate|-)\s*(?:as|às)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:h|hs)?/i
   )
   if (explicit) {
     const sh = String(parseInt(explicit[1])).padStart(2, '0')
@@ -363,7 +464,9 @@ function parseBreaksFromText(message: string): Array<{ start: string; end: strin
   }
 
   // Caso: "pausa ... de meio dia até as 13"
-  const midday = text.match(/(?:pausa|intervalo|almo[cç]o).*?(meio\s*dia|12h|12:00|12)\s*(?:até|ate)\s*(?:as|às)?\s*(\d{1,2})(?::(\d{2}))?/i)
+  const midday = text.match(
+    /(?:pausa|intervalo|almo[cç]o|folga|descanso).*?(meio\s*dia|12h|12:00|12)\s*(?:até|ate)\s*(?:as|às)?\s*(\d{1,2})(?::(\d{2}))?/i
+  )
   if (midday) {
     const eh = String(parseInt(midday[2])).padStart(2, '0')
     const em = midday[3] ? String(parseInt(midday[3])).padStart(2, '0') : '00'
@@ -382,8 +485,14 @@ function parseScheduleNarrative(message: string): {
   const text = (message || '').toLowerCase()
   const out: { start_time?: string; end_time?: string; breaks?: Array<{ start: string; end: string }> } = {}
 
+  const explicitBreaks = parseBreaksFromText(text)
+  if (explicitBreaks.length > 0) out.breaks = explicitBreaks
+
+  const breakKeywordIndex = text.search(/\b(?:pausa|intervalo|almo[cç]o|folga|descanso)\b/)
+  const textBeforeBreak = breakKeywordIndex >= 0 ? text.slice(0, breakKeywordIndex) : text
+
   // Tentativa 1: range completo em uma tacada
-  const range = parseTimeRange(text)
+  const range = parseTimeRange(textBeforeBreak) || parseTimeRange(text)
   if (range) {
     out.start_time = range.start
     out.end_time = range.end
@@ -414,9 +523,17 @@ function parseScheduleNarrative(message: string): {
     out.start_time = `${sh}:${sm}`
   }
 
-  // Pausas explícitas (se vierem no texto)
-  const explicitBreaks = parseBreaksFromText(text)
-  if (explicitBreaks.length > 0) out.breaks = explicitBreaks
+  // Se o range encontrado for exatamente a pausa, ignore para evitar confusão.
+  if (
+    out.start_time &&
+    out.end_time &&
+    Array.isArray(out.breaks) &&
+    out.breaks.length > 0 &&
+    out.breaks.some((b) => b.start === out.start_time && b.end === out.end_time)
+  ) {
+    out.start_time = undefined
+    out.end_time = undefined
+  }
 
   return out
 }
@@ -573,6 +690,56 @@ async function processMessage(
   }
 
   // Steps determinísticos primeiro (não depender de botão/ui_action)
+  if (currentStep === 'business_type') {
+    const extracted = await extractBusinessModelWithAI(text, collectedData)
+    const businessType = extracted.business_type || text.trim()
+    if (!businessType) {
+      return {
+        assistant_message: 'Qual é o tipo do seu negócio (o que você faz/vende)?',
+        next_step: 'business_type',
+      }
+    }
+    const merged = {
+      ...collectedData,
+      ...extracted,
+      business_type: businessType,
+    }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('business_type', merged))
+    return {
+      assistant_message: `✅ Entendi. Você atua com ${businessType}.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { business_type: businessType, ...(extracted.business_name ? { business_name: extracted.business_name } : {}) },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'business_name') {
+    const extracted = await extractBusinessModelWithAI(text, collectedData)
+    const name = (extracted.business_name || text).trim()
+    if (!name) {
+      return {
+        assistant_message: 'Qual é o nome do seu negócio?',
+        next_step: 'business_name',
+      }
+    }
+    const merged = { ...collectedData, ...extracted, business_name: name }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('business_name', merged))
+    return {
+      assistant_message: `✅ Perfeito, ${name}.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: {
+        business_name: name,
+        ...(extracted.business_type ? { business_type: extracted.business_type } : {}),
+      },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+      ...(next.step === 'schedule_days'
+        ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) }
+        : {}),
+    }
+  }
+
   if (currentStep === 'context') {
     const selected = parseContext(text)
     if (!selected) {
@@ -689,6 +856,16 @@ async function processMessage(
       }
     }
 
+    if (!nextSchedule.breaks || nextSchedule.breaks.length === 0) {
+      return {
+        assistant_message:
+          `✅ Perfeito. Horário: ${nextSchedule.start_time} às ${nextSchedule.end_time}.` +
+          `\n\nVocê tem alguma pausa no dia? (ex.: pausa 12:00 às 13:00). Se não tiver, responda “não”.`,
+        next_step: 'schedule_breaks',
+        extracted_data: { schedule: nextSchedule },
+      }
+    }
+
     const merged = { ...collectedData, schedule: nextSchedule }
     const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('schedule_time', merged))
     return {
@@ -700,6 +877,463 @@ async function processMessage(
         `\n\n${next.message}`,
       next_step: next.step,
       extracted_data: { schedule: merged.schedule },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'schedule_breaks') {
+    const existing = collectedData.schedule || {}
+    const wantsNo = /(não|nao|sem pausa|sem intervalo|sem almoco|sem almoço|nao tenho|não tenho)/i.test(text)
+    if (wantsNo) {
+      const merged = { ...collectedData, schedule: { ...existing, breaks: [] } }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('schedule_breaks', merged))
+      return {
+        assistant_message: `Perfeito. Sem pausa.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { schedule: { ...existing, breaks: [] } },
+        action_options: next.action_options,
+        requires_action: next.requires_action,
+      }
+    }
+
+    let breaks = parseBreaksFromText(text)
+    if (!breaks.length) {
+      const range = parseTimeRange(text)
+      if (range) {
+        breaks = [{ start: range.start, end: range.end }]
+      }
+    }
+    if (!breaks.length) {
+      return {
+        assistant_message:
+          'Nao consegui entender a pausa. Pode responder assim: "pausa 12:00 as 13:00". Se nao tiver, responda "nao".',
+        next_step: 'schedule_breaks',
+      }
+    }
+
+    const merged = { ...collectedData, schedule: { ...existing, breaks } }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('schedule_breaks', merged))
+    return {
+      assistant_message:
+        `✅ Pausa: ${breaks.map((b: any) => `${b.start} às ${b.end}`).join(', ')}.` +
+        `\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { schedule: { ...existing, breaks } },
+      action_options: next.action_options,
+      requires_action: next.requires_action,
+    }
+  }
+
+  if (currentStep === 'schedule_interval') {
+    if (lower.includes('outro')) {
+      return {
+        assistant_message: 'Qual intervalo em minutos você prefere?',
+        next_step: 'schedule_interval_custom',
+      }
+    }
+    const value = parseIntervalMinutes(text)
+    if (!value) {
+      return {
+        assistant_message: 'Não entendi o intervalo. Você pode escolher 15, 30, 45, 60 ou informar um número.',
+        next_step: 'schedule_interval',
+        action_options: ['15 min', '30 min', '45 min', '60 min', 'Outro intervalo'],
+        requires_action: 'schedule_interval',
+      }
+    }
+    const merged = {
+      ...collectedData,
+      schedule: { ...(collectedData.schedule || {}), interval_minutes: value },
+    }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('schedule_interval', merged))
+    return {
+      assistant_message: `✅ Intervalo anotado: ${value} minutos.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { schedule: merged.schedule },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+      ...(next.step === 'services_duration'
+        ? {
+            editable_items: buildServiceDurationItems(merged.services || [], value),
+          }
+        : {}),
+    }
+  }
+
+  if (currentStep === 'schedule_interval_custom') {
+    const value = parseIntervalMinutes(text)
+    if (!value) {
+      return {
+        assistant_message: 'Me diga apenas o número de minutos (ex.: 20).',
+        next_step: 'schedule_interval_custom',
+      }
+    }
+    const merged = {
+      ...collectedData,
+      schedule: { ...(collectedData.schedule || {}), interval_minutes: value },
+    }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('schedule_interval', merged))
+    return {
+      assistant_message: `✅ Intervalo anotado: ${value} minutos.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { schedule: merged.schedule },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+      ...(next.step === 'services_duration'
+        ? {
+            editable_items: buildServiceDurationItems(merged.services || [], value),
+          }
+        : {}),
+    }
+  }
+
+  if (currentStep === 'services_duration') {
+    const services = Array.isArray(collectedData.services) ? [...collectedData.services] : []
+    const defaultMinutes = collectedData.schedule?.interval_minutes
+    const wantsContinue = /(continuar|seguir|pronto|ok|manter padrão|manter padrao|salvar)/i.test(text)
+
+    if (wantsContinue) {
+      const normalizedServices = services.map((s) => ({
+        ...s,
+        duration_minutes: s.duration_minutes || defaultMinutes,
+      }))
+      const merged = { ...collectedData, services: normalizedServices, services_duration_configured: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_duration', merged))
+      return {
+        assistant_message: `✅ Durações anotadas.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { services: normalizedServices, services_duration_configured: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.step === 'schedule_days'
+          ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) }
+          : {}),
+      }
+    }
+
+    const minutes = parseDurationMinutes(text)
+    const idx = findServiceIndexByText(services, text)
+    if (!minutes || idx < 0) {
+      return {
+        assistant_message:
+          'Não consegui entender a duração. Você pode ajustar direto nos itens abaixo ou escrever algo como:\n“Corte masculino: 30 min”.',
+        next_step: 'services_duration',
+        editable_items: buildServiceDurationItems(services, defaultMinutes),
+        action_options: ['Continuar'],
+        requires_action: 'services_duration',
+      }
+    }
+
+    services[idx] = { ...services[idx], duration_minutes: minutes }
+    return {
+      assistant_message: `✅ Duração de ${services[idx].name}: ${minutes} min.\n\nQuer ajustar mais algum?`,
+      next_step: 'services_duration',
+      extracted_data: { services },
+      editable_items: buildServiceDurationItems(services, defaultMinutes),
+      action_options: ['Continuar'],
+      requires_action: 'services_duration',
+    }
+  }
+
+  if (currentStep === 'staff_mode') {
+    const isSolo = /(atendo sozinho|sozinh[oa]|s[oó] eu|apenas eu|somente eu)/i.test(text)
+    const hasTeam = /(colaboradores?|funcion[aá]rios?|equipe|temos|tenho)/i.test(text)
+    if (isSolo && !hasTeam) {
+      return {
+        assistant_message: 'Perfeito. Qual é o nome do atendente? (pode ser seu nome)',
+        next_step: 'staff_list',
+        extracted_data: { staff_mode: 'solo' },
+      }
+    }
+    if (hasTeam) {
+      return {
+        assistant_message: 'Quais são os nomes dos colaboradores? (separe por vírgulas)',
+        next_step: 'staff_list',
+        extracted_data: { staff_mode: 'team' },
+      }
+    }
+    return {
+      assistant_message: 'Você atende sozinho ou tem colaboradores?',
+      next_step: 'staff_mode',
+      action_options: ['Atendo sozinho', 'Tenho colaboradores'],
+      requires_action: 'staff_mode',
+    }
+  }
+
+  if (currentStep === 'staff_list') {
+    const names = parseStaffNames(text)
+    const mode = collectedData.staff_mode
+    if (!names.length) {
+      return {
+        assistant_message:
+          mode === 'solo'
+            ? 'Qual é o nome do atendente? (pode ser seu nome)'
+            : 'Não consegui identificar os nomes. Você pode escrever assim: "Carla, Maria".',
+        next_step: 'staff_list',
+      }
+    }
+
+    const staff = names.map((name) => ({ name }))
+    const merged = { ...collectedData, staff, staff_setup_index: 0 }
+    const first = staff[0]
+    return {
+      assistant_message: `Perfeito. A agenda de **${first?.name || 'colaborador 1'}** é a mesma do estabelecimento ou tem horário próprio?`,
+      next_step: 'staff_schedule_mode',
+      extracted_data: { staff, staff_setup_index: 0 },
+      action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+      requires_action: 'staff_schedule_mode',
+    }
+  }
+
+  if (currentStep === 'staff_schedule_mode') {
+    const staff = Array.isArray(collectedData.staff) ? [...collectedData.staff] : []
+    if (!staff.length) {
+      return {
+        assistant_message: 'Você atende sozinho ou tem colaboradores?',
+        next_step: 'staff_mode',
+        action_options: ['Atendo sozinho', 'Tenho colaboradores'],
+        requires_action: 'staff_mode',
+      }
+    }
+
+    const idx = getStaffSetupIndex(collectedData)
+    const member = staff[idx]
+    if (!member) {
+      const next = determineNextStep(collectedData as BusinessModelData, '', makeFlowState('staff_schedule_mode', collectedData))
+      return {
+        assistant_message: next.message,
+        next_step: next.step,
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+
+    const sameSchedule = /(mesmo|igual|padra[oã]|estabelecimento|geral)/i.test(text)
+    const ownSchedule = /(pr[oó]prio|proprio|diferente|personalizado|hor[aá]rio pr[oó]prio)/i.test(text)
+    if (!sameSchedule && !ownSchedule) {
+      return {
+        assistant_message: `A agenda de **${member.name}** é a mesma do estabelecimento ou tem horário próprio?`,
+        next_step: 'staff_schedule_mode',
+        action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+        requires_action: 'staff_schedule_mode',
+      }
+    }
+
+    if (sameSchedule) {
+      staff[idx] = { ...member, use_business_schedule: true, schedule: undefined }
+      const nextIndex = idx + 1
+      if (nextIndex < staff.length) {
+        const nextMember = staff[nextIndex]
+        return {
+          assistant_message: `Perfeito. Agora, sobre **${nextMember.name}**: a agenda é a mesma do estabelecimento ou tem horário próprio?`,
+          next_step: 'staff_schedule_mode',
+          extracted_data: { staff, staff_setup_index: nextIndex },
+          action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+          requires_action: 'staff_schedule_mode',
+        }
+      }
+      const merged = { ...collectedData, staff, staff_setup_index: staff.length }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('staff_schedule_mode', merged))
+      return {
+        assistant_message: `✅ Agenda de ${member.name} configurada.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { staff: merged.staff, staff_setup_index: merged.staff_setup_index },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+
+    staff[idx] = { ...member, use_business_schedule: false, schedule: { ...(member.schedule || {}) } }
+    return {
+      assistant_message: `Em quais dias da semana **${member.name}** atende? (você pode selecionar nos checkboxes)`,
+      next_step: 'staff_schedule_days',
+      extracted_data: { staff, staff_setup_index: idx },
+      selectable_options: buildDaysSelectableOptions(member.schedule?.days_of_week || []),
+      requires_action: 'schedule_days',
+    }
+  }
+
+  if (currentStep === 'staff_schedule_days') {
+    const staff = Array.isArray(collectedData.staff) ? [...collectedData.staff] : []
+    if (!staff.length) {
+      return {
+        assistant_message: 'Você atende sozinho ou tem colaboradores?',
+        next_step: 'staff_mode',
+        action_options: ['Atendo sozinho', 'Tenho colaboradores'],
+        requires_action: 'staff_mode',
+      }
+    }
+
+    const idx = getStaffSetupIndex(collectedData)
+    const member = staff[idx]
+    const selectMatch = text.match(/^select_days:(.+)$/)
+    const selectedDays = selectMatch ? selectMatch[1].split(',').map((s) => s.trim()).filter(Boolean) : parseDaysFromText(text)
+    const existing = member?.schedule?.days_of_week || []
+
+    if (!selectedDays.length) {
+      return {
+        assistant_message: `Em quais dias da semana **${member?.name || 'este colaborador'}** atende?\n\nSelecione abaixo:`,
+        next_step: 'staff_schedule_days',
+        selectable_options: buildDaysSelectableOptions(existing),
+        requires_action: 'schedule_days',
+      }
+    }
+
+    staff[idx] = {
+      ...member,
+      use_business_schedule: false,
+      schedule: { ...(member?.schedule || {}), days_of_week: selectedDays },
+    }
+
+    return {
+      assistant_message: `✅ Anotei os dias de **${member?.name || 'este colaborador'}**.\n\nE qual é a faixa de horário que ele(a) atende? (ex.: 08:00 às 18:00)`,
+      next_step: 'staff_schedule_time',
+      extracted_data: { staff, staff_setup_index: idx },
+    }
+  }
+
+  if (currentStep === 'staff_schedule_time') {
+    const staff = Array.isArray(collectedData.staff) ? [...collectedData.staff] : []
+    if (!staff.length) {
+      return {
+        assistant_message: 'Você atende sozinho ou tem colaboradores?',
+        next_step: 'staff_mode',
+        action_options: ['Atendo sozinho', 'Tenho colaboradores'],
+        requires_action: 'staff_mode',
+      }
+    }
+
+    const idx = getStaffSetupIndex(collectedData)
+    const member = staff[idx]
+    const existing = member?.schedule || {}
+    const partial = parseScheduleNarrative(text)
+    const single = parseSingleTime(text)
+
+    const nextSchedule = {
+      ...existing,
+      ...(partial.start_time ? { start_time: partial.start_time } : {}),
+      ...(partial.end_time ? { end_time: partial.end_time } : {}),
+      ...(partial.breaks && partial.breaks.length > 0 ? { breaks: partial.breaks } : {}),
+    }
+
+    if (single) {
+      if (!nextSchedule.start_time && nextSchedule.end_time) nextSchedule.start_time = single
+      else if (!nextSchedule.end_time && nextSchedule.start_time) nextSchedule.end_time = single
+    }
+
+    if (!nextSchedule.start_time && !nextSchedule.end_time) {
+      return {
+        assistant_message:
+          'Não consegui entender o horário. Você pode me dizer assim: “das 8 às 18” ou “08:00 as 18:00”? Se tiver pausa, pode incluir: “pausa 12:00 às 13:00”.',
+        next_step: 'staff_schedule_time',
+      }
+    }
+
+    staff[idx] = {
+      ...member,
+      use_business_schedule: false,
+      schedule: nextSchedule,
+    }
+
+    return {
+      assistant_message:
+        `✅ Horário de **${member?.name || 'este colaborador'}**: ${nextSchedule.start_time || '??'} às ${nextSchedule.end_time || '??'}.` +
+        (Array.isArray(nextSchedule.breaks) && nextSchedule.breaks.length > 0
+          ? `\n✅ Pausa: ${nextSchedule.breaks.map((b: any) => `${b.start} às ${b.end}`).join(', ')}.`
+          : '') +
+        `\n\nQual é o intervalo entre atendimentos?`,
+      next_step: 'staff_schedule_interval',
+      extracted_data: { staff, staff_setup_index: idx },
+      action_options: ['15 min', '30 min', '45 min', '60 min', 'Outro intervalo'],
+      requires_action: 'schedule_interval',
+    }
+  }
+
+  if (currentStep === 'staff_schedule_interval') {
+    if (lower.includes('outro')) {
+      return {
+        assistant_message: 'Qual intervalo em minutos você prefere?',
+        next_step: 'staff_schedule_interval_custom',
+      }
+    }
+    const value = parseIntervalMinutes(text)
+    if (!value) {
+      return {
+        assistant_message: 'Não entendi o intervalo. Você pode escolher 15, 30, 45, 60 ou informar um número.',
+        next_step: 'staff_schedule_interval',
+        action_options: ['15 min', '30 min', '45 min', '60 min', 'Outro intervalo'],
+        requires_action: 'schedule_interval',
+      }
+    }
+
+    const staff = Array.isArray(collectedData.staff) ? [...collectedData.staff] : []
+    const idx = getStaffSetupIndex(collectedData)
+    const member = staff[idx]
+    staff[idx] = {
+      ...member,
+      use_business_schedule: false,
+      schedule: { ...(member?.schedule || {}), interval_minutes: value },
+    }
+
+    const nextIndex = idx + 1
+    if (nextIndex < staff.length) {
+      const nextMember = staff[nextIndex]
+      return {
+        assistant_message: `✅ Intervalo anotado: ${value} min.\n\nAgora, sobre **${nextMember.name}**: a agenda é a mesma do estabelecimento ou tem horário próprio?`,
+        next_step: 'staff_schedule_mode',
+        extracted_data: { staff, staff_setup_index: nextIndex },
+        action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+        requires_action: 'staff_schedule_mode',
+      }
+    }
+
+    const merged = { ...collectedData, staff, staff_setup_index: staff.length }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('staff_schedule_interval', merged))
+    return {
+      assistant_message: `✅ Intervalo anotado: ${value} minutos.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { staff: merged.staff, staff_setup_index: merged.staff_setup_index },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'staff_schedule_interval_custom') {
+    const value = parseIntervalMinutes(text)
+    if (!value) {
+      return {
+        assistant_message: 'Me diga apenas o número de minutos (ex.: 20).',
+        next_step: 'staff_schedule_interval_custom',
+      }
+    }
+
+    const staff = Array.isArray(collectedData.staff) ? [...collectedData.staff] : []
+    const idx = getStaffSetupIndex(collectedData)
+    const member = staff[idx]
+    staff[idx] = {
+      ...member,
+      use_business_schedule: false,
+      schedule: { ...(member?.schedule || {}), interval_minutes: value },
+    }
+
+    const nextIndex = idx + 1
+    if (nextIndex < staff.length) {
+      const nextMember = staff[nextIndex]
+      return {
+        assistant_message: `✅ Intervalo anotado: ${value} min.\n\nAgora, sobre **${nextMember.name}**: a agenda é a mesma do estabelecimento ou tem horário próprio?`,
+        next_step: 'staff_schedule_mode',
+        extracted_data: { staff, staff_setup_index: nextIndex },
+        action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+        requires_action: 'staff_schedule_mode',
+      }
+    }
+
+    const merged = { ...collectedData, staff, staff_setup_index: staff.length }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('staff_schedule_interval', merged))
+    return {
+      assistant_message: `✅ Intervalo anotado: ${value} minutos.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { staff: merged.staff, staff_setup_index: merged.staff_setup_index },
       requires_action: next.requires_action,
       action_options: next.action_options,
     }
@@ -824,15 +1458,24 @@ async function processMessage(
   }
 
   if (currentStep === 'services_list') {
+    const wantsContinue = /(continuar|seguir|pronto|ok)/i.test(text)
+    if (lower.includes('adicionar serviço') || lower.includes('adicionar servico')) {
+      return {
+        assistant_message: 'Qual serviço você quer adicionar?',
+        next_step: 'services_add',
+      }
+    }
     const merged = { ...collectedData }
     let services = []
     if (isExplicitServicesList(text)) services = parseServicesList(text)
     else {
       const extracted = await extractBusinessModelWithAI(text, merged)
       services = extracted.services || []
+      if (!services.length) services = extractServicesFromText(text)
     }
 
-    const unique = [...(merged.services || []), ...services].filter((s, i, self) => {
+    const baseServices = shouldReplaceServices(text) ? [] : merged.services || []
+    const unique = [...baseServices, ...services].filter((s, i, self) => {
       const key = (s?.name || '').toLowerCase().trim()
       return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
     })
@@ -846,19 +1489,68 @@ async function processMessage(
     }
 
     const merged2 = { ...merged, services: unique }
-    const next = determineNextStep(merged2 as BusinessModelData, '', makeFlowState('services_list', merged2))
+    if (wantsContinue) {
+      const next = determineNextStep(merged2 as BusinessModelData, '', makeFlowState('services_list', merged2))
+      return {
+        assistant_message: next.message,
+        next_step: next.step,
+        extracted_data: { services: unique },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.step === 'schedule_days'
+          ? { selectable_options: buildDaysSelectableOptions(merged2.schedule?.days_of_week || []) }
+          : {}),
+      }
+    }
     return {
-      assistant_message: `✅ Serviços anotados.\n\n${next.message}`,
-      next_step: next.step,
+      assistant_message: `Entendi que você oferece:\n- ${unique.map((s) => s.name).join('\n- ')}\n\nQuer ajustar ou adicionar algum serviço?`,
+      next_step: 'services_list',
       extracted_data: { services: unique },
-      requires_action: next.requires_action,
-      action_options: next.action_options,
+      editable_items: buildServiceItems(unique),
+      action_options: ['Adicionar serviço', 'Continuar'],
+      requires_action: 'services_edit',
+    }
+  }
+
+  if (currentStep === 'services_add') {
+    const services = isExplicitServicesList(text)
+      ? parseServicesList(text)
+      : extractServicesFromText(text)
+    if (!services.length && text.trim().length >= 2) {
+      services.push({ name: text.trim() })
+    }
+    if (!services.length) {
+      return {
+        assistant_message: 'Não consegui identificar o serviço. Você pode escrever assim: "Corte masculino".',
+        next_step: 'services_add',
+      }
+    }
+    const mergedServices = [...(collectedData.services || []), ...services].filter((s, i, self) => {
+      const key = (s?.name || '').toLowerCase().trim()
+      return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
+    })
+    return {
+      assistant_message: `✅ Serviço adicionado.\n\nServiços atuais:\n- ${mergedServices.map((s) => s.name).join('\n- ')}`,
+      next_step: 'services_list',
+      extracted_data: { services: mergedServices },
+      editable_items: buildServiceItems(mergedServices),
+      action_options: ['Adicionar serviço', 'Continuar'],
+      requires_action: 'services_edit',
     }
   }
 
   // Para os demais steps, usamos IA apenas para enriquecer/mesclar e seguimos o motor
   const extracted = await extractBusinessModelWithAI(text, collectedData)
   const mergedData = { ...collectedData, ...extracted }
+  const fallbackServices = extractServicesFromText(text)
+  if (fallbackServices.length > 0) {
+    mergedData.services = shouldReplaceServices(text)
+      ? fallbackServices
+      : [...(mergedData.services || []), ...fallbackServices].filter((s, i, self) => {
+          const key = (s?.name || '').toLowerCase().trim()
+          return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
+        })
+  }
 
   // Handlers simples para alguns steps onde a IA não é necessária
   if (currentStep === 'quote_variables') {

@@ -141,25 +141,31 @@ It does not have HTTP ok status.
 - Frontend atualizado para usar API route
 - Testar se está funcionando corretamente
 
+### ✅ Implementações Concluídas
+
+1. **Migração de Dados após Cadastro** ✅
+   - ✅ Função `migrateOnboardingToTenant()` implementada
+   - ✅ Cria usuário no Supabase Auth usando Admin API
+   - ✅ Cria `tenant` com slug único
+   - ✅ Cria `tenant_user` com role 'owner'
+   - ✅ Cria `tenant_settings` com dados coletados
+   - ✅ Busca `blueprint` baseado no domínio ou cria flow padrão
+   - ✅ Cria `flow` baseado em blueprint ou dados coletados
+   - ✅ Cria `variables` baseadas em `dynamic_variables`
+   - ✅ Rollback automático em caso de erro
+
+2. **Processamento de Steps Específicos** ✅
+   - ✅ `schedule_days` - Processa seleção de dias da semana (opções pré-definidas ou personalizado)
+   - ✅ `schedule_time` - Extrai horários da mensagem (formato: "9h às 18h")
+   - ✅ `context` - Processa seleção de contexto (agendamento/orçamento/ambos)
+   - ✅ `tone_of_voice` - Processa seleção de tom (formal/friendly/professional/funny)
+   - ✅ `handoff_mode` - Processa modo de decisão (always/conditional/never)
+
 ### 🟡 Implementações Pendentes
 
-1. **Migração de Dados após Cadastro**
-   - Criar função para migrar `onboarding_session` → `tenant`
-   - Criar `tenant_user` com role 'owner'
-   - Criar `tenant_settings` com dados coletados
-   - Criar `flow` baseado em blueprint do domínio
-   - Criar `variables` baseadas em `dynamic_variables`
-
-2. **Autenticação Google OAuth**
+1. **Autenticação Google OAuth**
    - Integrar Google OAuth no fluxo de signup
    - Permitir cadastro via Google durante onboarding
-
-3. **Processamento de Steps Específicos**
-   - `schedule_days` - Processar seleção de dias da semana
-   - `schedule_time` - Extrair horários da mensagem
-   - `context` - Processar seleção de contexto
-   - `tone_of_voice` - Processar seleção de tom
-   - `handoff_mode` - Processar modo de decisão
 
 4. **Validação e Refinamento**
    - Melhorar prompts da OpenAI para extração mais precisa
@@ -214,9 +220,10 @@ It does not have HTTP ok status.
 - `src/hooks/useTypingPlaceholder.ts` - Hook para placeholder animado
 
 ### Backend
-- `supabase/functions/onboarding-chat/index.ts` - Edge Function principal (versão 10)
+- `supabase/functions/onboarding-chat/index.ts` - Edge Function principal (versão 11 - com migração e steps específicos)
 - `supabase/functions/onboarding-chat/extractors.ts` - Funções de extração
 - `supabase/functions/onboarding-chat/flow-manager.ts` - Gerenciador de fluxo
+- `supabase/functions/onboarding-chat/migrate.ts` - Função de migração de dados (referência)
 - `supabase/migrations/001_initial_schema.sql` - Schema inicial
 - `supabase/migrations/002_rls_policies.sql` - Políticas RLS
 - `supabase/migrations/003_onboarding_sessions.sql` - Tabelas de onboarding
@@ -243,17 +250,19 @@ It does not have HTTP ok status.
 
 - ✅ **Estrutura base**: 100% completo
 - ✅ **Componentes UI**: 100% completo
-- ✅ **Onboarding inteligente**: 90% completo (falta alguns steps específicos)
+- ✅ **Onboarding inteligente**: 100% completo (todos os steps implementados)
 - ✅ **CORS**: 100% resolvido (API route proxy implementada)
-- 🔴 **Migração de dados**: 0% implementado
+- ✅ **Migração de dados**: 100% implementado
+- ✅ **Processamento de steps específicos**: 100% implementado
 - 🔴 **Google OAuth**: 0% implementado
 - 🔴 **Flow Editor**: 0% implementado
 - 🔴 **Integração WhatsApp**: 0% implementado
 
 ## 🎯 Prioridades
 
-1. **ALTA**: Testar se API route proxy está funcionando
-2. **ALTA**: Implementar migração de dados após cadastro
-3. **ALTA**: Processar steps específicos (schedule, context, tone, etc.)
-4. **MÉDIA**: Google OAuth
-5. **BAIXA**: Melhorias e refinamentos
+1. ✅ **ALTA**: Testar se API route proxy está funcionando
+2. ✅ **ALTA**: Implementar migração de dados após cadastro
+3. ✅ **ALTA**: Processar steps específicos (schedule, context, tone, etc.)
+4. **ALTA**: Criar página básica de flow editor e redirecionamento após cadastro
+5. **MÉDIA**: Google OAuth
+6. **BAIXA**: Melhorias e refinamentos

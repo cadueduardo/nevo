@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 import { ChatMessage } from './ChatMessage'
 import type { Message } from './ChatShell'
 import { SignupCard } from '@/components/onboarding/SignupCard'
+import { LoginCard } from '@/components/onboarding/LoginCard'
 
 interface ChatThreadProps {
   messages: Message[]
@@ -11,9 +12,19 @@ interface ChatThreadProps {
   onActionClick?: (action: string) => void
   onSignupSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
   onSignupCancel?: () => void
+  onLoginSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
+  onLoginCancel?: () => void
 }
 
-export function ChatThread({ messages, isLoading, onActionClick, onSignupSubmit, onSignupCancel }: ChatThreadProps) {
+export function ChatThread({
+  messages,
+  isLoading,
+  onActionClick,
+  onSignupSubmit,
+  onSignupCancel,
+  onLoginSubmit,
+  onLoginCancel,
+}: ChatThreadProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -23,17 +34,33 @@ export function ChatThread({ messages, isLoading, onActionClick, onSignupSubmit,
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="w-full max-w-3xl mx-auto px-4 py-6 space-y-6">
-        {messages.map((message) => (
-          message.kind === 'signup' ? (
-            <div key={message.id} className="max-w-[85%] sm:max-w-[75%]">
-              <SignupCard
-                disabled={isLoading}
-                onSubmit={async (payload) => onSignupSubmit?.(payload)}
-                onCancel={onSignupCancel}
-                googleEnabled={false}
-              />
-            </div>
-          ) : (
+        {messages.map((message) => {
+          if (message.kind === 'signup') {
+            return (
+              <div key={message.id} className="max-w-[85%] sm:max-w-[75%]">
+                <SignupCard
+                  disabled={isLoading}
+                  onSubmit={async (payload) => onSignupSubmit?.(payload)}
+                  onCancel={onSignupCancel}
+                  googleEnabled={false}
+                />
+              </div>
+            )
+          }
+
+          if (message.kind === 'login') {
+            return (
+              <div key={message.id} className="max-w-[85%] sm:max-w-[75%]">
+                <LoginCard
+                  disabled={isLoading}
+                  onSubmit={async (payload) => onLoginSubmit?.(payload)}
+                  onCancel={onLoginCancel}
+                />
+              </div>
+            )
+          }
+
+          return (
             <ChatMessage
               key={message.id}
               role={message.role}
@@ -46,12 +73,17 @@ export function ChatThread({ messages, isLoading, onActionClick, onSignupSubmit,
               onItemEdit={(id, newValue, allItems) => {
                 // Preferir mensagens "humanas" para funcionar mesmo sem suporte a comandos determinísticos no backend.
                 const items = allItems || []
+                const item = items.find((it) => it.id === id)
 
                 if (id === 'business_name') return onActionClick?.(`Meu negócio se chama ${newValue}.`)
                 if (id === 'business_type') return onActionClick?.(`Meu ramo/tipo de negócio é ${newValue}.`)
                 if (id === 'service_area') return onActionClick?.(`Minha região de atendimento é: ${newValue}.`)
                 if (id === 'tone_of_voice') return onActionClick?.(`Quero que o tom de voz seja ${newValue}.`)
                 if (id === 'schedule') return onActionClick?.(`Meu horário de atendimento é: ${newValue}.`)
+
+                if (id.startsWith('service_duration_') && item?.label) {
+                  return onActionClick?.(`A duração de ${item.label} é ${newValue}.`)
+                }
 
                 if (id.startsWith('service_')) {
                   // Re-enviar a lista completa de serviços (mais confiável do que tentar "renomear" um item).
@@ -93,7 +125,7 @@ export function ChatThread({ messages, isLoading, onActionClick, onSignupSubmit,
               }}
             />
           )
-        ))}
+        })}
         
         {isLoading && (
           <div className="flex items-center gap-2 text-muted-foreground">

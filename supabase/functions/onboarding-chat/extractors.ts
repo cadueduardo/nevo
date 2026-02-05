@@ -3,11 +3,36 @@
 
 export interface BusinessModelExtraction {
   business_type?: string
+  business_segment?:
+    | 'juridico'
+    | 'odontologia'
+    | 'saude'
+    | 'psicologia'
+    | 'barbearia'
+    | 'beleza'
+    | 'imobiliaria'
+    | 'contabilidade'
+    | 'consultoria'
+    | 'educacao'
+    | 'tecnologia'
+    | 'outros'
   business_name?: string
   services?: Array<{
     name: string
     duration_minutes?: number
     base_price?: number
+  }>
+  services_duration_configured?: boolean
+  staff?: Array<{
+    name: string
+    use_business_schedule?: boolean
+    schedule?: {
+      days_of_week?: string[]
+      start_time?: string
+      end_time?: string
+      breaks?: Array<{ start: string; end: string }>
+      interval_minutes?: number
+    }
   }>
   service_area?: {
     region?: string
@@ -27,6 +52,46 @@ export interface BusinessModelExtraction {
   context?: 'booking' | 'quote' | 'both'
   tone_of_voice?: 'formal' | 'friendly' | 'professional' | 'funny'
   handoff_mode?: 'always' | 'conditional' | 'never'
+}
+
+function normalizeServiceName(value: string): string {
+  return value.trim().replace(/\.+$/, '').replace(/\s{2,}/g, ' ')
+}
+
+export function extractServicesFromText(message: string): Array<{ name: string }> {
+  const text = (message || '').trim()
+  if (!text) return []
+
+  const lower = text.toLowerCase()
+  const markers = [
+    'meus servicos sao',
+    'meus serviços são',
+    'servicos:',
+    'serviços:',
+    'faço',
+    'faco',
+    'fazemos',
+    'oferecemos',
+  ]
+
+  let segment = ''
+  for (const m of markers) {
+    const idx = lower.indexOf(m)
+    if (idx >= 0) {
+      segment = text.slice(idx + m.length).trim()
+      break
+    }
+  }
+
+  if (!segment) return []
+
+  const parts = segment
+    .split(',')
+    .flatMap((p) => p.split(/\s+e\s+/i))
+    .map((p) => normalizeServiceName(p))
+    .filter(Boolean)
+
+  return parts.map((name) => ({ name }))
 }
 
 export async function extractBusinessModelWithAI(
@@ -54,11 +119,18 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
    - Seja específico: "barbearia", "esmalteria", "loja de cortinas", "design de sobrancelhas", etc.
    - Use o contexto para inferir se não estiver explícito
 
-2. NOME DO NEGÓCIO (business_name):
+2. SEGMENTO (business_segment):
+   - Classifique o ramo de atividade em UMA das categorias abaixo
+   - Use apenas estas opções (ou omita se não for possível classificar):
+     juridico, odontologia, saude, psicologia, barbearia, beleza, imobiliaria,
+     contabilidade, consultoria, educacao, tecnologia, outros
+   - Se o tipo de negócio indicar claramente a categoria, inclua business_segment
+
+3. NOME DO NEGÓCIO (business_name):
    - Procure por padrões: "chamada X", "nome X", "chama X", "meu negócio é X"
    - Extraia o nome completo mencionado
 
-3. SERVIÇOS (services):
+4. SERVIÇOS (services):
    - Seja INTELIGENTE: identifique serviços mencionados explicitamente OU inferidos pelo tipo de negócio
    - Se mencionar "faço X e Y", extraia ambos como serviços separados
    - Se mencionar "vendo X", considere "Venda de X" como serviço
@@ -66,11 +138,11 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
    - INFIRA serviços comuns do tipo de negócio quando fizer sentido contextual
    - Cada serviço deve ser um objeto: {"name": "Nome do Serviço"}
 
-4. LOCALIZAÇÃO (service_area.region):
+5. LOCALIZAÇÃO (service_area.region):
    - Extraia cidade, região ou bairro mencionados
    - Padrões: "em X", "fica em X", "cidade de X", "atua em X"
 
-5. HORÁRIO E DIAS (schedule):
+6. HORÁRIO E DIAS (schedule):
    - Extraia horário de funcionamento APENAS se o usuário informou (ex.: "9h às 18h", "das 8 as 18", etc.)
    - Converta para formato "HH:mm" (ex: "09:00", "18:00")
    - Para dias da semana, extraia APENAS se o usuário mencionou explicitamente:
@@ -78,12 +150,17 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
      * Se mencionar "segunda a sexta" ou similar, extraia todos os dias do intervalo
      * Se NÃO mencionar dias, NÃO invente/infira dias (deixe o campo ausente)
 
-6. CONTEXTO (context):
+7. CONTEXTO (context):
    - "booking": se mencionar agendamento, marcação, horários
    - "quote": se mencionar orçamento, preço, valores
    - "both": se mencionar ambos
 
-7. TOM DE VOZ (tone_of_voice):
+8. COLABORADORES (staff):
+   - Extraia apenas se o usuário mencionar colaboradores por nome
+   - Ex.: "tenho a Carla e a Maria" -> [{"name":"Carla"},{"name":"Maria"}]
+   - Não inventar nomes
+
+9. TOM DE VOZ (tone_of_voice):
    - Extraia APENAS se o usuário pediu explicitamente um tom (ex.: "pode ser mais formal", "bem amigável", etc.)
    - NÃO inferir tom pelo estilo da mensagem
    - Valores: "formal", "friendly", "professional", "funny"
@@ -95,6 +172,7 @@ IMPORTANTE:
 Retorne APENAS um JSON válido com os campos identificados:
 {
   "business_type": "tipo de negócio",
+  "business_segment": "juridico | odontologia | saude | psicologia | barbearia | beleza | imobiliaria | contabilidade | consultoria | educacao | tecnologia | outros",
   "business_name": "nome se mencionado",
   "services": [{"name": "serviço 1"}, {"name": "serviço 2"}],
   "service_area": {"region": "localização"},
@@ -103,6 +181,7 @@ Retorne APENAS um JSON válido com os campos identificados:
     "start_time": "HH:mm",
     "end_time": "HH:mm"
   },
+  "staff": [{"name": "Carla"}, {"name": "Maria"}],
   "context": "booking" | "quote" | "both",
   "tone_of_voice": "formal" | "friendly" | "professional" | "funny"
 }
@@ -171,12 +250,14 @@ export function identifyMissingFields(
   if (!data.business_name) missing.push('business_name')
 
   if (context === 'booking' || context === 'both') {
+    if (!data.staff || data.staff.length === 0) missing.push('staff')
     if (!data.services || data.services.length === 0) missing.push('services')
     if (!data.schedule?.days_of_week || data.schedule.days_of_week.length === 0) {
       missing.push('schedule.days_of_week')
     }
     if (!data.schedule?.start_time) missing.push('schedule.start_time')
     if (!data.schedule?.end_time) missing.push('schedule.end_time')
+    if (!data.schedule?.interval_minutes) missing.push('schedule.interval_minutes')
   }
 
   return missing
@@ -222,10 +303,25 @@ function extractBusinessModelFallback(
   // Extrair tipo de negócio
   if (lower.includes('sobrancelha') || lower.includes('design')) {
     result.business_type = 'design de sobrancelhas'
+    result.business_segment = 'beleza'
   } else if (lower.includes('barbearia') || lower.includes('barbeiro')) {
     result.business_type = 'barbearia'
+    result.business_segment = 'barbearia'
   } else if (lower.includes('cortina')) {
     result.business_type = 'loja de cortinas'
+    result.business_segment = 'outros'
+  } else if (lower.includes('advocacia') || lower.includes('advogado') || lower.includes('jurid')) {
+    result.business_type = 'escritorio de advocacia'
+    result.business_segment = 'juridico'
+  } else if (lower.includes('odont') || lower.includes('dent')) {
+    result.business_type = 'clinica odontologica'
+    result.business_segment = 'odontologia'
+  } else if (lower.includes('psicolog') || lower.includes('psico') || lower.includes('terapia')) {
+    result.business_type = 'psicologia'
+    result.business_segment = 'psicologia'
+  } else if (lower.includes('clinica') || lower.includes('medic') || lower.includes('saude')) {
+    result.business_type = 'clinica de saude'
+    result.business_segment = 'saude'
   }
 
   // Extrair nome do negócio (padrões: "chamada: X", "nome X", "chama X")
@@ -321,6 +417,10 @@ function extractBusinessModelFallback(
   // NÃO inferir serviços no fallback - deixar a IA fazer isso
   // O fallback é apenas para casos extremos quando a IA não está disponível
   // A inferência de serviços deve ser feita pela IA de forma inteligente e contextual
+  const services = extractServicesFromText(message)
+  if (services.length > 0) {
+    result.services = services
+  }
 
   return result
 }

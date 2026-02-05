@@ -9,7 +9,19 @@ export interface EditableItem {
   id: string
   label: string
   value: string
-  type: 'service' | 'faq' | 'variable'
+  type:
+    | 'service'
+    | 'service_duration'
+    | 'faq'
+    | 'variable'
+    | 'schedule'
+    | 'schedule_interval'
+    | 'service_area'
+    | 'tone_of_voice'
+    | 'policies'
+    | 'business_name'
+    | 'business_type'
+    | 'context'
 }
 
 export interface SelectableOption {
@@ -22,7 +34,7 @@ export interface SelectableOption {
 export interface Message {
   id: string
   role: 'user' | 'assistant'
-  kind?: 'text' | 'signup'
+  kind?: 'text' | 'signup' | 'login'
   content: string
   timestamp?: Date
   actionOptions?: string[]
@@ -43,8 +55,12 @@ interface ChatShellProps {
   onActionClick?: (action: string) => void
   onSignupSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
   onSignupCancel?: () => void
+  onLoginSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
+  onLoginCancel?: () => void
   header?: ReactNode
   footer?: ReactNode
+  composerFooter?: ReactNode
+  className?: string
 }
 
 export function ChatShell({
@@ -59,13 +75,17 @@ export function ChatShell({
   onActionClick,
   onSignupSubmit,
   onSignupCancel,
+  onLoginSubmit,
+  onLoginCancel,
   header,
   footer,
+  composerFooter,
+  className,
 }: ChatShellProps) {
   const showEmptyState = messages.length === 0 && !isLoading
 
   return (
-    <div className="flex flex-col h-screen bg-background">
+    <div className={cn('flex flex-col h-full bg-background', className)}>
       {/* Header - Estilo ChatGPT (logo no topo, sem borda) */}
       {header && (
         <div className="flex-shrink-0">
@@ -96,6 +116,7 @@ export function ChatShell({
                 examples={examples}
                 onExampleClick={onExampleClick}
               />
+              {composerFooter && <div className="mt-3">{composerFooter}</div>}
             </div>
           </div>
         </div>
@@ -107,6 +128,8 @@ export function ChatShell({
             onActionClick={onActionClick}
             onSignupSubmit={onSignupSubmit}
             onSignupCancel={onSignupCancel}
+            onLoginSubmit={onLoginSubmit}
+            onLoginCancel={onLoginCancel}
           />
           {/* Input Area - Fixo na parte inferior quando há mensagens */}
           <div className="flex-shrink-0 bg-background px-4 py-4">
@@ -120,6 +143,7 @@ export function ChatShell({
                 examples={examples}
                 onExampleClick={onExampleClick}
               />
+              {composerFooter && <div className="mt-3">{composerFooter}</div>}
             </div>
           </div>
         </>
