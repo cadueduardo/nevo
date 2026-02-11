@@ -1,8 +1,10 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { ChatShell, type Message } from '@/components/shared/ChatShell'
 import { clearSessionId, getOrCreateSessionId } from '@/lib/onboarding/session'
+import { restoreOnboardingSession } from '@/lib/onboarding/restore'
 import { sendOnboardingMessage } from '@/lib/onboarding/api'
 import type { OnboardingStep } from '@/types/onboarding'
 import { Button } from '@/components/ui/button'
@@ -10,6 +12,7 @@ import { SimulatorPanel } from '@/features/simulator/components/SimulatorPanel'
 import { cn } from '@/lib/utils'
 import { sendSimulatorMessage, type SimulatorRequest } from '@/lib/simulator/api'
 import { createClient } from '@/lib/supabase/client'
+import Link from 'next/link'
 
 const TYPING_PLACEHOLDERS = [
   'Ex: Tenho um escritório de advocacia e recebo muitos contatos no WhatsApp',
@@ -55,6 +58,7 @@ function parseSummaryEditableItemsFromText(text: string) {
 }
 
 export function LandingChat() {
+  const router = useRouter()
   const [sessionId, setSessionId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -66,31 +70,67 @@ export function LandingChat() {
   const [isSimulatorLoading, setIsSimulatorLoading] = useState(false)
   const [simulatorConversationId, setSimulatorConversationId] = useState<string | null>(null)
   const [authChoicePending, setAuthChoicePending] = useState(false)
+  const [signupError, setSignupError] = useState<string | null>(null)
+  const [focusTrigger, setFocusTrigger] = useState(0)
+  const [simulatorFocusTrigger, setSimulatorFocusTrigger] = useState(0)
   const supabase = useMemo(() => createClient(), [])
   const retriedCompletedSessionRef = useRef(false)
+  /** Credenciais do último signup bem-sucedido; usadas ao clicar "Acessar minha área". */
+  const lastSignupCredentialsRef = useRef<{ email: string; password: string } | null>(null)
 
-  const simulatorStorageKey = useMemo(() => {
-    if (!sessionId) return null
-    return `nevo_simulator_available:${sessionId}`
-  }, [sessionId])
-
-  // Inicializar session
+  // Inicializar session (sessionStorage: persiste no F5, limpa ao fechar a aba)
   useEffect(() => {
     const id = getOrCreateSessionId()
     setSessionId(id)
   }, [])
 
+  // Restaurar sessão após F5: buscar do Supabase e re-hidratar estado
   useEffect(() => {
-    if (!simulatorStorageKey) return
-    const stored = localStorage.getItem(simulatorStorageKey)
-    if (stored === 'true') setIsSimulatorAvailable(true)
-  }, [simulatorStorageKey])
+    if (!sessionId || !supabase) return
+    let cancelled = false
+    restoreOnboardingSession(supabase, sessionId).then(({ session, messages: stored }) => {
+      if (cancelled) return
+      if (!session || stored.length === 0) return
+
+      setCurrentStep(session.current_step as OnboardingStep)
+      setOnboardingData((session.collected_data as Record<string, any>) || {})
+
+      const lastAssistant = [...stored].reverse().find((m) => m.role === 'assistant')
+      const lastMeta = lastAssistant?.metadata
+
+      const hydrated: Message[] = stored.map((m, i) => {
+        const isLastAssistant = m.role === 'assistant' && i === stored.length - 1
+        const needsSignupCard = isLastAssistant && lastMeta?.requires_action === 'signup'
+        return {
+          id: `restore-${i}-${Date.now()}`,
+          role: m.role,
+          kind: needsSignupCard ? 'signup' : 'text',
+          content: m.content,
+          timestamp: new Date(),
+          actionOptions: isLastAssistant ? lastMeta?.action_options : undefined,
+          requiresAction: isLastAssistant ? lastMeta?.requires_action ?? undefined : undefined,
+        }
+      })
+      setMessages(hydrated)
+
+      if (lastMeta?.requires_action === 'signup' || session.current_step === 'signup_request') {
+        setAuthChoicePending(true)
+      }
+      // Simulador disponível quando atingiu signup ou está além do intro
+      if (
+        session.current_step === 'signup_request' ||
+        (stored.length > 0 && session.current_step !== 'welcome')
+      ) {
+        setIsSimulatorAvailable(true)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, supabase])
 
   const enableSimulator = () => {
-    if (!isSimulatorAvailable) {
-      setIsSimulatorAvailable(true)
-      if (simulatorStorageKey) localStorage.setItem(simulatorStorageKey, 'true')
-    }
+    if (!isSimulatorAvailable) setIsSimulatorAvailable(true)
   }
 
   const maybeEnableSimulator = (response: { next_step?: string; requires_action?: string | null }) => {
@@ -99,23 +139,35 @@ export function LandingChat() {
     }
   }
 
-  const handleSend = async (content: string) => {
-    if (!content.trim() || isLoading || !sessionId) return
+  const handleSend = async (
+    content: string,
+    extra?: { edits?: Array<{ id: string; value: string }>; address?: { cep: string; logradouro: string; numero: string; complemento?: string; bairro: string; localidade: string; uf: string } }
+  ) => {
+    if ((!content.trim() && !extra?.address) || isLoading || !sessionId) return
 
-    // Adicionar mensagem do usuário
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content,
-      timestamp: new Date(),
+    // Adicionar mensagem do usuário (omitir se for envio apenas de endereço)
+    if (content.trim()) {
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        content,
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, userMessage])
     }
-    setMessages((prev) => [...prev, userMessage])
+
     setIsLoading(true)
 
     try {
       // Chamar Edge Function - passar step atual ou undefined para primeira mensagem
       const stepToSend = messages.length === 0 ? undefined : currentStep
-      const response = await sendOnboardingMessage(sessionId, content, stepToSend)
+      const response = await sendOnboardingMessage(
+        sessionId,
+        content.trim() || 'confirm_address',
+        stepToSend,
+        extra?.edits,
+        extra?.address
+      )
       // Se a sessão estiver marcada como "completed" logo na 1a mensagem, reiniciar automaticamente.
       if (
         response.next_step === 'completed' &&
@@ -139,18 +191,19 @@ export function LandingChat() {
         return
       }
       maybeEnableSimulator(response)
-      if (response.extracted_data) {
+      const extracted = response.extracted_data
+      if (extracted) {
         setOnboardingData((prev) => ({
           ...prev,
-          ...response.extracted_data,
-          schedule: response.extracted_data.schedule
-            ? { ...(prev.schedule || {}), ...response.extracted_data.schedule }
+          ...extracted,
+          schedule: extracted.schedule
+            ? { ...(prev.schedule || {}), ...extracted.schedule }
             : prev.schedule,
-          service_area: response.extracted_data.service_area
-            ? { ...(prev.service_area || {}), ...response.extracted_data.service_area }
+          service_area: extracted.service_area
+            ? { ...(prev.service_area || {}), ...extracted.service_area }
             : prev.service_area,
-          policies: response.extracted_data.policies
-            ? { ...(prev.policies || {}), ...response.extracted_data.policies }
+          policies: extracted.policies
+            ? { ...(prev.policies || {}), ...extracted.policies }
             : prev.policies,
         }))
       }
@@ -164,34 +217,43 @@ export function LandingChat() {
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        kind: 'text',
+        kind: response.requires_action === 'address' ? 'address' : 'text',
         content: response.assistant_message,
         timestamp: new Date(),
         actionOptions: response.action_options,
         editableItems: response.editable_items || (inferredEditableItems && inferredEditableItems.length > 0 ? inferredEditableItems : undefined),
         selectableOptions: response.selectable_options,
         requiresAction: response.requires_action,
+        allowCustomInput: response.requires_action === 'services_list',
       }
 
       setMessages((prev) => [...prev, assistantMessage])
       setCurrentStep(response.next_step as OnboardingStep)
 
-      // Se backend pedir signup, mostrar card de cadastro (form padrão) em vez de conversa.
+      // Se backend pedir signup: manter apenas a mensagem do backend (Criar conta, Tenho conta, Continuar depois).
+      // Não adicionar bloco duplicado — "Criar conta" abre o formulário direto (Google + email/senha).
       if (response.requires_action === 'signup') {
-        appendAssistant('Você já tem uma conta ou quer criar uma agora?', {
-          actionOptions: ['Tenho conta', 'Quero criar agora', 'Continuar depois'],
-        })
         setAuthChoicePending(true)
+        // Se usuário digitou "criar" ou "tenho conta" e backend pediu uso do formulário, exibir o card
+        const lowerContent = content.toLowerCase()
+        if (response.assistant_message?.includes('formulário')) {
+          if (lowerContent.includes('criar')) {
+            appendAssistant('', { kind: 'signup', requiresAction: 'signup' })
+          } else if (lowerContent.includes('tenho conta') || lowerContent.includes('já tenho')) {
+            appendAssistant('', { kind: 'login', requiresAction: 'signup' })
+          }
+        }
       }
 
-      // Redirecionar após cadastro completo
+      // Se backend pedir endereço, o assistantMessage já tem kind: 'address' e mostrará AddressForm
+
+      // Redirecionar após cadastro completo (quando vem de outro fluxo com sessão já ativa)
       if (response.next_step === 'completed' && currentStep !== 'completed') {
-        // Primeira vez que completa - aguardar alguns segundos e redirecionar
-        setTimeout(() => {
-          // TODO: Implementar migração de dados e redirecionamento real
-          // Por enquanto, apenas mostra mensagem
-          console.log('Onboarding completo! Redirecionar para dashboard em breve.')
-        }, 3000)
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          router.push('/app')
+          router.refresh()
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error)
@@ -204,6 +266,7 @@ export function LandingChat() {
       setMessages((prev) => [...prev, errorMessage])
     } finally {
       setIsLoading(false)
+      setFocusTrigger((t) => t + 1)
     }
   }
 
@@ -221,24 +284,26 @@ export function LandingChat() {
 
   const handleSignupSubmit = async (payload: { email: string; password: string }) => {
     if (isLoading || !sessionId) return
+    setSignupError(null)
     setIsLoading(true)
     try {
       // Não adicionar email/senha como mensagem do usuário no chat.
       // Orquestrar o fluxo de signup do backend “por trás”.
       const r1 = await sendOnboardingMessage(sessionId, payload.email, 'signup_email')
       maybeEnableSimulator(r1)
-      if (r1.extracted_data) {
+      const r1Data = r1.extracted_data
+      if (r1Data) {
         setOnboardingData((prev) => ({
           ...prev,
-          ...r1.extracted_data,
-          schedule: r1.extracted_data.schedule
-            ? { ...(prev.schedule || {}), ...r1.extracted_data.schedule }
+          ...r1Data,
+          schedule: r1Data.schedule
+            ? { ...(prev.schedule || {}), ...r1Data.schedule }
             : prev.schedule,
-          service_area: r1.extracted_data.service_area
-            ? { ...(prev.service_area || {}), ...r1.extracted_data.service_area }
+          service_area: r1Data.service_area
+            ? { ...(prev.service_area || {}), ...r1Data.service_area }
             : prev.service_area,
-          policies: r1.extracted_data.policies
-            ? { ...(prev.policies || {}), ...r1.extracted_data.policies }
+          policies: r1Data.policies
+            ? { ...(prev.policies || {}), ...r1Data.policies }
             : prev.policies,
         }))
       }
@@ -255,18 +320,19 @@ export function LandingChat() {
 
       const r2 = await sendOnboardingMessage(sessionId, payload.password, 'signup_password')
       maybeEnableSimulator(r2)
-      if (r2.extracted_data) {
+      const r2Data = r2.extracted_data
+      if (r2Data) {
         setOnboardingData((prev) => ({
           ...prev,
-          ...r2.extracted_data,
-          schedule: r2.extracted_data.schedule
-            ? { ...(prev.schedule || {}), ...r2.extracted_data.schedule }
+          ...r2Data,
+          schedule: r2Data.schedule
+            ? { ...(prev.schedule || {}), ...r2Data.schedule }
             : prev.schedule,
-          service_area: r2.extracted_data.service_area
-            ? { ...(prev.service_area || {}), ...r2.extracted_data.service_area }
+          service_area: r2Data.service_area
+            ? { ...(prev.service_area || {}), ...r2Data.service_area }
             : prev.service_area,
-          policies: r2.extracted_data.policies
-            ? { ...(prev.policies || {}), ...r2.extracted_data.policies }
+          policies: r2Data.policies
+            ? { ...(prev.policies || {}), ...r2Data.policies }
             : prev.policies,
         }))
       }
@@ -284,18 +350,19 @@ export function LandingChat() {
       if (r2.next_step === 'signup_confirm_password') {
         const r3 = await sendOnboardingMessage(sessionId, payload.password, 'signup_confirm_password')
         maybeEnableSimulator(r3)
-        if (r3.extracted_data) {
+        const r3Data = r3.extracted_data
+        if (r3Data) {
           setOnboardingData((prev) => ({
             ...prev,
-            ...r3.extracted_data,
-            schedule: r3.extracted_data.schedule
-              ? { ...(prev.schedule || {}), ...r3.extracted_data.schedule }
+            ...r3Data,
+            schedule: r3Data.schedule
+              ? { ...(prev.schedule || {}), ...r3Data.schedule }
               : prev.schedule,
-            service_area: r3.extracted_data.service_area
-              ? { ...(prev.service_area || {}), ...r3.extracted_data.service_area }
+            service_area: r3Data.service_area
+              ? { ...(prev.service_area || {}), ...r3Data.service_area }
               : prev.service_area,
-            policies: r3.extracted_data.policies
-              ? { ...(prev.policies || {}), ...r3.extracted_data.policies }
+            policies: r3Data.policies
+              ? { ...(prev.policies || {}), ...r3Data.policies }
               : prev.policies,
           }))
         }
@@ -307,22 +374,21 @@ export function LandingChat() {
         })
         setCurrentStep(r3.next_step as OnboardingStep)
         if (r3.next_step === 'completed') {
-          // Remover o card de signup apenas quando concluir
           setMessages((prev) => prev.filter((m) => m.kind !== 'signup'))
+          lastSignupCredentialsRef.current = { email: payload.email, password: payload.password }
+          appendAssistant('Conta criada! O que você prefere fazer agora?', {
+            actionOptions: ['Acessar minha área', 'Simular atendimento'],
+          })
         }
       }
     } catch (e: any) {
       const rawMessage = (e?.message || '').toString()
       const normalized = rawMessage.toLowerCase()
       if (normalized.includes('already') || normalized.includes('registrad')) {
-        setMessages((prev) => prev.filter((m) => m.kind !== 'signup'))
-        appendAssistant('Esse email já tem conta. Quer entrar para continuar?', {
-          actionOptions: ['Tenho conta', 'Continuar depois'],
-        })
-        setAuthChoicePending(true)
+        setSignupError('Este e-mail já está cadastrado. Use outro e-mail ou clique em "Tenho conta" para entrar.')
         return
       }
-      appendAssistant('Desculpe, não consegui criar sua conta agora. Pode tentar novamente?')
+      setSignupError('Não foi possível criar a conta. Tente novamente.')
     } finally {
       setIsLoading(false)
     }
@@ -330,7 +396,7 @@ export function LandingChat() {
 
   const handleSignupCancel = () => {
     setMessages((prev) => prev.filter((m) => m.kind !== 'signup'))
-    // manter o step atual; usuário pode continuar depois
+    setSignupError(null)
   }
 
   const handleLoginSubmit = async (payload: { email: string; password: string }) => {
@@ -342,7 +408,7 @@ export function LandingChat() {
         password: payload.password,
       })
       if (error) {
-        appendAssistant('Nao consegui entrar com esses dados. Confira e tente de novo.')
+        appendAssistant('Não consegui entrar com esses dados. Confira e tente de novo.')
         return
       }
       const migrateResponse = await fetch('/api/onboarding/migrate', {
@@ -356,10 +422,11 @@ export function LandingChat() {
         return
       }
       setMessages((prev) => prev.filter((m) => m.kind !== 'login'))
-      appendAssistant('Pronto! Conta conectada e onboarding salvo.')
       setAuthChoicePending(false)
+      router.push('/app')
+      router.refresh()
     } catch {
-      appendAssistant('Nao consegui entrar agora. Pode tentar novamente?')
+      appendAssistant('Não consegui entrar agora. Pode tentar novamente?')
     } finally {
       setIsLoading(false)
     }
@@ -370,22 +437,68 @@ export function LandingChat() {
     setAuthChoicePending(false)
   }
 
-  const handleActionClick = (action: string) => {
-    if (authChoicePending) {
-      if (action === 'Tenho conta') {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: (Date.now() + 3).toString(),
-            role: 'assistant',
-            kind: 'login',
-            content: '',
-            timestamp: new Date(),
-          },
-        ])
-        return
+  const handleAddressSubmit = async (payload: {
+    cep: string
+    logradouro: string
+    numero: string
+    complemento?: string
+    bairro: string
+    localidade: string
+    uf: string
+  }) => {
+    if (isLoading || !sessionId) return
+    await handleSend('', { address: payload })
+  }
+
+  const handleAddressCancel = () => {
+    setMessages((prev) => prev.filter((m) => m.kind !== 'address'))
+    handleSend('Pular')
+  }
+
+  const handleItemEditLocal = (id: string, value: string) => {
+    setMessages((prev) => {
+      const lastIdx = prev.length - 1
+      if (lastIdx < 0) return prev
+      const last = prev[lastIdx]
+      if (!last?.editableItems) return prev
+      const updated = last.editableItems.map((it) =>
+        it.id === id ? { ...it, value } : it
+      )
+      return [...prev.slice(0, lastIdx), { ...last, editableItems: updated }]
+    })
+  }
+
+  const handleActionClick = async (action: string) => {
+    if (action === 'Acessar minha área' && lastSignupCredentialsRef.current) {
+      const cred = lastSignupCredentialsRef.current
+      lastSignupCredentialsRef.current = null
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          router.push('/app')
+          router.refresh()
+          return
+        }
+        const { error } = await supabase.auth.signInWithPassword({ email: cred.email, password: cred.password })
+        if (!error) {
+          router.push('/app')
+          router.refresh()
+        } else {
+          appendAssistant('Não foi possível entrar. Use o link "Entrar" no topo para acessar com seu email e senha.')
+        }
+      } catch {
+        appendAssistant('Não foi possível entrar. Use o link "Entrar" no topo para acessar com seu email e senha.')
       }
-      if (action === 'Quero criar agora') {
+      return
+    }
+    if (action === 'Simular atendimento') {
+      if (lastSignupCredentialsRef.current) lastSignupCredentialsRef.current = null
+      enableSimulator()
+      setIsSimulatorOpen(true)
+      return
+    }
+    if (authChoicePending) {
+      if (action === 'Criar conta' || action === 'Quero criar agora') {
         setMessages((prev) => [
           ...prev,
           {
@@ -399,13 +512,41 @@ export function LandingChat() {
         ])
         return
       }
+      if (action === 'Tenho conta') {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 3).toString(),
+            role: 'assistant',
+            kind: 'login',
+            content: '',
+            timestamp: new Date(),
+          },
+        ])
+        return
+      }
+      if (action === 'Simular atendimento') {
+        enableSimulator()
+        setIsSimulatorOpen(true)
+        return
+      }
       if (action === 'Continuar depois') {
         appendAssistant('Sem problemas. Quando quiser, é só criar sua conta por aqui.')
         setAuthChoicePending(false)
         return
       }
     }
-    // Enviar ação como mensagem
+    // Se Continuar e a última mensagem tem service_price, enviar edits em lote
+    if (action === 'Continuar') {
+      const lastMsg = messages[messages.length - 1]
+      const items = lastMsg?.editableItems
+      const servicePrices = items?.filter((it) => it.type === 'service_price') ?? []
+      if (servicePrices.length > 0) {
+        const edits = servicePrices.map((it) => ({ id: it.id, value: (it.value || '').trim() }))
+        handleSend(action, { edits })
+        return
+      }
+    }
     handleSend(action)
   }
 
@@ -418,6 +559,7 @@ export function LandingChat() {
         business_name: onboardingData.business_name,
         business_type: onboardingData.business_type,
         context_mode: onboardingData.context,
+        establishment_address: onboardingData.establishment_address,
         tone:
           onboardingData.tone_of_voice === 'formal'
             ? 'formal'
@@ -429,10 +571,15 @@ export function LandingChat() {
                   ? 'engracado'
                   : onboardingData.tone,
         services: onboardingData.services,
+        when_client_asks_price_no_value: onboardingData.when_client_asks_price_no_value || 'offer_handoff_or_booking',
         schedule: onboardingData.schedule,
         staff: onboardingData.staff,
         dynamic_variables: onboardingData.dynamic_variables,
         lead_policy: onboardingData.lead_policy,
+        holidays_attend: onboardingData.holidays_attend,
+        closure_periods: onboardingData.closure_periods,
+        allow_sequence_booking: onboardingData.allow_sequence_booking,
+        sequence_eligible_services: onboardingData.sequence_eligible_services,
       },
     }),
     [onboardingData, sessionId, simulatorConversationId]
@@ -476,6 +623,7 @@ export function LandingChat() {
       ])
     } finally {
       setIsSimulatorLoading(false)
+      setSimulatorFocusTrigger((t) => t + 1)
     }
   }
 
@@ -499,20 +647,28 @@ export function LandingChat() {
             messages={messages}
             onSend={handleSend}
             isLoading={isLoading}
+            focusTrigger={focusTrigger}
             typingPlaceholders={TYPING_PLACEHOLDERS}
             onActionClick={handleActionClick}
+            onItemEditLocal={handleItemEditLocal}
+            onAddressSubmit={handleAddressSubmit}
+            onAddressCancel={handleAddressCancel}
             onSignupSubmit={handleSignupSubmit}
             onSignupCancel={handleSignupCancel}
+            signupError={signupError}
+            onClearSignupError={() => setSignupError(null)}
+            onLoginSubmit={handleLoginSubmit}
+            onLoginCancel={handleLoginCancel}
             composerFooter={simulatorButton}
             header={
               <div className="px-4 py-3 flex items-center justify-between gap-3">
                 <h1 className="text-lg sm:text-xl font-semibold">Nevo</h1>
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="sm" asChild>
-                    <a href="/login">Entrar</a>
+                    <Link href="/login">Entrar</Link>
                   </Button>
                   <Button size="sm" asChild>
-                    <a href="/signup">Cadastre-se gratuitamente</a>
+                    <Link href="/signup">Cadastre-se gratuitamente</Link>
                   </Button>
                 </div>
               </div>
@@ -541,6 +697,7 @@ export function LandingChat() {
               onSend={handleSimulatorSend}
               onReset={handleSimulatorReset}
               onClose={() => setIsSimulatorOpen(false)}
+              focusTrigger={simulatorFocusTrigger}
             />
           </div>
         )}

@@ -1,9 +1,32 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { Pencil, X } from 'lucide-react'
 import type { EditableItem, SelectableOption } from './ChatShell'
+
+/** Renderiza **texto** como negrito (compatível com Markdown/WhatsApp). */
+function renderContentWithMarkdown(text: string): ReactNode {
+  if (!text) return null
+  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  return parts.map((part, i) => {
+    const boldMatch = part.match(/^\*\*(.+)\*\*$/)
+    if (boldMatch) return <strong key={i}>{boldMatch[1]}</strong>
+    return part
+  })
+}
+
+/**
+ * Formata valor para máscara BRL (R$ 1.234). Backend parsePrice usa só dígitos = reais inteiros.
+ */
+function formatCurrencyBRL(value: string): string {
+  const digits = (value || '').replace(/\D/g, '')
+  if (!digits) return ''
+  const num = parseInt(digits, 10)
+  if (Number.isNaN(num) || num === 0) return ''
+  const intStr = num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+  return `R$ ${intStr}`
+}
 
 function formatScheduleValuePtBR(value: string): string {
   let out = value || ''
@@ -37,8 +60,15 @@ interface ChatMessageProps {
   selectableOptions?: SelectableOption[]
   onActionClick?: (action: string) => void
   onItemEdit?: (id: string, newValue: string, allItems?: EditableItem[]) => void
+  /** Salva localmente sem enviar mensagem (ex: Enter em service_price). */
+  onItemEditLocal?: (id: string, newValue: string) => void
   onItemDelete?: (id: string, allItems?: EditableItem[]) => void
-  onOptionSelect?: (selectedValues: string[]) => void
+  onOptionSelect?: (selectedValues: string[], customInput?: string) => void
+  /** Ex: "holidays_select" permite confirmar com 0 selecionados. */
+  requiresAction?: string | null
+  /** Exibe input para adicionar outros itens (ex: serviços) quando services_list. */
+  allowCustomInput?: boolean
+  customInputPlaceholder?: string
 }
 
 export function ChatMessage({ 
@@ -50,12 +80,20 @@ export function ChatMessage({
   selectableOptions,
   onActionClick,
   onItemEdit,
+  onItemEditLocal,
   onItemDelete,
   onOptionSelect,
+  requiresAction,
+  allowCustomInput,
+  customInputPlaceholder = 'Ou adicione outros (separados por vírgula)',
 }: ChatMessageProps) {
   const isUser = role === 'user'
+  const [customInputValue, setCustomInputValue] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingValue, setEditingValue] = useState('')
+  /** Campo de preço em edição: ao dar Enter, salva localmente sem enviar mensagem. */
+  const [editingPriceId, setEditingPriceId] = useState<string | null>(null)
+  const [editingPriceValue, setEditingPriceValue] = useState('')
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(() => {
     return new Set(selectableOptions?.filter(opt => opt.selected).map(opt => opt.value) || [])
   })
@@ -66,6 +104,7 @@ export function ChatMessage({
       setSelectedOptions(new Set(selectableOptions.filter(opt => opt.selected).map(opt => opt.value)))
     }
   }, [selectableOptions])
+
 
   const handleEditStart = (item: EditableItem) => {
     setEditingId(item.id)
@@ -103,10 +142,21 @@ export function ChatMessage({
   }
 
   const handleConfirmSelection = () => {
-    if (selectedOptions.size > 0 && onOptionSelect) {
-      onOptionSelect(Array.from(selectedOptions))
+    const selected = Array.from(selectedOptions)
+    const hasCustom = allowCustomInput && customInputValue.trim()
+    if ((selected.length > 0 || hasCustom) && onOptionSelect) {
+      onOptionSelect(selected, hasCustom ? customInputValue.trim() : undefined)
     }
   }
+
+  const customItemsCount = allowCustomInput && customInputValue.trim()
+    ? customInputValue.split(',').map((s) => s.trim()).filter(Boolean).length
+    : 0
+  const canConfirm =
+    selectedOptions.size > 0 ||
+    customItemsCount > 0 ||
+    requiresAction === 'holidays_select'
+  const totalCount = selectedOptions.size + customItemsCount
 
   return (
     <div
@@ -124,86 +174,134 @@ export function ChatMessage({
         )}
       >
         <p className="text-sm sm:text-base whitespace-pre-wrap break-words font-normal leading-relaxed">
-          {content}
+          {renderContentWithMarkdown(content)}
         </p>
         
         {/* Lista de itens editáveis (serviços, FAQ, etc) */}
         {!isUser && editableItems && editableItems.length > 0 && (
           <div className="mt-4 space-y-2">
-            {editableItems.map((item) => (
-              <div
-                key={item.id}
-                className="flex items-center gap-2 p-2 rounded-lg bg-background/50 border border-border"
-              >
-                {editingId === item.id ? (
-                  <>
-                    <input
-                      type="text"
-                      value={editingValue}
-                      onChange={(e) => setEditingValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleEditSave(item.id)
-                        } else if (e.key === 'Escape') {
-                          handleEditCancel()
-                        }
-                      }}
-                      className="flex-1 px-2 py-1 text-sm rounded border border-input bg-background"
-                      autoFocus
-                    />
-                    <button
-                      onClick={() => handleEditSave(item.id)}
-                      className="p-1 text-green-600 hover:text-green-700"
-                      title="Salvar"
-                    >
-                      ✓
-                    </button>
-                    <button
-                      onClick={handleEditCancel}
-                      className="p-1 text-red-600 hover:text-red-700"
-                      title="Cancelar"
-                    >
-                      ✕
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs text-muted-foreground">{item.label}</div>
-                      <div className="text-sm truncate">
-                        {item.id === 'schedule' ? formatScheduleValuePtBR(item.value) : item.value}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleEditStart(item)}
-                      className="p-1.5 hover:bg-muted rounded transition-colors"
-                      title="Editar"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    {(item.id.startsWith('service_') ||
-                      item.id.startsWith('faq_') ||
-                      item.id.startsWith('variable_') ||
-                      item.id === 'schedule' ||
-                      item.id === 'service_area' ||
-                      item.id === 'tone_of_voice' ||
-                      item.id === 'policies') && (
+            {editableItems.map((item) => {
+              const isServicePrice = item.type === 'service_price'
+              const displayValue = isServicePrice && editingPriceId === item.id
+                ? editingPriceValue
+                : (isServicePrice ? item.value : null)
+
+              return (
+                <div
+                  key={item.id}
+                  className="flex items-center gap-2 p-2 rounded-lg bg-background/50 border border-border"
+                >
+                  {isServicePrice ? (
+                    <>
+                      <span className="text-sm font-medium min-w-0 shrink-0">{item.label}</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={displayValue ?? ''}
+                        onChange={(e) => {
+                          const raw = e.target.value
+                          const formatted = formatCurrencyBRL(raw)
+                          setEditingPriceValue(formatted)
+                          if (!editingPriceId) setEditingPriceId(item.id)
+                        }}
+                        onFocus={() => {
+                          setEditingPriceId(item.id)
+                          setEditingPriceValue(item.value || '')
+                        }}
+                        onBlur={() => {
+                          if (editingPriceId === item.id && onItemEditLocal) {
+                            const toSave = (editingPriceValue || '').trim()
+                            onItemEditLocal(item.id, toSave ? formatCurrencyBRL(editingPriceValue) : '')
+                          }
+                          setEditingPriceId(null)
+                          setEditingPriceValue('')
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            if (onItemEditLocal) {
+                              const toSave = (editingPriceValue || '').trim()
+                              onItemEditLocal(item.id, toSave ? formatCurrencyBRL(editingPriceValue) : '')
+                            }
+                            setEditingPriceId(null)
+                            setEditingPriceValue('')
+                            ;(e.target as HTMLInputElement).blur()
+                          }
+                        }}
+                        placeholder="R$ 0"
+                        className="flex-1 min-w-[100px] px-2 py-1.5 text-sm rounded border border-input bg-background"
+                      />
+                    </>
+                  ) : editingId === item.id ? (
+                    <>
+                      <input
+                        type="text"
+                        value={editingValue}
+                        onChange={(e) => setEditingValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleEditSave(item.id)
+                          } else if (e.key === 'Escape') {
+                            handleEditCancel()
+                          }
+                        }}
+                        className="flex-1 px-2 py-1 text-sm rounded border border-input bg-background"
+                        autoFocus
+                      />
                       <button
-                        onClick={() => handleDelete(item.id)}
-                        className="p-1.5 hover:bg-muted rounded transition-colors text-red-600 hover:text-red-700"
-                        title="Remover"
+                        onClick={() => handleEditSave(item.id)}
+                        className="p-1 text-green-600 hover:text-green-700"
+                        title="Salvar"
                       >
-                        <X className="w-4 h-4" />
+                        ✓
                       </button>
-                    )}
-                  </>
-                )}
-              </div>
-            ))}
+                      <button
+                        onClick={handleEditCancel}
+                        className="p-1 text-red-600 hover:text-red-700"
+                        title="Cancelar"
+                      >
+                        ✕
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-muted-foreground">{item.label}</div>
+                        <div className="text-sm truncate">
+                          {item.id === 'schedule' ? formatScheduleValuePtBR(item.value) : item.value}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleEditStart(item)}
+                        className="p-1.5 hover:bg-muted rounded transition-colors"
+                        title="Editar"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      {(item.id.startsWith('service_') ||
+                        item.id.startsWith('faq_') ||
+                        item.id.startsWith('variable_') ||
+                        item.id === 'schedule' ||
+                        item.id === 'service_area' ||
+                        item.id === 'tone_of_voice' ||
+                        item.id === 'policies') && (
+                        <button
+                          onClick={() => handleDelete(item.id)}
+                          className="p-1.5 hover:bg-muted rounded transition-colors text-red-600 hover:text-red-700"
+                          title="Remover"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
 
-        {/* Checkboxes para seleção múltipla (dias da semana, etc) */}
+        {/* Checkboxes para seleção múltipla (dias da semana, serviços, etc) */}
         {!isUser && selectableOptions && selectableOptions.length > 0 && (
           <div className="mt-4 space-y-2">
             {selectableOptions.map((option) => (
@@ -220,17 +318,26 @@ export function ChatMessage({
                 <span className="text-sm flex-1">{option.label}</span>
               </label>
             ))}
+            {allowCustomInput && (
+              <input
+                type="text"
+                value={customInputValue}
+                onChange={(e) => setCustomInputValue(e.target.value)}
+                placeholder={customInputPlaceholder}
+                className="w-full mt-2 px-3 py-2 text-sm rounded-lg border border-border bg-background placeholder:text-muted-foreground"
+              />
+            )}
             <button
               onClick={handleConfirmSelection}
-              disabled={selectedOptions.size === 0}
+              disabled={!canConfirm}
               className={cn(
                 'w-full mt-3 px-4 py-2 rounded-lg text-sm font-normal transition-colors',
-                selectedOptions.size > 0
+                canConfirm
                   ? 'bg-primary text-primary-foreground hover:bg-primary/90'
                   : 'bg-muted text-muted-foreground cursor-not-allowed'
               )}
             >
-              Confirmar seleção ({selectedOptions.size} {selectedOptions.size === 1 ? 'dia selecionado' : 'dias selecionados'})
+              Confirmar seleção ({totalCount} {totalCount === 1 ? 'item selecionado' : 'itens selecionados'})
             </button>
           </div>
         )}

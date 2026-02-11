@@ -7,8 +7,18 @@ export interface SimulatorRequest {
     business_name?: string
     business_type?: string
     context_mode?: 'booking' | 'quote' | 'both'
+    establishment_address?: {
+      cep?: string
+      logradouro: string
+      numero: string
+      complemento?: string
+      bairro: string
+      localidade: string
+      uf: string
+    }
     tone?: 'formal' | 'amigavel' | 'profissional' | 'engracado'
-    services?: Array<{ name: string; duration_minutes?: number }>
+    services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
+    when_client_asks_price_no_value?: 'handoff' | 'offer_handoff_or_booking'
     schedule?: {
       days_of_week?: string[]
       start_time?: string
@@ -34,6 +44,14 @@ export interface SimulatorRequest {
       use_ai_matching?: boolean
       min_confidence?: number
     }
+    /** Datas de feriados em que o estabelecimento atende (YYYY-MM-DD). Se vazio, nao atende em feriados. */
+    holidays_attend?: string[]
+    /** Periodos de fechamento (ferias). */
+    closure_periods?: Array<{ start: string; end: string; reason?: string }>
+    /** Cliente pode agendar vários serviços em sequência na mesma visita. */
+    allow_sequence_booking?: boolean
+    /** Serviços que podem ser combinados em sequência (quando allow_sequence_booking). */
+    sequence_eligible_services?: string[]
   }
 }
 

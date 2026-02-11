@@ -4,6 +4,18 @@ interface OnboardingRequest {
   session_id: string
   message: string
   current_step?: string
+  /** Edits a aplicar antes de processar a mensagem (ex: preços ao clicar Continuar). */
+  edits?: Array<{ id: string; value: string }>
+  /** Endereço do estabelecimento (quando step = address). */
+  address?: {
+    cep: string
+    logradouro: string
+    numero: string
+    complemento?: string
+    bairro: string
+    localidade: string
+    uf: string
+  }
 }
 
 export interface EditableItem {
@@ -12,6 +24,7 @@ export interface EditableItem {
   value: string
   type:
     | 'service'
+    | 'service_price'
     | 'service_duration'
     | 'faq'
     | 'variable'
@@ -45,7 +58,9 @@ interface OnboardingResponse {
 export async function sendOnboardingMessage(
   sessionId: string,
   message: string,
-  currentStep?: string
+  currentStep?: string,
+  edits?: Array<{ id: string; value: string }>,
+  address?: OnboardingRequest['address']
 ): Promise<OnboardingResponse> {
   // Usar API route do Next.js como proxy para evitar problemas de CORS
   const response = await fetch('/api/onboarding', {
@@ -57,6 +72,8 @@ export async function sendOnboardingMessage(
       session_id: sessionId,
       message,
       current_step: currentStep,
+      edits,
+      address,
     } as OnboardingRequest),
   })
 

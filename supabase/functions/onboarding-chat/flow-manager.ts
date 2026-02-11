@@ -4,6 +4,10 @@ export interface BusinessModelData extends BusinessModelExtraction {
   faq?: Array<{ question: string; answer: string }>
   dynamic_variables?: Array<{ key: string; label: string; type: string; context?: string }>
   services_duration_configured?: boolean
+  services_pricing_configured?: boolean
+  services_pricing_entered?: boolean
+  /** Indica que a pergunta de sequência foi respondida. */
+  sequence_booking_configured?: boolean
   staff?: Array<{
     name: string
     use_business_schedule?: boolean
@@ -96,7 +100,21 @@ function normalizeForMatch(value?: string): string {
     .replace(/[\u0300-\u036f]/g, "")
 }
 
-function buildServiceExamples(businessType?: string, businessSegment?: BusinessModelData['business_segment']): string {
+export const SERVICE_EXAMPLES_FALLBACK = 'consulta, avaliacao, atendimento'
+
+/** Converte string de exemplos "a, b, c" em selectable_options para checkboxes. */
+export function buildServiceSelectableOptions(examplesStr: string): Array<{ id: string; label: string; value: string }> {
+  const items = (examplesStr || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return items.map((name, i) => {
+    const label = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase()
+    return { id: `svc_${i}`, label, value: label }
+  })
+}
+
+export function buildServiceExamples(businessType?: string, businessSegment?: BusinessModelData['business_segment']): string {
   if (businessSegment) {
     const examplesBySegment: Record<string, string> = {
       juridico: 'direito de familia, direito trabalhista, direito do consumidor',
@@ -110,10 +128,11 @@ function buildServiceExamples(businessType?: string, businessSegment?: BusinessM
       consultoria: 'diagnostico, plano de acao, acompanhamento',
       educacao: 'aula experimental, matricula, reforco escolar',
       tecnologia: 'diagnostico, implantacao, suporte tecnico',
-      outros: 'consulta, avaliacao, atendimento',
+      petshop: 'banho, tosa, consulta veterinaria, vacinacao',
+      outros: SERVICE_EXAMPLES_FALLBACK,
     }
 
-    return examplesBySegment[businessSegment] || 'consulta, avaliacao, atendimento'
+    return examplesBySegment[businessSegment] || SERVICE_EXAMPLES_FALLBACK
   }
 
   const normalized = normalizeForMatch(businessType)
@@ -140,8 +159,8 @@ function buildServiceExamples(businessType?: string, businessSegment?: BusinessM
       examples: "corte, barba, sobrancelha",
     },
     {
-      keywords: ["salao", "beleza", "estetica", "cabeleireiro"],
-      examples: "corte, escova, coloracao",
+      keywords: ["salao", "beleza", "estetica", "cabeleireiro", "manicure", "pedicure", "unhas"],
+      examples: "corte, escova, coloracao, manicure, pedicure, alongamento",
     },
     {
       keywords: ["imobiliaria", "corretor", "imovel"],
@@ -155,6 +174,18 @@ function buildServiceExamples(businessType?: string, businessSegment?: BusinessM
       keywords: ["consultoria", "consultor"],
       examples: "diagnostico, plano de acao, acompanhamento",
     },
+    {
+      keywords: ["pet", "petshop", "pet shop", "veterinar", "animal"],
+      examples: "banho, tosa, consulta veterinaria, vacinacao, hospedagem",
+    },
+    {
+      keywords: ["restaurante", "lanchonete", "pizzaria", "delivery", "aliment"],
+      examples: "reserva, delivery, evento privado, bufet",
+    },
+    {
+      keywords: ["cortina", "persiana", "decora"],
+      examples: "medicao, instalacao, orcamento de tecido",
+    },
   ]
 
   for (const entry of examplesByKeyword) {
@@ -163,7 +194,7 @@ function buildServiceExamples(businessType?: string, businessSegment?: BusinessM
     }
   }
 
-  return "manicure, pedicure, alongamento de unhas"
+  return SERVICE_EXAMPLES_FALLBACK
 }
 
 export function determineNextStep(
@@ -174,6 +205,7 @@ export function determineNextStep(
   step: string
   message: string
   action_options?: string[]
+  selectable_options?: Array<{ id: string; label: string; value: string }>
   requires_action?: string
 } {
   const missing = currentState.missing_fields
@@ -209,10 +241,13 @@ export function determineNextStep(
     (currentData.context === 'booking' || currentData.context === 'both') &&
     (missing.includes('services') || !currentData.services || currentData.services.length === 0)
   ) {
+    const serviceOpts = buildServiceSelectableOptions(serviceExamples)
     return {
       step: 'services_list',
       message:
-        `Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nQuais servicos voce oferece? (separe por virgulas)\nEx.: ${serviceExamples}.`,
+        `Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nSelecione os que você oferece ou adicione outros abaixo:`,
+      selectable_options: serviceOpts,
+      requires_action: 'services_list',
     }
   }
 
@@ -232,7 +267,18 @@ export function determineNextStep(
       return {
         step: 'schedule_time',
         message:
-          'Boa. E qual é a **faixa de horário** que você atende? (ex.: 08:00 às 18:00)\n\nPergunto isso pra eu liberar os horários certos no agendamento.',
+          'Boa. E qual é a **faixa de horário** que você atende? Pode escolher nos botões ou informar de outra forma.\n\nPergunto isso pra eu liberar os horários certos no agendamento.',
+        action_options: [
+          '08:00 às 18:00',
+          '09:00 às 18:00',
+          '08:00 às 17:00',
+          '09:00 às 17:00',
+          '07:00 às 17:00',
+          '10:00 às 19:00',
+          '06:00 às 12:00',
+          'Outro horário',
+        ],
+        requires_action: 'schedule_time',
       }
     }
     if (missing.includes('schedule.interval_minutes')) {
@@ -264,12 +310,67 @@ export function determineNextStep(
 
   if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
+    Array.isArray(currentData.services) &&
+    currentData.services.length > 0 &&
+    currentData.services_duration_configured &&
+    !currentData.services_pricing_configured
+  ) {
+    return {
+      step: 'services_pricing',
+      message:
+        'Quer informar o **valor** de cada serviço? Assim o cliente já pode saber na hora. (Se preferir, pode pular e informar depois.)',
+      action_options: ['Informar valores', 'Pular por enquanto'],
+      requires_action: 'services_pricing',
+    }
+  }
+
+  // Sequência de serviços: permitir agendar vários na mesma visita
+  if (
+    (currentData.context === 'booking' || currentData.context === 'both') &&
+    Array.isArray(currentData.services) &&
+    currentData.services.length > 0 &&
+    currentData.services_pricing_configured &&
+    !(currentData as any).sequence_booking_configured
+  ) {
+    return {
+      step: 'sequence_booking_offer',
+      message:
+        'O cliente pode agendar **vários serviços na mesma visita** (em sequência) ou apenas **um serviço por agendamento**?',
+      action_options: ['Apenas um serviço por agendamento', 'Sim, pode agendar em sequência'],
+      requires_action: 'sequence_booking_offer',
+    }
+  }
+
+  // Se permitir sequência, perguntar quais serviços podem ser combinados
+  if (
+    (currentData.context === 'booking' || currentData.context === 'both') &&
+    (currentData as any).allow_sequence_booking === true &&
+    (!(currentData as any).sequence_eligible_services || (currentData as any).sequence_eligible_services.length === 0)
+  ) {
+    const serviceNames = (currentData.services || []).map((s) => s?.name).filter(Boolean)
+    const selectableOpts = serviceNames.map((name, i) => ({
+      id: `seq_svc_${i}`,
+      label: name,
+      value: name,
+    }))
+    return {
+      step: 'sequence_services_select',
+      message:
+        'Quais serviços podem ser combinados em sequência? Selecione os que fazem sentido oferecer juntos (ex: banho + tosa).',
+      selectable_options: selectableOpts,
+      requires_action: 'sequence_services_select',
+    }
+  }
+
+  if (
+    (currentData.context === 'booking' || currentData.context === 'both') &&
     (missing.includes('staff') || !currentData.staff || currentData.staff.length === 0)
   ) {
     return {
       step: 'staff_mode',
-      message: 'Você atende sozinho ou tem colaboradores?',
-      action_options: ['Atendo sozinho', 'Tenho colaboradores'],
+      message:
+        '**Você** atende sozinho (só você) ou tem outros colaboradores além de você? (O sistema já considera que você é o dono/primeiro atendente.)',
+      action_options: ['Só eu atendo', 'Eu e outros colaboradores'],
       requires_action: 'staff_mode',
     }
   }
@@ -290,7 +391,27 @@ export function determineNextStep(
     }
   }
 
-  if (!currentData.service_area?.region) {
+  // Localização: ponto fixo ou atendimento no local do cliente
+  if (!(currentData as any).location_mode) {
+    return {
+      step: 'location_mode',
+      message:
+        'Seu serviço tem um **endereço fixo** (loja, clínica, escritório) ou você **atende no endereço do cliente**?',
+      action_options: ['Tenho endereço fixo', 'Atendo no endereço do cliente'],
+      requires_action: 'location_mode',
+    }
+  }
+
+  if ((currentData as any).location_mode === 'fixed' && !(currentData as any).establishment_address) {
+    return {
+      step: 'address',
+      message:
+        'Informe o endereço do estabelecimento. Comece pelo CEP para preencher automaticamente.',
+      requires_action: 'address',
+    }
+  }
+
+  if ((currentData as any).location_mode === 'mobile' && !currentData.service_area?.region) {
     return {
       step: 'service_area',
       message:
@@ -325,6 +446,34 @@ export function determineNextStep(
         'Pra eu não “segurar” conversa quando você quiser assumir, quando você prefere que eu **passe para um humano**?',
       action_options: ['Sempre humano', 'Condicional (alguns casos)', 'Automático'],
       requires_action: 'handoff_mode',
+    }
+  }
+
+  // Feriados: opcional (apenas para booking/both)
+  if (
+    !(currentData as any).holidays_skipped &&
+    (currentData.context === 'booking' || currentData.context === 'both')
+  ) {
+    return {
+      step: 'holidays_offer',
+      message:
+        'Sobre **feriados nacionais**: por padrao o agendamento fica fechado. Voce atende em algum feriado? (Pode marcar os que trabalha ou pular.)',
+      action_options: ['Atendo todos os feriados', 'Sim, quero marcar', 'Nao atendo em feriados', 'Pular por enquanto'],
+      requires_action: 'holidays_offer',
+    }
+  }
+
+  // Periodos de fechamento (ferias): opcional
+  if (
+    !(currentData as any).closure_skipped &&
+    (currentData.context === 'booking' || currentData.context === 'both')
+  ) {
+    return {
+      step: 'closure_offer',
+      message:
+        'Tem algum **periodo de ferias** ou fechamento planejado? (ex: de 20/12 a 05/01)',
+      action_options: ['Sim, tenho periodo', 'Nao', 'Pular por enquanto'],
+      requires_action: 'closure_offer',
     }
   }
 
@@ -444,7 +593,11 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
   if (data.services && data.services.length > 0) {
     parts.push(
       `• Serviços: ${data.services
-        .map((s) => `${s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ''}`)
+        .map((s) => {
+          const dur = s.duration_minutes ? ` (${s.duration_minutes} min)` : ''
+          const price = s.base_price != null ? ` — R$ ${s.base_price}` : ''
+          return `${s.name}${dur}${price}`
+        })
         .join(', ')}`
     )
   }
@@ -480,6 +633,12 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
     parts.push(`• Intervalo: ${data.schedule.interval_minutes} min`)
   }
 
+  if ((data as any).establishment_address?.logradouro) {
+    const a = (data as any).establishment_address
+    parts.push(
+      `• Endereço: ${a.logradouro}, ${a.numero}${a.complemento ? ` ${a.complemento}` : ''} - ${a.bairro}, ${a.localidade}/${a.uf}`
+    )
+  }
   if (data.service_area?.region || (data.service_area as any)?.coverage) {
     const baseRegion = data.service_area?.region ? `${data.service_area.region}` : ''
     const coverage = (data.service_area as any)?.coverage
@@ -498,6 +657,45 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
             ? 'Profissional'
             : 'Engraçado'
     parts.push(`• Tom: ${toneLabel}`)
+  }
+
+  if ((data as any).policies?.note) {
+    const note = ((data as any).policies.note as string).trim()
+    if (note) parts.push(`• Políticas: ${note.slice(0, 100)}${note.length > 100 ? '...' : ''}`)
+  }
+
+  if ((data as any).handoff_mode) {
+    const handoffLabel =
+      (data as any).handoff_mode === 'always'
+        ? 'Sempre passa para humano'
+        : (data as any).handoff_mode === 'conditional'
+          ? 'Passa para humano em alguns casos'
+          : 'Atendimento automático'
+    parts.push(`• Passar para humano: ${handoffLabel}`)
+  }
+
+  if (Array.isArray((data as any).dynamic_variables) && (data as any).dynamic_variables.length > 0) {
+    const vars = (data as any).dynamic_variables.map((v: any) => v.label || v.key).filter(Boolean)
+    if (vars.length) parts.push(`• Variáveis dinâmicas: ${vars.join(', ')}`)
+  }
+
+  if (Array.isArray((data as any).faq) && (data as any).faq.length > 0) {
+    parts.push(`• FAQ: ${(data as any).faq.length} pergunta(s) cadastrada(s)`)
+  }
+
+  if (Array.isArray((data as any).holidays_attend) && (data as any).holidays_attend.length > 0) {
+    parts.push(`• Feriados em que atende: ${(data as any).holidays_attend.length} data(s)`)
+  } else if ((data as any).holidays_skipped === true && !(data as any).holidays_attend) {
+    parts.push(`• Feriados: nao configurado (pode ajustar depois)`)
+  }
+
+  if (Array.isArray((data as any).closure_periods) && (data as any).closure_periods.length > 0) {
+    const periods = (data as any).closure_periods
+      .map((p: { start: string; end: string }) => `${p.start} a ${p.end}`)
+      .join('; ')
+    parts.push(`• Periodos de fechamento: ${periods}`)
+  } else if ((data as any).closure_skipped === true) {
+    parts.push(`• Periodos de fechamento: nao configurado`)
   }
 
   parts.push('\nFicou assim. Pode tocar nos ícones para editar/excluir ou me dizer o que mudar.')
@@ -546,7 +744,11 @@ export function generateFullStructure(data: Partial<BusinessModelData>): string 
   if (data.services && data.services.length > 0) {
     parts.push(
       `**Serviços:**\n${data.services
-        .map((s, i) => `${i + 1}. ${s.name}${s.duration_minutes ? ` (${s.duration_minutes} min)` : ''}`)
+        .map((s, i) => {
+          const dur = s.duration_minutes ? ` (${s.duration_minutes} min)` : ''
+          const price = s.base_price != null ? ` — R$ ${s.base_price}` : ''
+          return `${i + 1}. ${s.name}${dur}${price}`
+        })
         .join('\n')}\n`
     )
   }

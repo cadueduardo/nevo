@@ -12,6 +12,7 @@ export type OnboardingStep =
   | 'schedule_interval'
   | 'schedule_interval_custom'
   | 'services_duration'
+  | 'services_pricing'
   | 'staff_mode'
   | 'staff_list'
   | 'staff_schedule_mode'

@@ -8,16 +8,37 @@ import {
   identifyMissingFields,
   parseServicesList,
   extractQuoteVariables,
+  classifyNeedsIntroTutorial,
+  answerDoubtWithAI,
+  suggestServicesWithAI,
   BusinessModelExtraction,
 } from './extractors.ts'
 
-import { determineNextStep, generateSummary, generateFullStructure, BusinessModelData, FlowState } from './flow-manager.ts'
+import {
+  determineNextStep,
+  generateSummary,
+  buildServiceExamples,
+  buildServiceSelectableOptions,
+  SERVICE_EXAMPLES_FALLBACK,
+  BusinessModelData,
+  FlowState,
+} from './flow-manager.ts'
 import { migrateOnboardingToTenant } from './migrate.ts'
 
 interface OnboardingRequest {
   session_id: string
   message: string
   current_step?: string
+  edits?: Array<{ id: string; value: string }>
+  address?: {
+    cep: string
+    logradouro: string
+    numero: string
+    complemento?: string
+    bairro: string
+    localidade: string
+    uf: string
+  }
 }
 
 interface OnboardingResponse {
@@ -83,6 +104,56 @@ function buildDaysSelectableOptions(selectedDays: string[] = []) {
   return ALL_DAYS.map((d) => ({ ...d, selected: selectedDays.includes(d.value) }))
 }
 
+const HOLIDAYS_CACHE: Record<number, Array<{ date: string; name: string }>> = {}
+
+async function fetchNationalHolidays(year: number): Promise<Array<{ date: string; name: string }>> {
+  if (HOLIDAYS_CACHE[year]) return HOLIDAYS_CACHE[year]
+  try {
+    const res = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`)
+    if (!res.ok) return []
+    const data = (await res.json()) as Array<{ date: string; name: string; type?: string }>
+    const national = data.filter((h) => h.type === 'national' || !h.type)
+    HOLIDAYS_CACHE[year] = national
+    return national
+  } catch {
+    return []
+  }
+}
+
+function buildHolidaysSelectableOptions(
+  holidays: Array<{ date: string; name: string }>,
+  selectedDates: string[] = []
+) {
+  return holidays.map((h) => ({
+    id: h.date,
+    label: `${h.name} (${h.date.split('-').reverse().join('/')})`,
+    value: h.date,
+    selected: selectedDates.includes(h.date),
+  }))
+}
+
+function parseClosurePeriod(text: string): { start: string; end: string } | null {
+  const msg = (text || '').trim()
+  const match = msg.match(
+    /(\d{1,2})[\/\-](\d{1,2})[\/\-]?(\d{2,4})?\s*(?:a|ate|até|-)\s*(\d{1,2})[\/\-](\d{1,2})[\/\-]?(\d{2,4})?/
+  )
+  if (!match) return null
+  const year = (y: string) => {
+    const n = parseInt(y || '', 10)
+    if (!y || y.length === 2) return n >= 0 && n < 100 ? 2000 + n : new Date().getFullYear()
+    return n
+  }
+  const d1 = parseInt(match[1], 10)
+  const m1 = parseInt(match[2], 10) - 1
+  const y1 = year(match[3])
+  const d2 = parseInt(match[4], 10)
+  const m2 = parseInt(match[5], 10) - 1
+  const y2 = year(match[6]) || y1
+  const start = `${y1}-${String(m1 + 1).padStart(2, '0')}-${String(d1).padStart(2, '0')}`
+  const end = `${y2}-${String(m2 + 1).padStart(2, '0')}-${String(d2).padStart(2, '0')}`
+  return { start, end }
+}
+
 function json(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -145,6 +216,201 @@ function ensureNextStep(resp: Partial<OnboardingResponse>, fallback: string): On
   }
 }
 
+/** Detecta pedidos de ver resumo, alterar ou editar dados. Resumo pode ser chamado a qualquer momento. */
+function isShowSummaryOrEditRequest(text: string): boolean {
+  const t = (text || '').toLowerCase().trim()
+  return (
+    /^resumo\s*\.?$/i.test(t) ||
+    /(quero ver o resumo|mostrar resumo|mostrar estrutura|ver estrutura|ver configura[çc][ãa]o|mostrar configura[çc][ãa]o)/i.test(t) ||
+    /(me mostre o que j[aá] foi cadastrado|o que j[aá] foi cadastrado at[eé] agora)/i.test(t) ||
+    /(quero alterar alguma informa[çc][ãa]o|quero editar meus dados|quero editar)/i.test(t) ||
+    /(alterar informa[çc][õo]es|editar dados)/i.test(t)
+  )
+}
+
+/** Usuário ainda no começo: falta business_type, business_name ou context. */
+function hasMinimalData(data: any): boolean {
+  return !data?.business_type || !data?.business_name || !data?.context
+}
+
+/** Mensagem do tutorial introdutório quando o usuário não sabe o que fazer. */
+function buildIntroTutorialMessage(): string {
+  return `Fique à vontade, vou te guiar. 😊
+
+O Nevo te ajuda a configurar um **assistente virtual** para o seu negócio, que responde clientes, agenda horários e pode até dar orçamentos.
+
+**O que vou precisar (principais):**
+• Tipo do seu negócio (o que você faz/vende)
+• Nome da empresa
+• Se quer usar para agendamento, orçamento ou ambos
+• Serviços que você oferece
+• Dias e horários de funcionamento
+• Se atende sozinho ou tem colaboradores
+
+**Opcionais (pode configurar depois):**
+• Valores dos serviços
+• Endereço ou região de atendimento
+• Políticas de cancelamento
+• Tom de voz
+• Feriados em que atende
+• FAQ
+
+Pode começar me contando **o tipo do seu negócio** ou **o que você faz/vende**.`
+}
+
+/** Retorna todos os campos do formulário (incluindo vazios) para usuário avançado preencher direto. */
+function buildAllEditableItems(data: any) {
+  const items: Array<{ id: string; label: string; value: string; type: string }> = []
+
+  items.push({ id: 'business_type', label: 'Tipo de negócio (ramo)', value: data.business_type || '', type: 'business_type' })
+  items.push({ id: 'business_name', label: 'Nome do negócio', value: data.business_name || '', type: 'business_name' })
+
+  const contextLabel = data.context === 'booking' ? 'Agendamento' : data.context === 'quote' ? 'Orçamento' : data.context === 'both' ? 'Agendamento + Orçamento' : ''
+  items.push({ id: 'context', label: 'Contexto', value: contextLabel, type: 'context' })
+
+  const locLabel = data.location_mode === 'fixed' ? 'Ponto fixo' : data.location_mode === 'mobile' ? 'Atende no local do cliente' : ''
+  items.push({ id: 'location_mode', label: 'Localização', value: locLabel, type: 'service_area' })
+
+  if (data.location_mode === 'fixed') {
+    const a = data.establishment_address
+    const val = a?.logradouro
+      ? `${a.logradouro}, ${a.numero}${a.complemento ? ` ${a.complemento}` : ''} - ${a.bairro}, ${a.localidade}/${a.uf}`
+      : ''
+    items.push({ id: 'establishment_address', label: 'Endereço', value: val, type: 'establishment_address' })
+  }
+  if (data.location_mode === 'mobile' || !data.location_mode) {
+    const cov = data.service_area?.coverage ? ` (${data.service_area.coverage})` : ''
+    const val = `${data.service_area?.region || ''}${cov}`.trim()
+    items.push({ id: 'service_area', label: 'Região de atendimento', value: val, type: 'service_area' })
+  }
+
+  const toneLabel =
+    data.tone_of_voice === 'formal'
+      ? 'Formal'
+      : data.tone_of_voice === 'friendly'
+        ? 'Amigável'
+        : data.tone_of_voice === 'professional'
+          ? 'Profissional'
+          : data.tone_of_voice === 'funny'
+            ? 'Engraçado'
+            : ''
+  items.push({ id: 'tone_of_voice', label: 'Tom de voz', value: toneLabel, type: 'tone_of_voice' })
+
+  const daysLabels: Record<string, string> = {
+    monday: 'Segunda',
+    tuesday: 'Terça',
+    wednesday: 'Quarta',
+    thursday: 'Quinta',
+    friday: 'Sexta',
+    saturday: 'Sábado',
+    sunday: 'Domingo',
+  }
+  if (data.schedule?.days_of_week?.length && data.schedule?.start_time && data.schedule?.end_time) {
+    const daysPt = data.schedule.days_of_week.map((d: string) => daysLabels[d] || d).join(', ')
+    const breaks =
+      Array.isArray(data.schedule.breaks) && data.schedule.breaks.length > 0
+        ? ` (pausa ${data.schedule.breaks.map((b: any) => `${b.start} às ${b.end}`).join(', ')})`
+        : ''
+    items.push({
+      id: 'schedule',
+      label: 'Horário de funcionamento',
+      value: `${daysPt} - ${data.schedule.start_time} às ${data.schedule.end_time}${breaks}`,
+      type: 'schedule',
+    })
+  } else {
+    items.push({ id: 'schedule', label: 'Horário de funcionamento', value: '', type: 'schedule' })
+  }
+
+  if (data.schedule?.interval_minutes) {
+    items.push({
+      id: 'schedule_interval',
+      label: 'Intervalo entre atendimentos',
+      value: `${data.schedule.interval_minutes} min`,
+      type: 'schedule_interval',
+    })
+  } else {
+    items.push({ id: 'schedule_interval', label: 'Intervalo entre atendimentos', value: '', type: 'schedule_interval' })
+  }
+
+  const policiesNote = typeof data.policies?.note === 'string' ? data.policies.note.trim() : ''
+  items.push({
+    id: 'policies',
+    label: 'Políticas',
+    value: policiesNote || '',
+    type: 'policies',
+  })
+
+  const handoffLabel =
+    data.handoff_mode === 'always' ? 'Sempre humano' : data.handoff_mode === 'conditional' ? 'Condicional' : data.handoff_mode === 'never' ? 'Automático' : ''
+  items.push({ id: 'handoff_mode', label: 'Passar para humano', value: handoffLabel, type: 'tone_of_voice' })
+
+  if (Array.isArray(data.services) && data.services.length > 0) {
+    const defaultMins = data.schedule?.interval_minutes
+    data.services.forEach((s: any, i: number) => {
+      items.push({ id: `service_${i}`, label: `Serviço ${i + 1}`, value: s.name || '', type: 'service' })
+      items.push({
+        id: `service_duration_${i}`,
+        label: `${s.name || 'Serviço'} (duração)`,
+        value: s.duration_minutes != null ? `${s.duration_minutes} min` : defaultMins ? `${defaultMins} min` : '',
+        type: 'service_duration',
+      })
+      items.push({
+        id: `service_price_${i}`,
+        label: `${s.name || 'Serviço'} (valor)`,
+        value: s.base_price != null ? `R$ ${s.base_price}` : '',
+        type: 'service_price',
+      })
+    })
+  } else {
+    items.push({ id: 'service_0', label: 'Serviço', value: '', type: 'service' })
+  }
+
+  if ((data.context === 'booking' || data.context === 'both') && Array.isArray(data.holidays_attend)) {
+    const val = data.holidays_attend.length > 0
+      ? `${data.holidays_attend.length} feriado(s)`
+      : 'Não configurado'
+    items.push({ id: 'holidays', label: 'Feriados em que atende', value: val, type: 'holidays' })
+  } else if (data.context === 'booking' || data.context === 'both') {
+    items.push({ id: 'holidays', label: 'Feriados em que atende', value: 'Não configurado', type: 'holidays' })
+  }
+
+  if ((data.context === 'booking' || data.context === 'both') && Array.isArray(data.closure_periods)) {
+    const val = data.closure_periods.length > 0
+      ? data.closure_periods.map((p: { start: string; end: string }) => `${p.start} a ${p.end}`).join('; ')
+      : 'Não configurado'
+    items.push({ id: 'closure_periods', label: 'Períodos de fechamento', value: val, type: 'closure_periods' })
+  } else if (data.context === 'booking' || data.context === 'both') {
+    items.push({ id: 'closure_periods', label: 'Períodos de fechamento', value: 'Não configurado', type: 'closure_periods' })
+  }
+
+  if ((data.context === 'booking' || data.context === 'both') && data.allow_sequence_booking) {
+    const seq = data.sequence_eligible_services || []
+    items.push({ id: 'sequence_eligible_services', label: 'Serviços que podem ser combinados', value: seq.length ? seq.join(', ') : 'Nenhum selecionado', type: 'sequence_eligible_services' })
+  }
+
+  if (Array.isArray(data.staff) && data.staff.length > 0) {
+    data.staff.forEach((m: any, i: number) => {
+      if (m?.name) items.push({ id: `staff_${i}`, label: 'Colaborador', value: m.name, type: 'business_name' })
+    })
+  }
+
+  if (Array.isArray(data.dynamic_variables) && data.dynamic_variables.length > 0) {
+    data.dynamic_variables.forEach((v: any, i: number) => {
+      const label = v.label || v.key || `Variável ${i + 1}`
+      items.push({ id: `variable_${i}`, label, value: label, type: 'variable' })
+    })
+  }
+
+  if (Array.isArray(data.faq) && data.faq.length > 0) {
+    data.faq.forEach((f: any, i: number) => {
+      const val = `${(f.question || '').slice(0, 50)}${(f.question || '').length > 50 ? '...' : ''} → ${(f.answer || '').slice(0, 30)}...`
+      items.push({ id: `faq_${i}`, label: 'FAQ', value: val, type: 'faq' })
+    })
+  }
+
+  return items
+}
+
 function buildEditableItems(data: any) {
   const items: Array<{ id: string; label: string; value: string; type: string }> = []
   if (data.business_name) items.push({ id: 'business_name', label: 'Nome do negócio', value: data.business_name, type: 'business_name' })
@@ -155,10 +421,39 @@ function buildEditableItems(data: any) {
     items.push({ id: 'context', label: 'Contexto', value: label, type: 'context' })
   }
 
+  // Serviços logo após contexto (booking/both) — todos visíveis e editáveis (nome, duração e preço sempre)
+  if (Array.isArray(data.services) && data.services.length > 0) {
+    const defaultMins = data.schedule?.interval_minutes
+    data.services.forEach((s: any, i: number) => {
+      items.push({ id: `service_${i}`, label: `Serviço ${i + 1}`, value: s.name, type: 'service' })
+      items.push({
+        id: `service_duration_${i}`,
+        label: `${s.name} (duração)`,
+        value: s.duration_minutes != null ? `${s.duration_minutes} min` : defaultMins ? `${defaultMins} min` : '',
+        type: 'service_duration',
+      })
+      items.push({
+        id: `service_price_${i}`,
+        label: `${s.name} (valor)`,
+        value: s.base_price != null ? `R$ ${s.base_price}` : '',
+        type: 'service_price',
+      })
+    })
+  }
+
+  if (data.location_mode) {
+    const locLabel = data.location_mode === 'fixed' ? 'Ponto fixo' : 'Atende no local do cliente'
+    items.push({ id: 'location_mode', label: 'Localização', value: locLabel, type: 'service_area' })
+  }
+  if (data.location_mode === 'fixed' && data.establishment_address?.logradouro) {
+    const a = data.establishment_address
+    const val = `${a.logradouro}, ${a.numero}${a.complemento ? ` ${a.complemento}` : ''} - ${a.bairro}, ${a.localidade}/${a.uf}`
+    items.push({ id: 'establishment_address', label: 'Endereço', value: val, type: 'establishment_address' })
+  }
   if (data.service_area?.region || data.service_area?.coverage) {
     const cov = data.service_area?.coverage ? ` (${data.service_area.coverage})` : ''
     const val = `${data.service_area?.region || ''}${cov}`.trim()
-    if (val) items.push({ id: 'service_area', label: 'Região', value: val, type: 'service_area' })
+    if (val) items.push({ id: 'service_area', label: 'Região de atendimento', value: val, type: 'service_area' })
   }
 
   if (data.tone_of_voice) {
@@ -221,9 +516,57 @@ function buildEditableItems(data: any) {
     })
   }
 
-  if (Array.isArray(data.services)) {
-    data.services.forEach((s: any, i: number) => items.push({ id: `service_${i}`, label: 'Serviço', value: s.name, type: 'service' }))
+  if (data.handoff_mode) {
+    const handoffLabel =
+      data.handoff_mode === 'always' ? 'Sempre humano' : data.handoff_mode === 'conditional' ? 'Condicional (alguns casos)' : 'Automático'
+    items.push({ id: 'handoff_mode', label: 'Passar para humano', value: handoffLabel, type: 'tone_of_voice' })
   }
+
+  // Feriados (booking/both) — sempre mostrar para poder editar/adicionar
+  if (data.context === 'booking' || data.context === 'both') {
+    const holidays = data.holidays_attend
+    const val = Array.isArray(holidays) && holidays.length > 0
+      ? `${holidays.length} feriado(s): ${holidays.slice(0, 3).map((d: string) => d.split('-').reverse().join('/')).join(', ')}${holidays.length > 3 ? '...' : ''}`
+      : 'Não configurado'
+    items.push({ id: 'holidays', label: 'Feriados em que atende', value: val, type: 'holidays' })
+  }
+
+  // Períodos de fechamento (booking/both) — sempre mostrar para poder editar/adicionar
+  if (data.context === 'booking' || data.context === 'both') {
+    const periods = data.closure_periods
+    const val = Array.isArray(periods) && periods.length > 0
+      ? periods.map((p: { start: string; end: string }) => `${p.start} a ${p.end}`).join('; ')
+      : 'Não configurado'
+    items.push({ id: 'closure_periods', label: 'Períodos de fechamento', value: val, type: 'closure_periods' })
+  }
+
+  // Sequência de serviços (booking/both, quando permitido)
+  if ((data.context === 'booking' || data.context === 'both') && data.allow_sequence_booking) {
+    const seq = data.sequence_eligible_services
+    const val = Array.isArray(seq) && seq.length > 0 ? seq.join(', ') : 'Nenhum selecionado'
+    items.push({ id: 'sequence_eligible_services', label: 'Serviços que podem ser combinados', value: val, type: 'sequence_eligible_services' })
+  }
+
+  if (Array.isArray(data.staff) && data.staff.length > 0) {
+    data.staff.forEach((m: any, i: number) => {
+      if (m?.name) items.push({ id: `staff_${i}`, label: 'Colaborador', value: m.name, type: 'business_name' })
+    })
+  }
+
+  if (Array.isArray(data.dynamic_variables) && data.dynamic_variables.length > 0) {
+    data.dynamic_variables.forEach((v: any, i: number) => {
+      const label = v.label || v.key || `Variável ${i + 1}`
+      items.push({ id: `variable_${i}`, label, value: label, type: 'variable' })
+    })
+  }
+
+  if (Array.isArray(data.faq) && data.faq.length > 0) {
+    data.faq.forEach((f: any, i: number) => {
+      const val = `${(f.question || '').slice(0, 50)}${(f.question || '').length > 50 ? '...' : ''} → ${(f.answer || '').slice(0, 30)}...`
+      items.push({ id: `faq_${i}`, label: 'FAQ', value: val, type: 'faq' })
+    })
+  }
+
   return items
 }
 
@@ -247,6 +590,22 @@ function buildServiceDurationItems(services: Array<{ name: string; duration_minu
       type: 'service_duration',
     }
   })
+}
+
+function buildServicePriceItems(services: Array<{ name: string; base_price?: number }> = []) {
+  return services.map((s, i) => ({
+    id: `service_price_${i}`,
+    label: s.name,
+    value: s.base_price != null ? `R$ ${s.base_price}` : '',
+    type: 'service_price',
+  }))
+}
+
+function parsePrice(value: string): number | null {
+  const cleaned = (value || '').replace(/\D/g, '')
+  if (!cleaned) return null
+  const n = parseInt(cleaned, 10)
+  return Number.isNaN(n) || n < 0 ? null : n
 }
 
 function parseIntervalMinutes(message: string): number | null {
@@ -290,7 +649,7 @@ function attachSummaryPayload(resp: OnboardingResponse, data: any): OnboardingRe
   if (!(data?.business_name && data?.business_type && data?.context)) return resp
   return {
     ...resp,
-    assistant_message: generateSummary(data),
+    assistant_message: 'Edite os campos abaixo se quiser alterar algo.',
     editable_items: buildEditableItems(data),
     action_options: ['Está correto', 'Quero ajustar'],
     requires_action: 'summary_confirmation',
@@ -609,6 +968,9 @@ async function processMessage(
       } else if (id === 'context') {
         const c = parseContext(value)
         if (c) updated.context = c
+      } else if (id === 'schedule_interval') {
+        const mins = parseIntervalMinutes(value)
+        if (mins != null) updated.schedule = { ...(updated.schedule || {}), interval_minutes: mins }
       } else if (id === 'schedule') {
         const partial = parseScheduleNarrative(value)
         const days = parseDaysFromText(value)
@@ -620,16 +982,86 @@ async function processMessage(
           ...(partial.breaks && partial.breaks.length > 0 ? { breaks: partial.breaks } : {}),
         }
         updated.schedule = nextSchedule
-      } else if (id.startsWith('service_')) {
-        const idx = parseInt(id.replace('service_', ''))
+      } else if (id.startsWith('service_duration_')) {
+        const idx = parseInt(id.replace('service_duration_', ''), 10)
+        const services = Array.isArray(updated.services) ? [...updated.services] : []
+        const mins = parseDurationMinutes(value)
+        if (!Number.isNaN(idx) && idx >= 0 && idx < services.length && mins != null) {
+          services[idx] = { ...(services[idx] || {}), duration_minutes: mins }
+          updated.services = services
+        }
+      } else if (id.startsWith('service_price_')) {
+        const idx = parseInt(id.replace('service_price_', ''), 10)
+        const services = Array.isArray(updated.services) ? [...updated.services] : []
+        const price = parsePrice(value)
+        if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
+          services[idx] = { ...(services[idx] || {}), base_price: price ?? undefined }
+          updated.services = services
+        }
+        if (currentStep === 'services_pricing') {
+          return {
+            assistant_message: 'Pode ajustar os valores abaixo ou clicar em Continuar quando terminar.',
+            next_step: 'services_pricing',
+            extracted_data: updated,
+            editable_items: buildServicePriceItems(updated.services || []),
+            action_options: ['Continuar'],
+            requires_action: 'services_pricing',
+          }
+        }
+      } else if (id.startsWith('service_') && !id.startsWith('service_price_') && !id.startsWith('service_duration_')) {
+        const idx = parseInt(id.replace('service_', ''), 10)
         const services = Array.isArray(updated.services) ? [...updated.services] : []
         if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
           services[idx] = { ...(services[idx] || {}), name: value }
           updated.services = services
         }
       } else if (id === 'policies') {
-        // salvar como nota (não inferir valores)
         updated.policies = { note: value }
+      } else if (id === 'handoff_mode') {
+        const h = value.toLowerCase()
+        if (h.includes('sempre') || h.includes('always')) updated.handoff_mode = 'always'
+        else if (h.includes('condicional') || h.includes('alguns')) updated.handoff_mode = 'conditional'
+        else if (h.includes('automático') || h.includes('automatic')) updated.handoff_mode = 'automatic'
+      } else if (id.startsWith('staff_')) {
+        const idx = parseInt(id.replace('staff_', ''), 10)
+        const staff = Array.isArray(updated.staff) ? [...updated.staff] : []
+        if (!Number.isNaN(idx) && idx >= 0 && idx < staff.length) {
+          staff[idx] = { ...(staff[idx] || {}), name: value.trim() }
+          updated.staff = staff
+        }
+      } else if (id === 'holidays') {
+        if (value.startsWith('select_holidays:')) {
+          const dates = value.replace('select_holidays:', '').split(',').map((s) => s.trim()).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s))
+          updated.holidays_attend = dates
+          updated.holidays_skipped = true
+        } else if (/configurar|ver op[cç][oõ]es|marcar feriados/i.test(value)) {
+          const year = new Date().getFullYear()
+          const allHolidays = await fetchNationalHolidays(year)
+          const selected = updated.holidays_attend || []
+          return {
+            assistant_message: 'Marque os feriados em que você atende e clique em Continuar.',
+            next_step: 'holidays_select',
+            extracted_data: { ...updated, holidays_entered: true },
+            selectable_options: buildHolidaysSelectableOptions(allHolidays, selected),
+            action_options: ['Atendo todos os feriados', 'Continuar', 'Não atendo em nenhum'],
+            requires_action: 'holidays_select',
+          }
+        }
+      } else if (id === 'closure_periods') {
+        const parts = value.split(/[;，]/).map((p) => p.trim()).filter(Boolean)
+        const periods: Array<{ start: string; end: string }> = []
+        for (const part of parts) {
+          const p = parseClosurePeriod(part)
+          if (p) periods.push(p)
+        }
+        if (periods.length > 0) {
+          updated.closure_periods = periods
+          updated.closure_skipped = true
+        }
+      } else if (id === 'sequence_eligible_services') {
+        const names = value.split(',').map((s) => s.trim()).filter(Boolean)
+        const validNames = (updated.services || []).map((s: any) => s?.name).filter(Boolean)
+        updated.sequence_eligible_services = names.filter((n) => validNames.includes(n))
       }
     }
 
@@ -663,29 +1095,70 @@ async function processMessage(
     return resp
   }
 
-  // Comando explícito: mostrar estrutura completa
-  if (/(quero ver o resumo|mostrar resumo|mostrar estrutura|ver estrutura|ver configuração|mostrar configuração)/i.test(text)) {
-    const merged = { ...collectedData }
-    if (!merged.business_type) {
-      return { assistant_message: 'Antes do resumo, qual é o tipo do seu negócio (o que você faz/vende)?', next_step: 'business_type' }
-    }
-    if (!merged.business_name) {
-      return { assistant_message: `Entendi que você atua com ${merged.business_type}. Qual é o nome do seu negócio?`, next_step: 'business_name' }
-    }
-    if (!merged.context) {
-      return {
-        assistant_message: `Perfeito — ${merged.business_name} (${merged.business_type}). Você quer configurar **agendamento**, **orçamento**, ou **ambos**?`,
-        next_step: 'context',
-        action_options: ['Agendamento', 'Orçamento', 'Ambos'],
-        requires_action: 'context',
+  // Alteração de duração em qualquer etapa (exceto services_duration, que tem handler próprio): "duração de X é 40 min"
+  const servicesForDuration = Array.isArray(collectedData.services) ? collectedData.services : []
+  if (servicesForDuration.length > 0 && currentStep !== 'services_duration') {
+    const isDurationIntent = /\b(dura[çc][ãa]o|min(?:uto)?s?)\b/i.test(text) || /\d+\s*min(?:uto)?s?\b/i.test(text)
+    if (isDurationIntent) {
+      const minutes = parseDurationMinutes(text)
+      const idx = findServiceIndexByText(servicesForDuration, text)
+      if (minutes != null && idx >= 0) {
+        const updated = servicesForDuration.map((s, i) =>
+          i === idx ? { ...s, duration_minutes: minutes } : s
+        )
+        const merged = { ...collectedData, services: updated }
+        const next = determineNextStep(merged as BusinessModelData, '', makeFlowState(currentStep, merged))
+        let resp: OnboardingResponse = {
+          assistant_message: `✅ Duração de ${updated[idx].name}: ${minutes} min.\n\n${next.message}`,
+          next_step: next.step,
+          extracted_data: merged,
+          requires_action: next.requires_action,
+          action_options: next.action_options,
+        }
+        if (next.step === 'schedule_days') {
+          resp.selectable_options = buildDaysSelectableOptions(merged.schedule?.days_of_week || [])
+        }
+        resp = attachSummaryPayload(resp, merged)
+        return resp
       }
     }
+  }
+
+  // Comando explícito: mostrar resumo / editar / ver o que já foi cadastrado
+  if (isShowSummaryOrEditRequest(text)) {
+    const merged = { ...collectedData }
+    // Usuário avançado no início: mostrar todos os campos (incluindo vazios) para preencher direto
+    const items = hasMinimalData(merged)
+      ? buildAllEditableItems(merged)
+      : buildEditableItems(merged)
+    const introMsg = hasMinimalData(merged)
+      ? 'Preencha os campos abaixo diretamente, se preferir:'
+      : 'Edite os campos abaixo se quiser alterar algo.'
     return {
-      assistant_message: `${generateFullStructure(merged)}\n\nQuer que eu ajuste algo?`,
+      assistant_message: introMsg,
       next_step: 'summary_edit',
-      editable_items: buildEditableItems(merged),
-      action_options: ['Salvar ajustes', 'Voltar'],
+      editable_items: items,
+      action_options: items.length > 0 ? ['Salvar ajustes', 'Voltar'] : undefined,
       requires_action: 'edit_fields',
+    }
+  }
+
+  // Dúvidas contínuas na fase introdutória: resposta fluida via IA + tutorial ou CTA
+  const introSteps = ['welcome', 'business_type', 'collect_free_text'] as const
+  if (
+    introSteps.includes(currentStep as any) &&
+    hasMinimalData(collectedData) &&
+    (await classifyNeedsIntroTutorial(text))
+  ) {
+    const { response: fluidResponse, ready_to_start } = await answerDoubtWithAI(text, { lastWasTutorial: true })
+    const cta =
+      ready_to_start
+        ? '\n\nVamos começar? Me conta qual é o seu ramo de atividade e o que você faz!'
+        : '\n\n' + buildIntroTutorialMessage()
+    return {
+      assistant_message: fluidResponse + cta,
+      next_step: ready_to_start ? 'collect_free_text' : 'business_type',
+      extracted_data: {},
     }
   }
 
@@ -771,6 +1244,7 @@ async function processMessage(
       extracted_data: { context: selected },
       requires_action: next.requires_action,
       action_options: next.action_options,
+      ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
     }
   }
 
@@ -829,6 +1303,17 @@ async function processMessage(
         assistant_message:
           'Não consegui entender seu horário ainda. Você pode me dizer assim: “das 8 às 18” ou “08:00 as 18:00”? Se tiver pausa, pode incluir: “pausa 12:00 às 13:00”.',
         next_step: 'schedule_time',
+        action_options: [
+          '08:00 às 18:00',
+          '09:00 às 18:00',
+          '08:00 às 17:00',
+          '09:00 às 17:00',
+          '07:00 às 17:00',
+          '10:00 às 19:00',
+          '06:00 às 12:00',
+          'Outro horário',
+        ],
+        requires_action: 'schedule_time',
       }
     }
 
@@ -860,9 +1345,17 @@ async function processMessage(
       return {
         assistant_message:
           `✅ Perfeito. Horário: ${nextSchedule.start_time} às ${nextSchedule.end_time}.` +
-          `\n\nVocê tem alguma pausa no dia? (ex.: pausa 12:00 às 13:00). Se não tiver, responda “não”.`,
+          `\n\nVocê tem alguma pausa no dia? Pode escolher nos botões ou informar de outra forma.`,
         next_step: 'schedule_breaks',
         extracted_data: { schedule: nextSchedule },
+        action_options: [
+          '12:00 às 13:00',
+          '12:00 às 14:00',
+          '11:30 às 12:30',
+          'Não tenho pausa',
+          'Outra pausa',
+        ],
+        requires_action: 'schedule_breaks',
       }
     }
 
@@ -907,8 +1400,16 @@ async function processMessage(
     if (!breaks.length) {
       return {
         assistant_message:
-          'Nao consegui entender a pausa. Pode responder assim: "pausa 12:00 as 13:00". Se nao tiver, responda "nao".',
+          'Não consegui entender a pausa. Escolha uma opção nos botões ou informe assim: "pausa 12:00 às 13:00". Se não tiver, clique em "Não tenho pausa".',
         next_step: 'schedule_breaks',
+        action_options: [
+          '12:00 às 13:00',
+          '12:00 às 14:00',
+          '11:30 às 12:30',
+          'Não tenho pausa',
+          'Outra pausa',
+        ],
+        requires_action: 'schedule_breaks',
       }
     }
 
@@ -1035,27 +1536,214 @@ async function processMessage(
     }
   }
 
+  if (currentStep === 'services_pricing') {
+    const services = Array.isArray(collectedData.services) ? [...collectedData.services] : []
+    const wantsSkip = /(pular|pular por enquanto|n[aã]o|deixar pra depois|depois)/i.test(text)
+    const wantsContinue = /(continuar|seguir|pronto|ok|salvar)/i.test(text)
+    const wantsInform = /(informar valores|informar|sim|quero)/i.test(text)
+
+    if (wantsSkip && !collectedData.services_pricing_entered) {
+      const merged = { ...collectedData, services_pricing_configured: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_pricing', merged))
+      return {
+        assistant_message: `Tudo bem. Você pode cadastrar os valores depois.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { services_pricing_configured: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.step === 'schedule_days' ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) } : 'selectable_options' in next ? { selectable_options: (next as { selectable_options?: unknown }).selectable_options } : {}),
+      }
+    }
+
+    if (wantsInform && !collectedData.services_pricing_entered) {
+      const merged = { ...collectedData, services_pricing_entered: true }
+      return {
+        assistant_message: 'Para cada serviço, informe o valor em R$ (ou deixe em branco). Você pode editar nos itens abaixo e depois clicar em Continuar.',
+        next_step: 'services_pricing',
+        extracted_data: { services_pricing_entered: true },
+        editable_items: buildServicePriceItems(services),
+        action_options: ['Continuar'],
+        requires_action: 'services_pricing',
+      }
+    }
+
+    if (wantsContinue && collectedData.services_pricing_entered) {
+      const merged = { ...collectedData, services_pricing_configured: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_pricing', merged))
+      return {
+        assistant_message: `✅ Valores anotados.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { services_pricing_configured: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.step === 'schedule_days' ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) } : 'selectable_options' in next ? { selectable_options: (next as { selectable_options?: unknown }).selectable_options } : {}),
+      }
+    }
+
+    // Interpretar corretamente: "duração de X é 40 min" = duration, não preço
+    const isDurationIntent = /\b(dura[çc][ãa]o|min(?:uto)?s?)\b/i.test(text) || /\d+\s*min(?:uto)?s?\b/i.test(text)
+    if (isDurationIntent) {
+      const minutes = parseDurationMinutes(text)
+      const idx = findServiceIndexByText(services, text)
+      if (minutes != null && idx >= 0) {
+        services[idx] = { ...services[idx], duration_minutes: minutes }
+        return {
+          assistant_message: `✅ Duração de ${services[idx].name}: ${minutes} min. Quer ajustar mais algum valor ou clicar em Continuar?`,
+          next_step: 'services_pricing',
+          extracted_data: { services },
+          editable_items: buildServicePriceItems(services),
+          action_options: ['Continuar'],
+          requires_action: 'services_pricing',
+        }
+      }
+    }
+
+    const price = parsePrice(text)
+    const idx = findServiceIndexByText(services, text)
+    if (price != null && idx >= 0) {
+      services[idx] = { ...services[idx], base_price: price }
+      return {
+        assistant_message: `✅ ${services[idx].name}: R$ ${price}.\n\nQuer ajustar mais algum valor ou clicar em Continuar?`,
+        next_step: 'services_pricing',
+        extracted_data: { services },
+        editable_items: buildServicePriceItems(services),
+        action_options: ['Continuar'],
+        requires_action: 'services_pricing',
+      }
+    }
+
+    if (collectedData.services_pricing_entered) {
+      return {
+        assistant_message: 'Pode ajustar os valores nos itens abaixo ou clicar em Continuar para seguir.',
+        next_step: 'services_pricing',
+        editable_items: buildServicePriceItems(services),
+        action_options: ['Continuar'],
+        requires_action: 'services_pricing',
+      }
+    }
+
+    return {
+      assistant_message: 'Quer informar o valor de cada serviço? Assim o cliente já pode saber na hora. (Se preferir, pode pular.)',
+      next_step: 'services_pricing',
+      action_options: ['Informar valores', 'Pular por enquanto'],
+      requires_action: 'services_pricing',
+    }
+  }
+
+  if (currentStep === 'owner_attends') {
+    const alsoAttends = /(eu\s*tamb[eé]m\s*atendo|tamb[eé]m\s*atendo|eu\s*atendo)/i.test(text)
+    const onlyStaff = /(s[oó]\s*os\s*colaboradores|s[oó]\s*colaboradores|colaboradores\s*atendem)/i.test(text)
+    if (alsoAttends) {
+      return {
+        assistant_message:
+          'Beleza. Qual é o **seu nome**? E o nome dos outros colaboradores? (separe por vírgulas, ex: João, Maria, Carlos)',
+        next_step: 'staff_list',
+        extracted_data: { owner_attends: true },
+      }
+    }
+    if (onlyStaff) {
+      return {
+        assistant_message: 'Entendido. Quais são os nomes dos colaboradores que atendem? (separe por vírgulas, ex: João, Maria, Carlos)',
+        next_step: 'staff_list',
+        extracted_data: { owner_attends: false },
+      }
+    }
+    return {
+      assistant_message: 'Você também atende clientes ou só gerencia o negócio?',
+      next_step: 'owner_attends',
+      action_options: ['Eu também atendo', 'Só os colaboradores atendem'],
+      requires_action: 'owner_attends',
+    }
+  }
+
+  if (currentStep === 'sequence_booking_offer') {
+    const onlyOne = /(apenas\s*um|um\s*servi[cç]o\s*por\s*agendamento|s[oó]\s*um)/i.test(text)
+    const allowSeq = /(sim|pode\s*agendar\s*em\s*sequ[eê]ncia|em\s*sequ[eê]ncia|v[aá]rios\s*servi[cç]os)/i.test(text)
+    if (onlyOne) {
+      const merged = { ...collectedData, sequence_booking_configured: true, allow_sequence_booking: false }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('sequence_booking_offer', merged))
+      return {
+        assistant_message: `Entendido. O cliente agenda um serviço por vez.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { sequence_booking_configured: true, allow_sequence_booking: false },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    if (allowSeq) {
+      const merged = { ...collectedData, sequence_booking_configured: true, allow_sequence_booking: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('sequence_booking_offer', merged))
+      const serviceNames = (merged.services || []).map((s) => s?.name).filter(Boolean)
+      const selectableOpts = serviceNames.map((name, i) => ({ id: `seq_svc_${i}`, label: name, value: name }))
+      return {
+        assistant_message: `Ótimo! O cliente poderá combinar serviços.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { sequence_booking_configured: true, allow_sequence_booking: true },
+        requires_action: next.requires_action,
+        selectable_options: selectableOpts,
+      }
+    }
+    return {
+      assistant_message:
+        'O cliente pode agendar **vários serviços na mesma visita** (em sequência) ou apenas **um serviço por agendamento**?',
+      next_step: 'sequence_booking_offer',
+      action_options: ['Apenas um serviço por agendamento', 'Sim, pode agendar em sequência'],
+      requires_action: 'sequence_booking_offer',
+    }
+  }
+
+  if (currentStep === 'sequence_services_select') {
+    const selectMatch = text.match(/^select_sequence_services:(.+)$/i)
+    if (selectMatch) {
+      const servicesText = selectMatch[1].trim()
+      const selected = servicesText.split(',').map((s) => s.trim()).filter(Boolean)
+      if (selected.length > 0) {
+        const merged = { ...collectedData, sequence_eligible_services: selected }
+        const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('sequence_services_select', merged))
+        return {
+          assistant_message: `Perfeito! Os serviços ${selected.join(', ')} podem ser combinados em sequência.\n\n${next.message}`,
+          next_step: next.step,
+          extracted_data: { sequence_eligible_services: selected },
+          requires_action: next.requires_action,
+          action_options: next.action_options,
+        }
+      }
+    }
+    const serviceNames = (collectedData.services || []).map((s) => s?.name).filter(Boolean)
+    const selectableOpts = serviceNames.map((name, i) => ({ id: `seq_svc_${i}`, label: name, value: name }))
+    return {
+      assistant_message:
+        'Quais serviços podem ser combinados em sequência? Selecione os que fazem sentido oferecer juntos (ex: banho + tosa).',
+      next_step: 'sequence_services_select',
+      selectable_options: selectableOpts,
+      requires_action: 'sequence_services_select',
+    }
+  }
+
   if (currentStep === 'staff_mode') {
-    const isSolo = /(atendo sozinho|sozinh[oa]|s[oó] eu|apenas eu|somente eu)/i.test(text)
-    const hasTeam = /(colaboradores?|funcion[aá]rios?|equipe|temos|tenho)/i.test(text)
+    const isSolo = /(s[oó]\s*eu\s*atendo|atendo\s*sozinho|sozinh[oa]|s[oó]\s*eu|apenas\s*eu|somente\s*eu)/i.test(text)
+    const hasTeam = /(eu\s*e\s*outros|colaboradores?|funcion[aá]rios?|equipe|temos|tenho)/i.test(text)
     if (isSolo && !hasTeam) {
       return {
-        assistant_message: 'Perfeito. Qual é o nome do atendente? (pode ser seu nome)',
+        assistant_message: 'Perfeito. Qual é o seu nome? (você será o único atendente cadastrado)',
         next_step: 'staff_list',
-        extracted_data: { staff_mode: 'solo' },
+        extracted_data: { staff_mode: 'solo', owner_attends: true },
       }
     }
     if (hasTeam) {
       return {
-        assistant_message: 'Quais são os nomes dos colaboradores? (separe por vírgulas)',
-        next_step: 'staff_list',
+        assistant_message: 'Você também atende clientes ou só gerencia o negócio?',
+        next_step: 'owner_attends',
         extracted_data: { staff_mode: 'team' },
+        action_options: ['Eu também atendo', 'Só os colaboradores atendem'],
+        requires_action: 'owner_attends',
       }
     }
     return {
-      assistant_message: 'Você atende sozinho ou tem colaboradores?',
+      assistant_message:
+        '**Você** atende sozinho (só você) ou tem outros colaboradores além de você? (O sistema já considera que você é o dono/primeiro atendente.)',
       next_step: 'staff_mode',
-      action_options: ['Atendo sozinho', 'Tenho colaboradores'],
+      action_options: ['Só eu atendo', 'Eu e outros colaboradores'],
       requires_action: 'staff_mode',
     }
   }
@@ -1063,12 +1751,15 @@ async function processMessage(
   if (currentStep === 'staff_list') {
     const names = parseStaffNames(text)
     const mode = collectedData.staff_mode
+    const ownerAttends = collectedData.owner_attends !== false
     if (!names.length) {
       return {
         assistant_message:
           mode === 'solo'
-            ? 'Qual é o nome do atendente? (pode ser seu nome)'
-            : 'Não consegui identificar os nomes. Você pode escrever assim: "Carla, Maria".',
+            ? 'Qual é o seu nome? (você será o único atendente cadastrado)'
+            : ownerAttends
+              ? 'Não consegui identificar os nomes. Qual é o seu nome e dos outros colaboradores? (separe por vírgulas, ex: João, Maria)'
+              : 'Não consegui identificar os nomes. Quais são os colaboradores que atendem? (separe por vírgulas, ex: João, Maria)',
         next_step: 'staff_list',
       }
     }
@@ -1076,6 +1767,17 @@ async function processMessage(
     const staff = names.map((name) => ({ name }))
     const merged = { ...collectedData, staff, staff_setup_index: 0 }
     const first = staff[0]
+
+    if (mode === 'team' && ownerAttends && staff.length === 1) {
+      return {
+        assistant_message: `Anotado, ${first?.name || 'você'}. Tem mais alguém? Pode incluir os outros nomes separados por vírgula ou escolher:`,
+        next_step: 'staff_list_more',
+        extracted_data: { staff, staff_setup_index: 0 },
+        action_options: ['É só eu e mais um', 'É só eu e mais alguns', 'Já terminei a lista'],
+        requires_action: 'staff_list_more',
+      }
+    }
+
     return {
       assistant_message: `Perfeito. A agenda de **${first?.name || 'colaborador 1'}** é a mesma do estabelecimento ou tem horário próprio?`,
       next_step: 'staff_schedule_mode',
@@ -1085,13 +1787,111 @@ async function processMessage(
     }
   }
 
+  if (currentStep === 'staff_list_more') {
+    const wantsOneMore = /(s[oó]\s*eu\s*e\s*mais\s*um|mais\s*um)/i.test(text)
+    const wantsSeveral = /(s[oó]\s*eu\s*e\s*mais\s*alguns|mais\s*alguns)/i.test(text)
+    const wantsDone = /(j[aá]\s*terminei|terminei\s*a\s*lista|s[oó]\s*isso|pronto)/i.test(text)
+    const names = parseStaffNames(text)
+    const existingStaff = Array.isArray(collectedData.staff) ? collectedData.staff : []
+
+    if (wantsOneMore) {
+      return {
+        assistant_message: 'Qual é o nome do outro colaborador?',
+        next_step: 'staff_list_one_more',
+        extracted_data: { staff_list_more_mode: 'one' },
+      }
+    }
+    if (wantsSeveral || names.length > 1) {
+      const newNames = names.length > 1 ? names : []
+      const combined = existingStaff.map((s) => s.name)
+      newNames.forEach((n) => {
+        if (n && !combined.includes(n)) combined.push(n)
+      })
+      if (combined.length > 1) {
+        const staff = combined.map((name) => ({ name }))
+        const merged = { ...collectedData, staff, staff_setup_index: 0 }
+        const first = staff[0]
+        return {
+          assistant_message: `Perfeito. A agenda de **${first?.name}** é a mesma do estabelecimento ou tem horário próprio?`,
+          next_step: 'staff_schedule_mode',
+          extracted_data: { staff, staff_setup_index: 0 },
+          action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+          requires_action: 'staff_schedule_mode',
+        }
+      }
+      return {
+        assistant_message: 'Quais são os nomes? (separe por vírgulas, ex: Maria, Carlos)',
+        next_step: 'staff_list_more',
+      }
+    }
+    if (wantsDone) {
+      const staff = [...existingStaff]
+      const first = staff[0]
+      return {
+        assistant_message: `Perfeito. A agenda de **${first?.name || 'colaborador 1'}** é a mesma do estabelecimento ou tem horário próprio?`,
+        next_step: 'staff_schedule_mode',
+        extracted_data: { staff, staff_setup_index: 0 },
+        action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+        requires_action: 'staff_schedule_mode',
+      }
+    }
+
+    const newNames = parseStaffNames(text)
+    if (newNames.length > 0) {
+      const combined = existingStaff.map((s) => s.name)
+      newNames.forEach((n) => {
+        if (n && !combined.includes(n)) combined.push(n)
+      })
+      const staff = combined.map((name) => ({ name }))
+      const merged = { ...collectedData, staff, staff_setup_index: 0 }
+      const first = staff[0]
+      return {
+        assistant_message: `Perfeito. A agenda de **${first?.name}** é a mesma do estabelecimento ou tem horário próprio?`,
+        next_step: 'staff_schedule_mode',
+        extracted_data: { staff, staff_setup_index: 0 },
+        action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+        requires_action: 'staff_schedule_mode',
+      }
+    }
+
+    return {
+      assistant_message: 'Tem mais alguém? Pode incluir os nomes separados por vírgula ou escolher:',
+      next_step: 'staff_list_more',
+      action_options: ['É só eu e mais um', 'É só eu e mais alguns', 'Já terminei a lista'],
+      requires_action: 'staff_list_more',
+    }
+  }
+
+  if (currentStep === 'staff_list_one_more') {
+    const names = parseStaffNames(text)
+    const existingStaff = Array.isArray(collectedData.staff) ? collectedData.staff : []
+    if (names.length >= 1) {
+      const newName = names[0]
+      const combined = existingStaff.map((s) => s.name).concat(newName)
+      const staff = combined.map((name) => ({ name }))
+      const first = staff[0]
+      return {
+        assistant_message: `Perfeito. A agenda de **${first?.name}** é a mesma do estabelecimento ou tem horário próprio?`,
+        next_step: 'staff_schedule_mode',
+        extracted_data: { staff, staff_setup_index: 0 },
+        action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+        requires_action: 'staff_schedule_mode',
+      }
+    }
+    return {
+      assistant_message: 'Qual é o nome do outro colaborador?',
+      next_step: 'staff_list_one_more',
+    }
+  }
+
   if (currentStep === 'staff_schedule_mode') {
     const staff = Array.isArray(collectedData.staff) ? [...collectedData.staff] : []
     if (!staff.length) {
       return {
-        assistant_message: 'Você atende sozinho ou tem colaboradores?',
+        assistant_message:
+          '**Você** atende sozinho (só você) ou tem outros colaboradores além de você? (O sistema já considera que você é o dono/primeiro atendente.)',
         next_step: 'staff_mode',
-        action_options: ['Atendo sozinho', 'Tenho colaboradores'],
+        action_options: ['Só eu atendo', 'Eu e outros colaboradores'],
         requires_action: 'staff_mode',
       }
     }
@@ -1186,9 +1986,20 @@ async function processMessage(
     }
 
     return {
-      assistant_message: `✅ Anotei os dias de **${member?.name || 'este colaborador'}**.\n\nE qual é a faixa de horário que ele(a) atende? (ex.: 08:00 às 18:00)`,
+      assistant_message: `✅ Anotei os dias de **${member?.name || 'este colaborador'}**.\n\nE qual é a faixa de horário que ele(a) atende? Pode escolher nos botões ou informar de outra forma.`,
       next_step: 'staff_schedule_time',
       extracted_data: { staff, staff_setup_index: idx },
+      action_options: [
+        '08:00 às 18:00',
+        '09:00 às 18:00',
+        '08:00 às 17:00',
+        '09:00 às 17:00',
+        '07:00 às 17:00',
+        '10:00 às 19:00',
+        '06:00 às 12:00',
+        'Outro horário',
+      ],
+      requires_action: 'staff_schedule_time',
     }
   }
 
@@ -1226,6 +2037,17 @@ async function processMessage(
         assistant_message:
           'Não consegui entender o horário. Você pode me dizer assim: “das 8 às 18” ou “08:00 as 18:00”? Se tiver pausa, pode incluir: “pausa 12:00 às 13:00”.',
         next_step: 'staff_schedule_time',
+        action_options: [
+          '08:00 às 18:00',
+          '09:00 às 18:00',
+          '08:00 às 17:00',
+          '09:00 às 17:00',
+          '07:00 às 17:00',
+          '10:00 às 19:00',
+          '06:00 às 12:00',
+          'Outro horário',
+        ],
+        requires_action: 'staff_schedule_time',
       }
     }
 
@@ -1339,6 +2161,73 @@ async function processMessage(
     }
   }
 
+  if (currentStep === 'location_mode') {
+    const fixed = /tenho\s+endere[cç]o\s+fixo|endere[cç]o\s+fixo|ponto\s+fixo/i.test(text)
+    const mobile = /atendo\s+no\s+endere[cç]o|no\s+endere[cç]o\s+do\s+cliente|atendo\s+em\s+casa|desloco|vou\s+at[eé]/i.test(text)
+    if (fixed) {
+      const merged = { ...collectedData, location_mode: 'fixed' }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('location_mode', merged))
+      return {
+        assistant_message: `✅ Entendido — endereço fixo.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { location_mode: 'fixed' },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    if (mobile) {
+      const merged = { ...collectedData, location_mode: 'mobile' }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('location_mode', merged))
+      return {
+        assistant_message: `✅ Entendido — você atende no local do cliente.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { location_mode: 'mobile' },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    return {
+      assistant_message: 'Escolha uma opção: você tem endereço fixo ou atende no endereço do cliente?',
+      next_step: 'location_mode',
+      action_options: ['Tenho endereço fixo', 'Atendo no endereço do cliente'],
+      requires_action: 'location_mode',
+    }
+  }
+
+  if (currentStep === 'address') {
+    const wantsSkip = /(pular|nao quero|não quero|na verdade atendo no local|atendo no local do cliente)/i.test(text)
+    if (wantsSkip) {
+      const merged = { ...collectedData, location_mode: 'mobile', establishment_address: undefined }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('address', merged))
+      return {
+        assistant_message: `Sem problemas — vamos configurar as regiões de atendimento.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { location_mode: 'mobile', establishment_address: undefined },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+
+    const addr = collectedData.establishment_address
+    if (addr?.cep && addr?.logradouro && addr?.numero && addr?.bairro && addr?.localidade && addr?.uf) {
+      const merged = { ...collectedData }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('address', merged))
+      const addrStr = `${addr.logradouro}, ${addr.numero}${addr.complemento ? ` ${addr.complemento}` : ''} - ${addr.bairro}, ${addr.localidade}/${addr.uf}`
+      return {
+        assistant_message: `✅ Endereço anotado: ${addrStr}.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { establishment_address: addr },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    return {
+      assistant_message: 'Informe o endereço no formulário acima. Comece pelo CEP para preencher automaticamente.',
+      next_step: 'address',
+      requires_action: 'address',
+    }
+  }
+
   if (currentStep === 'policies') {
     const noPolicy = /(não tenho|nao tenho|nenhuma|nenhum|sem política|sem politica|não por enquanto|nao por enquanto)/i.test(text)
     if (noPolicy) {
@@ -1362,6 +2251,293 @@ async function processMessage(
       requires_action: next.requires_action,
       action_options: next.action_options,
     }
+  }
+
+  if (currentStep === 'tone_of_voice') {
+    const parsedTone = parseTone(text)
+    if (!parsedTone) {
+      return {
+        assistant_message:
+          'E sobre o jeito de falar com seus clientes: qual **tom de voz** você prefere que eu use?\n\nPergunto isso pra deixar as mensagens com a cara do seu negócio.',
+        next_step: 'tone_of_voice',
+        action_options: ['Formal', 'Amigável', 'Profissional', 'Engraçado'],
+        requires_action: 'tone_of_voice',
+      }
+    }
+    const merged = { ...collectedData, tone_of_voice: parsedTone }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('tone_of_voice', merged))
+    return {
+      assistant_message: `✅ Tom anotado: ${parsedTone === 'formal' ? 'Formal' : parsedTone === 'friendly' ? 'Amigável' : parsedTone === 'professional' ? 'Profissional' : 'Engraçado'}.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { tone_of_voice: parsedTone },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'handoff_mode') {
+    const handoff = /sempre humano/i.test(text)
+      ? 'always'
+      : /(condicional|alguns casos)/i.test(text)
+        ? 'conditional'
+        : /(automático|automatico)/i.test(text)
+          ? 'never'
+          : null
+    if (!handoff) {
+      return {
+        assistant_message:
+          'Pra eu não "segurar" conversa quando você quiser assumir, quando você prefere que eu **passe para um humano**?',
+        next_step: 'handoff_mode',
+        action_options: ['Sempre humano', 'Condicional (alguns casos)', 'Automático'],
+        requires_action: 'handoff_mode',
+      }
+    }
+    const merged = { ...collectedData, handoff_mode: handoff }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('handoff_mode', merged))
+    return {
+      assistant_message: `✅ Anotado.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { handoff_mode: handoff },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'holidays_offer') {
+    const wantsSkip = /(pular|pular por enquanto|depois|nao por enquanto)/i.test(text)
+    const wantsNoAttend = /(nao atendo|não atendo|nenhum|nenhum feriado)/i.test(text)
+    const wantsAll = /(atendo todos|atende em todos|todos os feriados)/i.test(text)
+    const wantsYes = /(sim|quero marcar|marcar)/i.test(text)
+
+    if (wantsSkip && !wantsYes) {
+      const merged = { ...collectedData, holidays_skipped: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_offer', merged))
+      return {
+        assistant_message: `Sem problemas — pode configurar depois. ✅\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { holidays_skipped: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    if (wantsNoAttend && !wantsYes) {
+      const merged = { ...collectedData, holidays_attend: [], holidays_skipped: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_offer', merged))
+      return {
+        assistant_message: `Anotado — nao atendemos em feriados. ✅\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { holidays_attend: [], holidays_skipped: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    if (wantsAll) {
+      const year = new Date().getFullYear()
+      const allHolidays = await fetchNationalHolidays(year)
+      const allDates = allHolidays.map((h) => h.date)
+      const merged = { ...collectedData, holidays_attend: allDates, holidays_skipped: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_offer', merged))
+      return {
+        assistant_message: `✅ Anotado — voce atende em todos os feriados de ${year}.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { holidays_attend: allDates, holidays_skipped: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    if (wantsYes) {
+      const year = new Date().getFullYear()
+      const allHolidays = await fetchNationalHolidays(year)
+      const selected = collectedData.holidays_attend || []
+      return {
+        assistant_message:
+          'Marque os feriados em que voce atende (pode selecionar varios). Depois clique em Continuar.',
+        next_step: 'holidays_select',
+        extracted_data: { holidays_entered: true },
+        selectable_options: buildHolidaysSelectableOptions(allHolidays, selected),
+        action_options: ['Atendo todos os feriados', 'Continuar', 'Nao atendo em nenhum'],
+        requires_action: 'holidays_select',
+      }
+    }
+    return {
+      assistant_message:
+        'Voce atende em feriados nacionais? Pode marcar os que trabalha, dizer que nao atende ou pular.',
+      next_step: 'holidays_offer',
+      action_options: ['Sim, quero marcar', 'Nao atendo em feriados', 'Pular por enquanto'],
+      requires_action: 'holidays_offer',
+    }
+  }
+
+  if (currentStep === 'holidays_select') {
+    const selectMatch = text.match(/^select_holidays:(.*)$/)
+    const wantsNone = /(nao atendo|não atendo|nenhum)/i.test(text)
+    const wantsAll = /(atendo todos|atende em todos|todos os feriados)/i.test(text)
+    const wantsContinue = /(continuar|pronto|ok)/i.test(text)
+
+    if (wantsAll) {
+      const year = new Date().getFullYear()
+      const allHolidays = await fetchNationalHolidays(year)
+      const allDates = allHolidays.map((h) => h.date)
+      const merged = { ...collectedData, holidays_attend: allDates, holidays_skipped: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_select', merged))
+      return {
+        assistant_message: `✅ Anotado — voce atende em todos os feriados de ${year}.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { holidays_attend: allDates, holidays_skipped: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+
+    if (wantsNone) {
+      const merged = { ...collectedData, holidays_attend: [], holidays_skipped: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_select', merged))
+      return {
+        assistant_message: `Anotado — nao atendemos em feriados. ✅\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { holidays_attend: [], holidays_skipped: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+
+    let selectedDates: string[] = collectedData.holidays_attend || []
+    if (selectMatch) {
+      selectedDates = selectMatch[1]
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s))
+    }
+
+    if (wantsContinue) {
+      const merged = { ...collectedData, holidays_attend: selectedDates, holidays_skipped: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_select', merged))
+      return {
+        assistant_message:
+          selectedDates.length > 0
+            ? `✅ Anotei ${selectedDates.length} feriado(s) em que voce atende.\n\n${next.message}`
+            : `✅ Anotado.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { holidays_attend: selectedDates, holidays_skipped: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+
+    const year = new Date().getFullYear()
+    const allHolidays = await fetchNationalHolidays(year)
+    return {
+      assistant_message: 'Marque os feriados em que voce atende e clique em Continuar.',
+      next_step: 'holidays_select',
+      selectable_options: buildHolidaysSelectableOptions(allHolidays, selectedDates),
+      action_options: ['Atendo todos os feriados', 'Continuar', 'Nao atendo em nenhum'],
+      requires_action: 'holidays_select',
+    }
+  }
+
+  if (currentStep === 'closure_offer') {
+    const wantsSkip = /(pular|pular por enquanto|depois)/i.test(text)
+    const wantsNo = /^(nao|não)$/i.test(text.trim())
+    const wantsYes = /(sim|tenho periodo|tenho período)/i.test(text)
+
+    if (wantsSkip && !wantsYes) {
+      const merged = { ...collectedData, closure_skipped: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('closure_offer', merged))
+      let resp: OnboardingResponse = {
+        assistant_message: `Sem problemas — pode configurar depois. ✅\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { closure_skipped: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+      resp = attachSummaryPayload(resp, merged)
+      return resp
+    }
+    if (wantsNo && !wantsYes) {
+      const merged = { ...collectedData, closure_periods: [], closure_skipped: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('closure_offer', merged))
+      let resp: OnboardingResponse = {
+        assistant_message: `Anotado. ✅\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { closure_periods: [], closure_skipped: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+      resp = attachSummaryPayload(resp, merged)
+      return resp
+    }
+    if (wantsYes) {
+      return {
+        assistant_message:
+          'Informe o periodo no formato: **data inicial a data final**\n\nExemplo: 20/12/2026 a 05/01/2027',
+        next_step: 'closure_dates',
+        extracted_data: { closure_entered: true },
+        requires_action: 'closure_dates',
+      }
+    }
+    return {
+      assistant_message: 'Tem algum periodo de ferias ou fechamento planejado?',
+      next_step: 'closure_offer',
+      action_options: ['Sim, tenho periodo', 'Nao', 'Pular por enquanto'],
+      requires_action: 'closure_offer',
+    }
+  }
+
+  if (currentStep === 'closure_dates') {
+    const period = parseClosurePeriod(text)
+    if (period) {
+      const existing = collectedData.closure_periods || []
+      const merged = {
+        ...collectedData,
+        closure_periods: [...existing, { start: period.start, end: period.end }],
+      }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('closure_dates', merged))
+      let resp: OnboardingResponse = {
+        assistant_message: `✅ Periodo anotado: ${period.start} a ${period.end}.\n\nQuer adicionar mais algum periodo ou continuar?`,
+        next_step: 'closure_more',
+        extracted_data: {
+          closure_periods: merged.closure_periods,
+        },
+        requires_action: 'closure_more',
+        action_options: ['Adicionar outro periodo', 'Continuar'],
+      }
+      resp = attachSummaryPayload(resp, merged)
+      return resp
+    }
+    return {
+      assistant_message:
+        'Nao consegui entender o periodo. Informe assim: **20/12/2026 a 05/01/2027**',
+      next_step: 'closure_dates',
+      requires_action: 'closure_dates',
+    }
+  }
+
+  if (currentStep === 'closure_more') {
+    const wantsMore = /(adicionar|outro periodo|mais)/i.test(text)
+    const wantsContinue = /(continuar|pronto|nao|não|seguir)/i.test(text)
+
+    if (wantsMore && !wantsContinue) {
+      return {
+        assistant_message:
+          'Informe o proximo periodo no formato: **data inicial a data final**\n\nExemplo: 15/07/2026 a 30/07/2026',
+        next_step: 'closure_dates',
+        requires_action: 'closure_dates',
+      }
+    }
+    const merged = { ...collectedData, closure_skipped: true }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('closure_more', merged))
+    let resp: OnboardingResponse = {
+      assistant_message: next.message,
+      next_step: next.step,
+      extracted_data: { closure_skipped: true },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+      ...(next.step === 'schedule_days'
+        ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) }
+        : {}),
+    }
+    resp = attachSummaryPayload(resp, merged)
+    return resp
   }
 
   if (currentStep === 'faq_offer') {
@@ -1458,6 +2634,24 @@ async function processMessage(
   }
 
   if (currentStep === 'services_list') {
+    const selectServicesMatch = text.match(/^select_services:(.+)$/i)
+    if (selectServicesMatch) {
+      const servicesText = selectServicesMatch[1].trim()
+      const services = parseServicesList(servicesText)
+      if (services.length > 0) {
+        const merged = { ...collectedData, services }
+        const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_list', merged))
+        return {
+          assistant_message: `Entendi que você oferece:\n- ${services.map((s) => s.name).join('\n- ')}\n\nQuer ajustar ou adicionar algum serviço?`,
+          next_step: 'services_list',
+          extracted_data: { services },
+          editable_items: buildServiceItems(services),
+          action_options: ['Adicionar serviço', 'Continuar'],
+          requires_action: 'services_edit',
+        }
+      }
+    }
+
     const wantsContinue = /(continuar|seguir|pronto|ok)/i.test(text)
     if (lower.includes('adicionar serviço') || lower.includes('adicionar servico')) {
       return {
@@ -1481,10 +2675,14 @@ async function processMessage(
     })
 
     if (!unique.length) {
+      const serviceExamples = buildServiceExamples(collectedData.business_type, collectedData.business_segment)
+      const serviceOpts = buildServiceSelectableOptions(serviceExamples)
       return {
         assistant_message:
-          'Pra eu configurar o agendamento, preciso saber o que o cliente pode marcar.\n\nQuais serviços você oferece? Liste separando por vírgula.\n\nExemplo: Consulta, Atendimento, Retorno',
+          'Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nSelecione os que você oferece ou adicione outros abaixo:',
         next_step: 'services_list',
+        selectable_options: serviceOpts,
+        requires_action: 'services_list',
       }
     }
 
@@ -1541,7 +2739,20 @@ async function processMessage(
 
   // Para os demais steps, usamos IA apenas para enriquecer/mesclar e seguimos o motor
   const extracted = await extractBusinessModelWithAI(text, collectedData)
+  // Merge seguro: schedule é mesclado para não sobrescrever interval_minutes etc. quando a IA retorna objeto parcial
   const mergedData = { ...collectedData, ...extracted }
+  if (extracted?.schedule && typeof extracted.schedule === 'object') {
+    mergedData.schedule = { ...(collectedData.schedule || {}), ...extracted.schedule }
+  }
+  // Parse location_mode a partir de frases como "Ponto fixo", "Atende no local do cliente"
+  const locLower = text.toLowerCase()
+  if (locLower.includes('ponto fixo') || locLower.includes('endereço fixo') || locLower.includes('endereco fixo')) {
+    ;(mergedData as any).location_mode = 'fixed'
+  }
+  if (locLower.includes('atende no local') || locLower.includes('local do cliente') || locLower.includes('atendimento no local')) {
+    ;(mergedData as any).location_mode = 'mobile'
+  }
+
   const fallbackServices = extractServicesFromText(text)
   if (fallbackServices.length > 0) {
     mergedData.services = shouldReplaceServices(text)
@@ -1568,6 +2779,34 @@ async function processMessage(
     return { assistant_message: `✅ Anotei as variáveis.\n\n${next.message}`, next_step: next.step, extracted_data: { dynamic_variables: dynamic } }
   }
 
+  if (currentStep === 'summary_edit') {
+    // "Salvar ajustes" ou "Voltar" - avançar/voltar no fluxo com os dados atuais
+    const isSalvar = /salvar|continuar|confirmar|ok|pronto/i.test(text)
+    const isVoltar = /voltar|cancelar|deixa/i.test(text)
+    if (isSalvar || isVoltar) {
+      const ctx = parseContext(text) || mergedData.context
+      if (ctx) mergedData.context = ctx
+      const locLower = text.toLowerCase()
+      if (locLower.includes('ponto fixo') || locLower.includes('endereço fixo') || locLower.includes('endereco fixo')) {
+        ;(mergedData as any).location_mode = 'fixed'
+      }
+      if (locLower.includes('atende no local') || locLower.includes('local do cliente') || locLower.includes('mobile')) {
+        ;(mergedData as any).location_mode = 'mobile'
+      }
+      const next = determineNextStep(mergedData as BusinessModelData, '', makeFlowState('summary_edit', mergedData))
+      let resp: OnboardingResponse = {
+        assistant_message: next.message,
+        next_step: next.step,
+        extracted_data: mergedData,
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.step === 'schedule_days' ? { selectable_options: buildDaysSelectableOptions(mergedData.schedule?.days_of_week || []) } : 'selectable_options' in next ? { selectable_options: (next as { selectable_options?: unknown }).selectable_options } : {}),
+      }
+      resp = attachSummaryPayload(resp, mergedData)
+      return resp
+    }
+  }
+
   if (currentStep === 'summary') {
     if (lower.includes('correto') || lower.includes('está certo') || lower.includes('esta certo') || lower.includes('sim')) {
       return {
@@ -1575,11 +2814,11 @@ async function processMessage(
           'Perfeito! Já consigo montar a primeira versão do seu atendimento.\n\nPara salvar tudo e te mostrar o fluxo visual, preciso criar sua conta rapidinho.',
         next_step: 'signup_request',
         requires_action: 'signup',
-        action_options: ['Criar conta', 'Continuar depois'],
+        action_options: ['Criar conta', 'Tenho conta', 'Simular atendimento', 'Continuar depois'],
       }
     }
     return {
-      assistant_message: 'Sem problemas! Me diga o que você quer ajustar.',
+      assistant_message: 'Edite os campos abaixo se quiser alterar algo.',
       next_step: 'summary_edit',
       editable_items: buildEditableItems(mergedData),
       action_options: ['Salvar ajustes', 'Voltar'],
@@ -1588,13 +2827,24 @@ async function processMessage(
   }
 
   if (currentStep === 'signup_request') {
+    // "Criar conta" / "Quero criar" -> frontend mostra formulário (Google + email/senha). Não pedir email via chat.
     if (lower.includes('criar') || lower.includes('conta') || lower.includes('sim')) {
       return {
-        assistant_message: 'Beleza. Qual email você quer usar para acessar o Nevo?',
-        next_step: 'signup_email',
+        assistant_message: 'Beleza! Use o formulário abaixo para criar sua conta (Google ou email/senha).',
+        next_step: 'signup_request',
+        requires_action: 'signup',
+        action_options: ['Continuar depois'],
       }
     }
-    return { assistant_message: 'Ok. Se preferir, você pode criar a conta depois.', next_step: 'collect_free_text' }
+    if (lower.includes('tenho conta') || lower.includes('já tenho')) {
+      return {
+        assistant_message: 'Entendido. Use o formulário abaixo para entrar na sua conta.',
+        next_step: 'signup_request',
+        requires_action: 'signup',
+        action_options: ['Continuar depois'],
+      }
+    }
+    return { assistant_message: 'Ok. Se preferir, você pode criar a conta depois.', next_step: 'signup_request' }
   }
 
   if (currentStep === 'signup_email') {
@@ -1643,6 +2893,9 @@ async function processMessage(
   if (next.step === 'schedule_days') {
     resp.selectable_options = buildDaysSelectableOptions(mergedData.schedule?.days_of_week || [])
   }
+  if (next.step === 'services_list' && next.selectable_options) {
+    resp.selectable_options = next.selectable_options
+  }
 
   // Se caiu em summary, padronizar payload
   const normalized = attachSummaryPayload(resp, mergedData)
@@ -1676,21 +2929,50 @@ serve(async (req) => {
     if (envError) return json({ error: envError }, 500)
 
     const { session, isNew } = await getOrCreateSession(supabaseAdmin, body.session_id)
-    const collectedData = session?.collected_data || {}
+    let collectedData = { ...(session?.collected_data || {}) }
+
+    // Aplicar edits em lote (ex: preços ao clicar Continuar) antes de processar a mensagem
+    if (Array.isArray(body.edits) && body.edits.length > 0) {
+      for (const { id, value } of body.edits) {
+        if (id.startsWith('service_price_')) {
+          const idx = parseInt(id.replace('service_price_', ''), 10)
+          const services = Array.isArray(collectedData.services) ? [...collectedData.services] : []
+          const price = parsePrice(value)
+          if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
+            services[idx] = { ...(services[idx] || {}), base_price: price ?? undefined }
+            collectedData = { ...collectedData, services }
+          }
+        }
+      }
+    }
+
+    // Aplicar endereço (formulário com CEP) quando enviado
+    if (body.address && body.address.cep && body.address.logradouro && body.address.numero && body.address.bairro && body.address.localidade && body.address.uf) {
+      collectedData = { ...collectedData, establishment_address: body.address }
+    }
+
+    const currentStep = body.current_step || session.current_step_key || 'welcome'
+    const isSignupStep = ['signup_email', 'signup_password', 'signup_confirm_password'].includes(currentStep)
+    const userMessageContent = isSignupStep ? '[dados de cadastro]' : body.message
 
     await supabaseAdmin.from('onboarding_messages').insert({
       session_id: body.session_id,
       role: 'user',
-      content: body.message,
+      content: userMessageContent,
     })
-
-    const currentStep = body.current_step || session.current_step_key || 'welcome'
 
     let response: OnboardingResponse
     if (currentStep === 'welcome' && isNew) {
-      // “Chat inteligente”: se o usuário já descreveu o negócio na 1ª mensagem,
-      // não repetir pergunta genérica — extrair e avançar no fluxo.
-      if (isLikelyBusinessInfoFirstMessage(body.message)) {
+      // IA first: detecta se usuário não sabe o que fazer → tutorial introdutório
+      const needsTutorial = await classifyNeedsIntroTutorial(body.message)
+      if (needsTutorial) {
+        response = {
+          assistant_message: buildIntroTutorialMessage(),
+          next_step: 'business_type',
+          extracted_data: {},
+        }
+      } else if (isLikelyBusinessInfoFirstMessage(body.message)) {
+        // Usuário já descreveu o negócio na 1ª mensagem — extrair e avançar
         response = await processMessage(body.message, 'collect_free_text', collectedData, session, supabaseAdmin)
       } else {
         response = {
@@ -1707,7 +2989,18 @@ serve(async (req) => {
     response = ensureNextStep(response, currentStep || 'collect_free_text')
 
     const updatedData = { ...collectedData, ...(response.extracted_data || {}) }
-    if (!updatedData.handoff_mode) updatedData.handoff_mode = 'conditional'
+
+    // Enriquecer selectable_options de serviços com IA quando o mapeamento estático não conhece o ramo
+    if (
+      response.next_step === 'services_list' &&
+      updatedData.business_type &&
+      buildServiceExamples(updatedData.business_type, updatedData.business_segment) ===
+        SERVICE_EXAMPLES_FALLBACK
+    ) {
+      const aiExamples = await suggestServicesWithAI(updatedData.business_type)
+      response.selectable_options = buildServiceSelectableOptions(aiExamples)
+    }
+    // Não injetar handoff_mode por padrão — só mostrar na UI se o usuário configurou explicitamente
 
     const missingFields = identifyMissingFields(updatedData as BusinessModelExtraction, (updatedData as any).context)
 

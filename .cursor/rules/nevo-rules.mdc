@@ -114,12 +114,12 @@ A regra de tenant_id se aplica à todas operações.
 - Não incluir dados de exemplo em produção.
 - Não expor consultas SQL nos logs.
 
-# Uso do Supabase MCP (OBRIGATÓRIO)
-- **SEMPRE** usar o MCP do Supabase para qualquer operação relacionada ao banco de dados.
-- **SEMPRE** usar o MCP do Supabase para criar/atualizar migrations.
-- **SEMPRE** usar o MCP do Supabase para criar/atualizar Edge Functions.
-- **SEMPRE** usar o MCP do Supabase para executar queries SQL.
-- **SEMPRE** usar o MCP do Supabase para gerenciar tabelas, RLS policies, e extensões.
-- NÃO criar migrations manualmente em arquivos SQL sem aplicar via MCP.
-- NÃO criar Edge Functions manualmente sem deploy via MCP.
-- O MCP do Supabase está configurado e deve ser a interface única para operações no banco.
+# Deploy e migrations (Supabase) — CLI é a fonte de verdade
+- **Aplicar migrations e deploy de Edge Functions: SOMENTE via Supabase CLI** (ex.: `supabase db push`, `supabase functions deploy`).
+- NÃO usar MCP ou outro canal para aplicar migrations ou deploy em produção/remoto.
+- Migrations devem ser escritas em arquivos SQL no projeto e aplicadas pela CLI.
+
+# Uso do Supabase MCP (apoio ao desenvolvimento)
+- Usar o MCP do Supabase para: **consultas** ao banco, **leitura de estado**, **gerar tipos** (TypeScript), **checagens** (advisors, logs) e **ajudar a redigir** migrations ou funções.
+- O MCP **não** deve ser usado para aplicar migrations ou deployar Edge Functions em produção; isso é exclusivo da CLI.
+- Para executar SQL de leitura, inspecionar tabelas/RLS e validar schema, o MCP é permitido e recomendado.

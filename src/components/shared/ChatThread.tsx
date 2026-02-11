@@ -5,25 +5,44 @@ import { ChatMessage } from './ChatMessage'
 import type { Message } from './ChatShell'
 import { SignupCard } from '@/components/onboarding/SignupCard'
 import { LoginCard } from '@/components/onboarding/LoginCard'
+import { AddressForm } from '@/components/onboarding/AddressForm'
 
 interface ChatThreadProps {
   messages: Message[]
   isLoading?: boolean
   onActionClick?: (action: string) => void
+  onItemEditLocal?: (id: string, value: string) => void
   onSignupSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
   onSignupCancel?: () => void
+  signupError?: string | null
+  onClearSignupError?: () => void
   onLoginSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
   onLoginCancel?: () => void
+  onAddressSubmit?: (payload: {
+    cep: string
+    logradouro: string
+    numero: string
+    complemento?: string
+    bairro: string
+    localidade: string
+    uf: string
+  }) => void | Promise<void>
+  onAddressCancel?: () => void
 }
 
 export function ChatThread({
   messages,
   isLoading,
   onActionClick,
+  onItemEditLocal,
   onSignupSubmit,
   onSignupCancel,
+  signupError,
+  onClearSignupError,
   onLoginSubmit,
   onLoginCancel,
+  onAddressSubmit,
+  onAddressCancel,
 }: ChatThreadProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -43,6 +62,8 @@ export function ChatThread({
                   onSubmit={async (payload) => onSignupSubmit?.(payload)}
                   onCancel={onSignupCancel}
                   googleEnabled={false}
+                  serverError={signupError}
+                  onClearServerError={onClearSignupError}
                 />
               </div>
             )
@@ -60,6 +81,18 @@ export function ChatThread({
             )
           }
 
+          if (message.kind === 'address') {
+            return (
+              <div key={message.id} className="max-w-[85%] sm:max-w-[75%]">
+                <AddressForm
+                  disabled={isLoading}
+                  onSubmit={async (payload) => onAddressSubmit?.(payload)}
+                  onCancel={onAddressCancel}
+                />
+              </div>
+            )
+          }
+
           return (
             <ChatMessage
               key={message.id}
@@ -69,7 +102,11 @@ export function ChatThread({
               actionOptions={message.actionOptions}
               editableItems={message.editableItems}
               selectableOptions={message.selectableOptions}
+              requiresAction={message.requiresAction}
+              allowCustomInput={message.allowCustomInput}
+              customInputPlaceholder={message.customInputPlaceholder}
               onActionClick={onActionClick}
+              onItemEditLocal={onItemEditLocal}
               onItemEdit={(id, newValue, allItems) => {
                 // Preferir mensagens "humanas" para funcionar mesmo sem suporte a comandos determinísticos no backend.
                 const items = allItems || []
@@ -77,6 +114,8 @@ export function ChatThread({
 
                 if (id === 'business_name') return onActionClick?.(`Meu negócio se chama ${newValue}.`)
                 if (id === 'business_type') return onActionClick?.(`Meu ramo/tipo de negócio é ${newValue}.`)
+                if (id === 'context') return onActionClick?.(`Quero configurar ${newValue}.`)
+                if (id === 'location_mode') return onActionClick?.(`${newValue}.`)
                 if (id === 'service_area') return onActionClick?.(`Minha região de atendimento é: ${newValue}.`)
                 if (id === 'tone_of_voice') return onActionClick?.(`Quero que o tom de voz seja ${newValue}.`)
                 if (id === 'schedule') return onActionClick?.(`Meu horário de atendimento é: ${newValue}.`)
@@ -119,9 +158,21 @@ export function ChatThread({
                 // fallback genérico
                 onActionClick?.('Quero remover isso.')
               }}
-              onOptionSelect={(selectedValues) => {
-                // Enviar seleção de checkboxes no formato esperado pela API
-                onActionClick?.(`select_days:${selectedValues.join(',')}`)
+              onOptionSelect={(selectedValues, customInput) => {
+                if (message.requiresAction === 'services_list') {
+                  const parts = [...selectedValues]
+                  if (customInput?.trim()) {
+                    parts.push(...customInput.split(',').map((s) => s.trim()).filter(Boolean))
+                  }
+                  onActionClick?.(`select_services:${parts.join(', ')}`)
+                  return
+                }
+                if (message.requiresAction === 'sequence_services_select') {
+                  onActionClick?.(`select_sequence_services:${selectedValues.join(', ')}`)
+                  return
+                }
+                const prefix = message.requiresAction === 'holidays_select' ? 'select_holidays' : 'select_days'
+                onActionClick?.(`${prefix}:${selectedValues.join(',')}`)
               }}
             />
           )

@@ -11,6 +11,7 @@ export interface EditableItem {
   value: string
   type:
     | 'service'
+    | 'service_price'
     | 'service_duration'
     | 'faq'
     | 'variable'
@@ -22,6 +23,7 @@ export interface EditableItem {
     | 'business_name'
     | 'business_type'
     | 'context'
+    | 'establishment_address'
 }
 
 export interface SelectableOption {
@@ -34,13 +36,16 @@ export interface SelectableOption {
 export interface Message {
   id: string
   role: 'user' | 'assistant'
-  kind?: 'text' | 'signup' | 'login'
+  kind?: 'text' | 'signup' | 'login' | 'address'
   content: string
   timestamp?: Date
   actionOptions?: string[]
   editableItems?: EditableItem[]
   selectableOptions?: SelectableOption[]
   requiresAction?: string | null
+  /** Exibe input inline para adicionar outros itens (ex: serviços). */
+  allowCustomInput?: boolean
+  customInputPlaceholder?: string
 }
 
 interface ChatShellProps {
@@ -53,14 +58,29 @@ interface ChatShellProps {
   examples?: string[]
   onExampleClick?: (example: string) => void
   onActionClick?: (action: string) => void
+  onItemEditLocal?: (id: string, value: string) => void
   onSignupSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
   onSignupCancel?: () => void
+  signupError?: string | null
+  onClearSignupError?: () => void
   onLoginSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
   onLoginCancel?: () => void
+  onAddressSubmit?: (payload: {
+    cep: string
+    logradouro: string
+    numero: string
+    complemento?: string
+    bairro: string
+    localidade: string
+    uf: string
+  }) => void | Promise<void>
+  onAddressCancel?: () => void
   header?: ReactNode
   footer?: ReactNode
   composerFooter?: ReactNode
   className?: string
+  /** Incrementa após resposta para manter foco no textarea. */
+  focusTrigger?: number
 }
 
 export function ChatShell({
@@ -73,14 +93,20 @@ export function ChatShell({
   examples = [],
   onExampleClick,
   onActionClick,
+  onItemEditLocal,
   onSignupSubmit,
   onSignupCancel,
+  signupError,
+  onClearSignupError,
   onLoginSubmit,
   onLoginCancel,
+  onAddressSubmit,
+  onAddressCancel,
   header,
   footer,
   composerFooter,
   className,
+  focusTrigger,
 }: ChatShellProps) {
   const showEmptyState = messages.length === 0 && !isLoading
 
@@ -115,6 +141,7 @@ export function ChatShell({
                 showExamples={showExamples && showEmptyState}
                 examples={examples}
                 onExampleClick={onExampleClick}
+                focusTrigger={focusTrigger}
               />
               {composerFooter && <div className="mt-3">{composerFooter}</div>}
             </div>
@@ -126,10 +153,15 @@ export function ChatShell({
             messages={messages} 
             isLoading={isLoading}
             onActionClick={onActionClick}
+            onItemEditLocal={onItemEditLocal}
             onSignupSubmit={onSignupSubmit}
             onSignupCancel={onSignupCancel}
+            signupError={signupError}
+            onClearSignupError={onClearSignupError}
             onLoginSubmit={onLoginSubmit}
             onLoginCancel={onLoginCancel}
+            onAddressSubmit={onAddressSubmit}
+            onAddressCancel={onAddressCancel}
           />
           {/* Input Area - Fixo na parte inferior quando há mensagens */}
           <div className="flex-shrink-0 bg-background px-4 py-4">
@@ -142,6 +174,7 @@ export function ChatShell({
                 showExamples={false}
                 examples={examples}
                 onExampleClick={onExampleClick}
+                focusTrigger={focusTrigger}
               />
               {composerFooter && <div className="mt-3">{composerFooter}</div>}
             </div>

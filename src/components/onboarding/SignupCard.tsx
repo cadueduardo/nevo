@@ -22,13 +22,18 @@ interface SignupCardProps {
   onCancel?: () => void
   onGoogleClick?: () => void
   googleEnabled?: boolean
+  /** Erro retornado pelo servidor (ex.: e-mail já cadastrado). Exibido dentro do card. */
+  serverError?: string | null
+  /** Chamado quando o usuário altera email/senha para limpar o erro do servidor na UI. */
+  onClearServerError?: () => void
 }
 
-export function SignupCard({ disabled, onSubmit, onCancel, onGoogleClick, googleEnabled = false }: SignupCardProps) {
+export function SignupCard({ disabled, onSubmit, onCancel, onGoogleClick, googleEnabled = false, serverError, onClearServerError }: SignupCardProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
+  const errorToShow = serverError ?? localError
 
   const handleSubmit = async () => {
     const e = email.trim()
@@ -37,6 +42,11 @@ export function SignupCard({ disabled, onSubmit, onCancel, onGoogleClick, google
     if (password !== confirm) return setLocalError('As senhas não coincidem.')
     setLocalError(null)
     await onSubmit({ email: e, password })
+  }
+
+  const clearErrors = () => {
+    setLocalError(null)
+    onClearServerError?.()
   }
 
   return (
@@ -64,7 +74,8 @@ export function SignupCard({ disabled, onSubmit, onCancel, onGoogleClick, google
             type="email"
             autoComplete="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => { setEmail(e.target.value); clearErrors() }}
+            onFocus={clearErrors}
             disabled={disabled}
             placeholder="voce@empresa.com"
           />
@@ -94,7 +105,7 @@ export function SignupCard({ disabled, onSubmit, onCancel, onGoogleClick, google
           />
         </div>
 
-        {localError && <div className="text-sm text-red-600">{localError}</div>}
+        {errorToShow && <div className="text-sm text-destructive" role="alert">{errorToShow}</div>}
       </CardContent>
       <CardFooter className="gap-2 justify-end">
         {onCancel && (

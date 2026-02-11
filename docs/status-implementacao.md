@@ -21,6 +21,7 @@
      - `002_rls_policies.sql` - Políticas RLS para todas as tabelas
      - `003_onboarding_sessions.sql` - Tabelas de onboarding anônimo
      - `004_onboarding_rls.sql` - Políticas RLS para onboarding
+     - `005_tenant_business_config.sql` - tenant_setting (when_client_asks_price_no_value, business_config)
 
 ### ✅ Componentes de UI (Mobile First)
 
@@ -71,30 +72,57 @@
 
 ### ✅ Fluxo de Onboarding Implementado
 
-**Steps implementados:**
-- `welcome` - Primeira mensagem, extração inicial
-- `collecting` - Coleta adaptativa de informações
-- `business_type` - Tipo de negócio
-- `business_name` - Nome do negócio
-- `context` - Contexto (agendamento/orçamento/ambos)
-- `services_list` - Lista de serviços (separada por vírgula)
-- `services_details` - Detalhes dos serviços
-- `schedule_days` - Dias da semana
-- `schedule_time` - Horário de funcionamento
-- `quote_variables` - Variáveis para orçamento
-- `service_area` - Região de atendimento
-- `policies` - Políticas de cancelamento/sinal
-- `faq_offer` - Oferecer adicionar FAQ
-- `faq_question` - Coletar pergunta e resposta FAQ
-- `faq_more` - Adicionar mais FAQs
-- `tone_of_voice` - Tom de voz
-- `handoff_mode` - Modo de decisão
-- `summary` - Resumo e confirmação
-- `signup_request` - Solicitar cadastro
-- `signup_email` - Coletar email
-- `signup_password` - Coletar senha
-- `signup_confirm_password` - Confirmar senha
-- `completed` - Onboarding completo
+**Ordem aproximada dos steps** (adaptativa conforme contexto agendamento/orçamento/ambos):
+
+| # | Step | Descrição |
+|---|------|-----------|
+| 1 | `welcome` | Primeira mensagem; detecta tutorial ou extração |
+| 2 | `collect_free_text` | Coleta inicial livre; IA extrai múltiplos campos de uma mensagem |
+| 3 | `business_type` | Tipo do negócio (ramo de atividade) |
+| 4 | `business_name` | Nome da empresa |
+| 5 | `context` | Contexto: Agendamento, Orçamento ou Ambos |
+| 6 | `services_list` | Lista de serviços (checkboxes ou texto); só se booking/both |
+| 7 | `services_add` | Adicionar serviços extras via texto |
+| 8 | `schedule_days` | Dias da semana que atende (checkboxes); só se booking/both |
+| 9 | `schedule_time` | Faixa de horário (ex.: 08:00 às 18:00) |
+| 10 | `schedule_breaks` | Pausas no horário (opcional) |
+| 11 | `schedule_interval` | Intervalo entre atendimentos (15, 30, 45, 60 min) |
+| 12 | `schedule_interval_custom` | Intervalo personalizado |
+| 13 | `services_duration` | Duração de cada serviço (opcional) |
+| 14 | `services_pricing` | Valores (R$) de cada serviço ou pular |
+| 15 | `sequence_booking_offer` | Permite vários serviços na mesma visita? (sim/não); só se booking/both |
+| 16 | `sequence_services_select` | Quais serviços podem ser combinados em sequência (checkboxes); só se allow_sequence_booking |
+| 17 | `staff_mode` | Só eu atendo ou eu e outros colaboradores |
+| 18 | `owner_attends` | Dono também atende ou só colaboradores |
+| 19 | `staff_list` | Nome(s) dos colaboradores |
+| 20 | `staff_list_more` / `staff_list_one_more` | Adicionar mais colaboradores |
+| 21 | `staff_schedule_mode` | Agenda do colaborador: mesmo do estabelecimento ou horário próprio |
+| 22 | `staff_schedule_days` | Dias em que o colaborador atende |
+| 23 | `staff_schedule_time` | Faixa de horário do colaborador |
+| 24 | `staff_schedule_interval` | Intervalo entre atendimentos do colaborador |
+| 25 | `staff_schedule_interval_custom` | Intervalo personalizado do colaborador |
+| 26 | `quote_variables` | Variáveis para orçamento (ex.: medidas, quantidade); só se quote/both |
+| 27 | `location_mode` | Endereço fixo ou atende no local do cliente |
+| 28 | `address` | Endereço do estabelecimento (CEP, logradouro, etc.); só se fixed |
+| 29 | `service_area` | Região de atendimento; só se mobile |
+| 30 | `policies` | Política de cancelamento ou sinal |
+| 31 | `tone_of_voice` | Tom: Formal, Amigável, Profissional ou Engraçado |
+| 32 | `handoff_mode` | Quando passar para humano: Sempre, Condicional ou Automático |
+| 33 | `holidays_offer` | Atende em feriados? (opcional); só se booking/both |
+| 34 | `holidays_select` | Quais feriados atende |
+| 35 | `closure_offer` | Período de férias/fechamento planejado? (opcional) |
+| 36 | `closure_dates` | Datas do fechamento |
+| 37 | `closure_more` | Adicionar mais períodos de fechamento |
+| 38 | `faq_offer` | Cadastrar perguntas frequentes? (opcional) |
+| 39 | `faq_question` | Pergunta e resposta FAQ |
+| 40 | `faq_more` | Adicionar mais FAQs |
+| 41 | `summary` | Resumo completo e confirmação |
+| 42 | `summary_edit` | Edição inline de itens do resumo |
+| 43 | `signup_request` | Solicitar cadastro (email/senha) |
+| 44 | `signup_email` | Coletar email |
+| 45 | `signup_password` | Coletar senha |
+| 46 | `signup_confirm_password` | Confirmar senha |
+| 47 | `completed` | Onboarding completo; migração para tenant |
 
 ### ✅ Funcionalidades Especiais
 
@@ -155,11 +183,31 @@ It does not have HTTP ok status.
    - ✅ Rollback automático em caso de erro
 
 2. **Processamento de Steps Específicos** ✅
-   - ✅ `schedule_days` - Processa seleção de dias da semana (opções pré-definidas ou personalizado)
-   - ✅ `schedule_time` - Extrai horários da mensagem (formato: "9h às 18h")
+   - ✅ `collect_free_text` - Extração com IA de múltiplos campos
+   - ✅ `business_type`, `business_name` - Identificação do negócio
    - ✅ `context` - Processa seleção de contexto (agendamento/orçamento/ambos)
-   - ✅ `tone_of_voice` - Processa seleção de tom (formal/friendly/professional/funny)
-   - ✅ `handoff_mode` - Processa modo de decisão (always/conditional/never)
+   - ✅ `services_list`, `services_add` - Lista e adição de serviços
+   - ✅ `schedule_days` - Seleção de dias da semana (checkboxes ou personalizado)
+   - ✅ `schedule_time` - Extrai horários (ex.: "9h às 18h")
+   - ✅ `schedule_breaks` - Pausas no horário
+   - ✅ `schedule_interval`, `schedule_interval_custom` - Intervalo entre atendimentos
+   - ✅ `services_duration` - Duração por serviço
+   - ✅ `services_pricing` - Valores por serviço ou pular
+   - ✅ `sequence_booking_offer` - Permite sequência de serviços
+   - ✅ `sequence_services_select` - Serviços que podem ser combinados (checkboxes)
+   - ✅ `staff_mode`, `owner_attends` - Modo de equipe
+   - ✅ `staff_list`, `staff_list_more`, `staff_list_one_more` - Cadastro de colaboradores
+   - ✅ `staff_schedule_*` - Agenda individual de cada colaborador
+   - ✅ `location_mode`, `address`, `service_area` - Localização
+   - ✅ `policies` - Políticas de cancelamento/sinal
+   - ✅ `tone_of_voice` - Tom (formal/friendly/professional/funny)
+   - ✅ `handoff_mode` - Modo de decisão (always/conditional/never)
+   - ✅ `holidays_offer`, `holidays_select` - Feriados
+   - ✅ `closure_offer`, `closure_dates`, `closure_more` - Períodos de fechamento
+   - ✅ `faq_offer`, `faq_question`, `faq_more` - FAQ
+   - ✅ `quote_variables` - Variáveis para orçamento
+   - ✅ `summary`, `summary_edit` - Resumo e edição
+   - ✅ `signup_request`, `signup_email`, `signup_password`, `signup_confirm_password` - Cadastro
 
 ### 🟡 Implementações Pendentes
 

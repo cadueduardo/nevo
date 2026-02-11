@@ -13,9 +13,11 @@ interface SimulatorPanelProps {
   onSend: (message: string) => void
   onReset: () => void
   onClose: () => void
+  /** Incrementa após resposta do agente para manter foco no textarea. */
+  focusTrigger?: number
 }
 
-export function SimulatorPanel({ messages, isLoading, onSend, onReset, onClose }: SimulatorPanelProps) {
+export function SimulatorPanel({ messages, isLoading, onSend, onReset, onClose, focusTrigger }: SimulatorPanelProps) {
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -65,7 +67,7 @@ export function SimulatorPanel({ messages, isLoading, onSend, onReset, onClose }
       </div>
 
       <div className="flex-shrink-0 border-t border-border px-4 py-4">
-        <ChatComposer onSend={onSend} disabled={isLoading} placeholder="Digite como se fosse o cliente final..." />
+        <ChatComposer onSend={onSend} disabled={isLoading} placeholder="Digite como se fosse o cliente final..." focusTrigger={focusTrigger} />
       </div>
     </div>
   )

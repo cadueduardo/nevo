@@ -6,7 +6,7 @@ interface CollectedDataForMigration {
   password?: string
   business_name?: string
   business_type?: string
-  services?: Array<{ name: string; duration_minutes?: number; base_price?: number }>
+  services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
   schedule?: {
     days_of_week?: string[]
     start_time?: string
@@ -14,12 +14,37 @@ interface CollectedDataForMigration {
     breaks?: Array<{ start: string; end: string }>
     interval_minutes?: number
   }
+  staff?: Array<{
+    name: string
+    use_business_schedule?: boolean
+    schedule?: {
+      days_of_week?: string[]
+      start_time?: string
+      end_time?: string
+      breaks?: Array<{ start: string; end: string }>
+      interval_minutes?: number
+    }
+  }>
+  location_mode?: 'fixed' | 'mobile'
+  establishment_address?: {
+    cep: string
+    logradouro: string
+    numero: string
+    complemento?: string
+    bairro: string
+    localidade: string
+    uf: string
+  }
   service_area?: { region?: string; coverage?: string }
   policies?: {
     cancellation_hours?: number
     deposit_percentage?: number
   }
   dynamic_variables?: Array<{ key: string; label: string; type: string }>
+  holidays_attend?: string[]
+  closure_periods?: Array<{ start: string; end: string; reason?: string }>
+  allow_sequence_booking?: boolean
+  sequence_eligible_services?: string[]
   faq?: Array<{ question: string; answer: string }>
   tone_of_voice?: 'formal' | 'friendly' | 'professional' | 'funny'
   handoff_mode?: 'always' | 'conditional' | 'never'
@@ -84,9 +109,36 @@ export async function migrateOnboardingToTenant(
       return { success: false, error: `Erro ao criar tenant_user: ${tenantUserError.message}` }
     }
 
+    const businessConfig: Record<string, any> = {
+      services:
+        collectedData.services?.map((s) => ({
+          name: s.name,
+          duration_minutes: s.duration_minutes ?? undefined,
+          base_price: s.base_price ?? undefined,
+          description: s.description ?? undefined,
+        })) ?? [],
+      staff:
+        collectedData.staff?.map((m) => ({
+          name: m.name,
+          use_business_schedule: m.use_business_schedule ?? true,
+          schedule: m.schedule ?? null,
+        })) ?? [],
+      location_mode: collectedData.location_mode ?? 'fixed',
+      establishment_address: collectedData.establishment_address ?? {},
+      service_area: collectedData.service_area?.region ? collectedData.service_area : null,
+      holidays_attend: collectedData.holidays_attend ?? [],
+      closure_periods: collectedData.closure_periods ?? [],
+      allow_sequence_booking: collectedData.allow_sequence_booking ?? false,
+      sequence_eligible_services: collectedData.sequence_eligible_services ?? [],
+      context_mode: collectedData.context ?? 'booking',
+      business_type: collectedData.business_type ?? null,
+    }
+    if (collectedData.schedule) {
+      businessConfig.schedule = collectedData.schedule
+    }
+
     const { error: settingsError } = await supabaseAdmin.from('tenant_setting').insert({
       tenant_id: tenantId,
-      // Tom de voz: não inferir/preencher automaticamente; se não foi informado no onboarding, manter NULL.
       tone:
         collectedData.tone_of_voice === 'friendly'
           ? 'friendly'
@@ -97,6 +149,8 @@ export async function migrateOnboardingToTenant(
               : null,
       language: 'pt-BR',
       handoff_mode: collectedData.handoff_mode || 'conditional',
+      business_config: businessConfig,
+      when_client_asks_price_no_value: 'offer_handoff_or_booking',
     })
 
     if (settingsError) {

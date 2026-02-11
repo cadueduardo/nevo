@@ -2,6 +2,15 @@
 
 const SESSION_ID_KEY = 'nevo_onboarding_session_id'
 
+/**
+ * Usa sessionStorage: persiste no F5, limpa ao fechar a aba.
+ * Assim, em aba anônima: F5 mantém a sessão; fechar a aba zera.
+ */
+function getStorage(): Storage | null {
+  if (typeof window === 'undefined') return null
+  return window.sessionStorage
+}
+
 // Função simples para gerar UUID v4 (sem dependência externa)
 function generateUUID(): string {
   if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
@@ -16,22 +25,18 @@ function generateUUID(): string {
 }
 
 export function getOrCreateSessionId(): string {
-  if (typeof window === 'undefined') {
-    return ''
-  }
+  const storage = getStorage()
+  if (!storage) return ''
 
-  let sessionId = localStorage.getItem(SESSION_ID_KEY)
-  
+  let sessionId = storage.getItem(SESSION_ID_KEY)
   if (!sessionId) {
     sessionId = generateUUID()
-    localStorage.setItem(SESSION_ID_KEY, sessionId)
+    storage.setItem(SESSION_ID_KEY, sessionId)
   }
-
   return sessionId
 }
 
 export function clearSessionId(): void {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem(SESSION_ID_KEY)
-  }
+  const storage = getStorage()
+  if (storage) storage.removeItem(SESSION_ID_KEY)
 }

@@ -1,0 +1,15 @@
+// @ts-nocheck
+/** Re-exporta todos os módulos do simulador para importação única. */
+export * from "./types.ts"
+export * from "./utils.ts"
+export * from "./http.ts"
+export * from "./detection.ts"
+export * from "./services.ts"
+export * from "./staff.ts"
+export * from "./builders.ts"
+export * from "./ai.ts"
+export * from "./state.ts"
+export * from "./calendar.ts"
+export * from "./qualification.ts"
+export * from "./informational.ts"
+export * from "./holidays.ts"

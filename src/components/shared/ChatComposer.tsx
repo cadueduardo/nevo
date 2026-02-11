@@ -15,6 +15,8 @@ interface ChatComposerProps {
   showExamples?: boolean
   examples?: string[]
   onExampleClick?: (example: string) => void
+  /** Incrementa após resposta para manter foco no textarea. */
+  focusTrigger?: number
 }
 
 export function ChatComposer({
@@ -25,6 +27,7 @@ export function ChatComposer({
   showExamples = false,
   examples = [],
   onExampleClick,
+  focusTrigger,
 }: ChatComposerProps) {
   const [message, setMessage] = useState('')
   const [isFocused, setIsFocused] = useState(false)
@@ -39,6 +42,13 @@ export function ChatComposer({
       textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
     }
   }, [message])
+
+  // Manter foco após resposta do assistente
+  useEffect(() => {
+    if (focusTrigger != null && focusTrigger > 0) {
+      textareaRef.current?.focus()
+    }
+  }, [focusTrigger])
 
   // Parar animação quando focar ou digitar
   useEffect(() => {
@@ -102,7 +112,7 @@ export function ChatComposer({
             'px-4 py-3',
             hasText ? 'pr-14' : 'pr-4',
             'bg-background',
-            'border border-border/50',
+            'border !border-[#9B9B9B] dark:!border-border/50',
             'shadow-sm',
             'focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50',
             'transition-all',

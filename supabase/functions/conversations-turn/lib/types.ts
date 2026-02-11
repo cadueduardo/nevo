@@ -1,0 +1,173 @@
+// @ts-nocheck
+/** Tipos compartilhados do simulador de atendimento. */
+
+export type SimulatorContextMode = "booking" | "quote" | "both"
+
+export interface EstablishmentAddress {
+  cep?: string
+  logradouro: string
+  numero: string
+  complemento?: string
+  bairro: string
+  localidade: string
+  uf: string
+}
+
+export interface LeadPolicyConfig {
+  reject_unlisted_services?: boolean
+  rejection_message?: string
+  use_ai_matching?: boolean
+  min_confidence?: number
+}
+
+export interface SimulatorConfig {
+  business_name?: string
+  business_type?: string
+  context_mode?: SimulatorContextMode
+  establishment_address?: EstablishmentAddress
+  tone?: "formal" | "amigavel" | "profissional" | "engracado"
+  services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
+  when_client_asks_price_no_value?: "handoff" | "offer_handoff_or_booking"
+  schedule?: {
+    days_of_week?: string[]
+    start_time?: string
+    end_time?: string
+    breaks?: Array<{ start: string; end: string }>
+    interval_minutes?: number
+  }
+  staff?: Array<{
+    name: string
+    use_business_schedule?: boolean
+    schedule?: {
+      days_of_week?: string[]
+      start_time?: string
+      end_time?: string
+      breaks?: Array<{ start: string; end: string }>
+      interval_minutes?: number
+    }
+  }>
+  dynamic_variables?: Array<{ key: string; label: string; type: string; context?: string }>
+  lead_policy?: LeadPolicyConfig
+  /** Datas de feriados em que o estabelecimento atende (YYYY-MM-DD). Se vazio, nao atende em feriados. */
+  holidays_attend?: string[]
+  /** Periodos de fechamento (ferias, etc.). */
+  closure_periods?: Array<{ start: string; end: string; reason?: string }>
+  /** Cliente pode agendar varios servicos em sequencia na mesma visita. */
+  allow_sequence_booking?: boolean
+  /** Servicos que podem ser combinados em sequencia (quando allow_sequence_booking). */
+  sequence_eligible_services?: string[]
+}
+
+export interface SimulatorState {
+  mode?: "booking" | "quote"
+  step?: "ask_mode" | "booking" | "quote" | "quote_free_text" | "qualification" | "qualification_rejected"
+  just_identified_service?: boolean
+  pending_quote_key?: string
+  pending_suggested_time?: string
+  pending_date_confirmation?: string
+  pending_additional_booking?: boolean
+  pending_additional_count?: number
+  pending_attendee_name?: boolean
+  pending_template_choice?: boolean
+  pending_default_service?: string
+  pending_default_service_locked?: boolean
+  expected_additional_count?: number
+  pending_final_confirmation?: boolean
+  final_thanks_sent?: boolean
+  completed_bookings?: Array<{ attendee_name?: string; service?: string; date?: string; time?: string }>
+  last_booking?: { service?: string; date?: string; time?: string; staff_name?: string }
+  pending_contact_field?: "name" | "phone" | "email" | "contact_preference"
+  contact_preference?: "phone" | "email" | "both"
+  last_prompt?: string
+  last_time_options?: string[]
+  last_time_options_date?: string
+  last_time_options_staff?: string
+  booked_slots?: Record<string, Record<string, string[]>>
+  slots: {
+    staff_name?: string
+    attendee_name?: string
+    service?: string
+    date?: string
+    time?: string
+    time_period?: "morning" | "afternoon" | "evening"
+    customer_name?: string
+    customer_phone?: string
+    customer_email?: string
+    quote_answers?: Record<string, string>
+  }
+}
+
+export interface SimulatorResult {
+  message: string
+  state: SimulatorState
+  action_options?: string[]
+}
+
+export interface ConversationTurnRequest {
+  session_id: string
+  conversation_id?: string
+  message: string
+  /** Obrigatório para conversation/channel (NOT NULL). Quando ausente, a Edge Function usa o primeiro agente do tenant. */
+  agent_id?: string
+  /** Canal: web_simulator (session_id = identificador do simulador) ou whatsapp (from = número do WhatsApp). */
+  channel?: "web_simulator" | "whatsapp"
+  /** Para channel=whatsapp: número do remetente (ex: whatsapp:+5511999999999). Usado como session_id/contact external_id. */
+  from?: string
+  context?: {
+    business_name?: string
+    business_type?: string
+    context_mode?: "booking" | "quote" | "both"
+    establishment_address?: EstablishmentAddress
+    tone?: "formal" | "amigavel" | "profissional" | "engracado"
+    services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
+    when_client_asks_price_no_value?: "handoff" | "offer_handoff_or_booking"
+    schedule?: {
+      days_of_week?: string[]
+      start_time?: string
+      end_time?: string
+      breaks?: Array<{ start: string; end: string }>
+      interval_minutes?: number
+    }
+    staff?: Array<{
+      name: string
+      use_business_schedule?: boolean
+      schedule?: {
+        days_of_week?: string[]
+        start_time?: string
+        end_time?: string
+        breaks?: Array<{ start: string; end: string }>
+        interval_minutes?: number
+      }
+    }>
+    dynamic_variables?: Array<{ key: string; label: string; type: string; context?: string }>
+    lead_policy?: {
+      reject_unlisted_services?: boolean
+      rejection_message?: string
+      use_ai_matching?: boolean
+      min_confidence?: number
+    }
+    holidays_attend?: string[]
+    closure_periods?: Array<{ start: string; end: string; reason?: string }>
+    allow_sequence_booking?: boolean
+    sequence_eligible_services?: string[]
+  }
+}
+
+export interface ConversationTurnResponse {
+  conversation_id: string
+  messages: Array<{
+    role: "assistant"
+    content: string
+    created_at: string
+    action_options?: string[]
+  }>
+}
+
+export interface FlowOrchestratorOutput {
+  intent: "price_inquiry" | "booking_intent" | "list_services" | "clarification" | "no_match" | "service_detail"
+  inferred_service?: string
+  inferred_attendees?: "single" | "multiple" | "other_person"
+  suggested_action: "answer_price" | "start_booking" | "list_services" | "ask_clarification" | "no_match_fallback" | "service_detail"
+  clarification_question?: string
+  confidence: number
+}

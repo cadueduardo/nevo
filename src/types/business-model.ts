@@ -5,6 +5,7 @@ export interface Service {
   name: string
   duration_minutes?: number
   base_price?: number
+  description?: string
   variations?: string[]
 }
 
@@ -14,6 +15,20 @@ export interface ServiceArea {
   travel_fee?: number
   distance_limit_km?: number
 }
+
+/** Endereço do estabelecimento (ponto fixo). */
+export interface EstablishmentAddress {
+  cep: string
+  logradouro: string
+  numero: string
+  complemento?: string
+  bairro: string
+  localidade: string
+  uf: string
+}
+
+/** Modo de localização: ponto fixo ou atendimento no local do cliente. */
+export type LocationMode = 'fixed' | 'mobile'
 
 export interface ScheduleBreak {
   start: string // HH:mm
@@ -64,7 +79,11 @@ export interface BusinessModel {
   // Serviços
   services: Service[]
   
-  // Área e deslocamento
+  // Localização: ponto fixo ou atendimento no local do cliente
+  location_mode?: LocationMode
+  /** Endereço completo (quando location_mode = 'fixed'). */
+  establishment_address?: EstablishmentAddress
+  /** Regiões atendidas (quando location_mode = 'mobile'). */
   service_area?: ServiceArea
   
   // Agenda

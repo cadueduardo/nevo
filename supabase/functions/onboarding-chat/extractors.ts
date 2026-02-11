@@ -21,6 +21,7 @@ export interface BusinessModelExtraction {
     name: string
     duration_minutes?: number
     base_price?: number
+    description?: string
   }>
   services_duration_configured?: boolean
   staff?: Array<{
@@ -52,10 +53,200 @@ export interface BusinessModelExtraction {
   context?: 'booking' | 'quote' | 'both'
   tone_of_voice?: 'formal' | 'friendly' | 'professional' | 'funny'
   handoff_mode?: 'always' | 'conditional' | 'never'
+  /** Cliente pode agendar vários serviços em sequência na mesma visita. */
+  allow_sequence_booking?: boolean
+  /** Serviços que podem ser combinados em sequência (quando allow_sequence_booking). */
+  sequence_eligible_services?: string[]
 }
 
 function normalizeServiceName(value: string): string {
   return value.trim().replace(/\.+$/, '').replace(/\s{2,}/g, ' ')
+}
+
+/**
+ * Classifica se o usuário demonstra falta de orientação / não sabe o que fazer.
+ * IA first: detecta frases variadas fora do escopo de padrões fixos.
+ */
+export async function classifyNeedsIntroTutorial(message: string): Promise<boolean> {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey) return isNeedsIntroTutorialFallback(message)
+
+  try {
+    const prompt = `Você classifica a intenção do usuário em um chat de onboarding de negócios.
+O usuário está na fase inicial e enviou uma mensagem.
+
+Mensagem: "${message}"
+
+Retorne APENAS um JSON com: { "needs_intro_tutorial": true ou false }
+
+needs_intro_tutorial = true quando o usuário demonstra:
+- Não saber o que fazer ("não sei o que fazer", "por onde começo", "tô perdido", "me orienta")
+- Dúvida sobre o serviço ("o que é isso", "como funciona", "não entendi")
+- Pedido de explicação genérico ("me explica", "pode explicar", "preciso de ajuda")
+- Frases curtas de confusão ("?", "e agora?", "hã?")
+- PERGUNTAS SOBRE O QUE PODE FAZER no sistema ("posso cadastrar endereço?", "posso cadastrar serviços?", "dá pra configurar X?", "eu posso cadastrar meu endereço?") — são dúvidas, NÃO descrição do negócio
+
+needs_intro_tutorial = false quando o usuário:
+- Já descreve o negócio ("tenho uma barbearia", "sou manicure", "cabeleireiro")
+- Dá cumprimento curto mas com contexto ("oi, quero configurar", "vamos começar")
+
+IMPORTANTE: "posso cadastrar X?" ou "eu posso cadastrar meu endereço?" = dúvida sobre o produto, retorne true. Não confunda com o ramo do negócio.
+
+Retorne APENAS o JSON, sem markdown.`
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'Você é um classificador de intenções. Retorne apenas JSON válido.' },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 50,
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+      }),
+    })
+    if (!response.ok) return isNeedsIntroTutorialFallback(message)
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim() || '{}'
+    const parsed = JSON.parse(content)
+    return parsed.needs_intro_tutorial === true
+  } catch {
+    return isNeedsIntroTutorialFallback(message)
+  }
+}
+
+/**
+ * Responde fluidamente a dúvidas do usuário no início do onboarding.
+ * Retorna resposta natural + se parece pronto para iniciar o fluxo.
+ */
+export async function answerDoubtWithAI(
+  message: string,
+  context?: { lastWasTutorial?: boolean }
+): Promise<{ response: string; ready_to_start?: boolean }> {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey) {
+    return {
+      response:
+        'Fique à vontade! Posso te explicar como funciona. O Nevo te ajuda a configurar um assistente virtual para o seu negócio.',
+    }
+  }
+
+  try {
+    const prompt = `Você é a assistente do Nevo, uma plataforma que configura assistentes virtuais para negócios (agendamento, orçamento, atendimento).
+O usuário está no início do cadastro e demonstrou dúvidas (ex: "preciso de ajuda", "posso cadastrar serviços?").
+${context?.lastWasTutorial ? 'Ele já viu o tutorial inicial antes e ainda tem dúvidas.' : ''}
+
+Mensagem do usuário: "${message}"
+
+Responda de forma **fluida, acolhedora e natural** em 1-3 frases curtas. Seja direta.
+- Se ele perguntar se pode fazer algo (ex: "posso cadastrar serviços?"): responda de forma positiva e incentive a começar. Ex: "Claro que sim! Você pode cadastrar os serviços, colocar valores e muito mais. Vamos começar?"
+- Se ele ainda está perdido: acolha e diga que você vai mostrar o passo a passo de novo.
+- NÃO repita o tutorial inteiro no seu texto — apenas responda à dúvida dele. O tutorial completo será mostrado em seguida.
+
+Retorne APENAS um JSON: { "response": "sua resposta aqui", "ready_to_start": true ou false }
+ready_to_start = true se ele parece pronto para iniciar (perguntou se pode fazer X, disse que quer começar, etc).`
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'Você é uma assistente acolhedora. Retorne apenas JSON válido.' },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 200,
+        temperature: 0.6,
+        response_format: { type: 'json_object' },
+      }),
+    })
+    if (!res.ok) throw new Error('API error')
+    const data = await res.json()
+    const content = data.choices?.[0]?.message?.content?.trim() || '{}'
+    const parsed = JSON.parse(content)
+    return {
+      response: typeof parsed.response === 'string' ? parsed.response : 'Fique à vontade, vou te guiar!',
+      ready_to_start: parsed.ready_to_start === true,
+    }
+  } catch {
+    return {
+      response: 'Fique à vontade! Vou te mostrar o passo a passo de novo.',
+    }
+  }
+}
+
+/**
+ * Sugere exemplos de serviços com base no tipo de negócio via IA.
+ * Usado quando não há correspondência nos mapeamentos estáticos.
+ */
+export async function suggestServicesWithAI(businessType: string): Promise<string> {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey || !businessType?.trim()) return 'consulta, avaliacao, atendimento'
+
+  try {
+    const prompt = `O negócio é: "${businessType}".
+
+Liste 4 a 6 serviços ou procedimentos comuns que esse tipo de negócio oferece. Separe por vírgula, em português, termos curtos (ex: banho, tosa, consulta).
+
+Retorne APENAS a lista, sem explicação, sem numeração. Exemplo: "banho, tosa, consulta veterinaria, vacinacao"`
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'Retorne apenas uma lista de serviços separados por vírgula, em minúsculas.' },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 80,
+        temperature: 0.3,
+      }),
+    })
+    if (!res.ok) throw new Error('API error')
+    const data = await res.json()
+    const text = (data.choices?.[0]?.message?.content || '').trim()
+    if (!text) return 'consulta, avaliacao, atendimento'
+    // Garantir formato: remover numeração, quebras de linha, manter só vírgulas
+    const cleaned = text.replace(/[\d.)\-]\s*/g, '').replace(/\n/g, ', ').replace(/\s*,\s*/g, ', ')
+    return cleaned || 'consulta, avaliacao, atendimento'
+  } catch {
+    return 'consulta, avaliacao, atendimento'
+  }
+}
+
+/** Fallback determinístico quando a IA não está disponível. */
+export function isNeedsIntroTutorialFallback(message: string): boolean {
+  const t = (message || '').toLowerCase().trim()
+  if (t.length < 3) return false
+  const patterns = [
+    /n[aã]o\s+sei\s+o\s+que\s+fazer/i,
+    /por\s+onde\s+come[cç]o/i,
+    /o\s+que\s+(eu\s+)?fa[cç]o\s+aqui/i,
+    /como\s+funciona/i,
+    /n[aã]o\s+entendi/i,
+    /me\s+explica/i,
+    /preciso\s+de\s+ajuda/i,
+    /t[oô]\s+perdido/i,
+    /me\s+orienta/i,
+    /n[aã]o\s+tenho\s+ideia/i,
+    /o\s+que\s+[eé]\s+isso/i,
+    /(eu\s+)?posso\s+cadastrar/i,
+    /d[aá]\s+pra\s+(cadastrar|configurar)/i,
+  ]
+  return patterns.some((p) => p.test(t))
 }
 
 export function extractServicesFromText(message: string): Array<{ name: string }> {
@@ -136,7 +327,8 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
    - Se mencionar "vendo X", considere "Venda de X" como serviço
    - Se mencionar "presto serviço de X", extraia X como serviço
    - INFIRA serviços comuns do tipo de negócio quando fizer sentido contextual
-   - Cada serviço deve ser um objeto: {"name": "Nome do Serviço"}
+   - Cada serviço: {"name": "Nome do Serviço", "base_price": número APENAS se valor em R$/reais (ex: "R$ 50", "custa 40 reais"), "duration_minutes": número APENAS se duração em min/minutos (ex: "40 min", "duração de 30 minutos"), "description": texto apenas se o usuário descrever}
+   - CRÍTICO: "duração de X é 40 min" = duration_minutes: 40. "X custa 40" sem "min" = base_price: 40. Nunca confunda min com reais.
 
 5. LOCALIZAÇÃO (service_area.region):
    - Extraia cidade, região ou bairro mencionados
@@ -174,7 +366,7 @@ Retorne APENAS um JSON válido com os campos identificados:
   "business_type": "tipo de negócio",
   "business_segment": "juridico | odontologia | saude | psicologia | barbearia | beleza | imobiliaria | contabilidade | consultoria | educacao | tecnologia | outros",
   "business_name": "nome se mencionado",
-  "services": [{"name": "serviço 1"}, {"name": "serviço 2"}],
+  "services": [{"name": "serviço 1", "base_price": número ou omitir, "description": "texto ou omitir"}, {"name": "serviço 2"}],
   "service_area": {"region": "localização"},
   "schedule": {
     "days_of_week": ["monday", "tuesday", ...],

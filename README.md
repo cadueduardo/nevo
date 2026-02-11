@@ -31,6 +31,17 @@ cp .env.example .env.local
 npm run dev
 ```
 
+### Testar WhatsApp em local (Twilio Sandbox)
+
+Para receber mensagens da Twilio no localhost, use ngrok (instale em [ngrok.com/download](https://ngrok.com/download) ou `choco install ngrok`):
+
+1. Em um terminal: `npm run tunnel` (ou instale o [ngrok](https://ngrok.com/) e rode `ngrok http 3000`).
+2. Copie a URL HTTPS que o ngrok exibir (ex.: `https://abc123.ngrok-free.app`).
+3. No `.env.local`, defina `NEXT_PUBLIC_APP_URL=https://abc123.ngrok-free.app`.
+4. Reinicie o `npm run dev`. No Nevo, em **Agentes** → **Canais** → **Salvar credenciais**; a URL do webhook aparecerá. Configure essa URL na Twilio (Sandbox → "When a message comes in").
+
+Detalhes: [docs/twilio-sandbox-teste.md](docs/twilio-sandbox-teste.md).
+
 ## Estrutura do Projeto
 
 - `/src/app` - Rotas Next.js (App Router)

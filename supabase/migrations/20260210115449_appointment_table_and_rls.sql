@@ -1,0 +1,2 @@
+-- Migração já aplicada no remoto (appointment_table_and_rls).
+-- Arquivo mantido para alinhar o histórico local ao remoto e permitir db push via CLI.
