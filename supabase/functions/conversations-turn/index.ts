@@ -2348,6 +2348,39 @@ async function getOrCreateTenant(supabaseAdmin: any, sessionId: string, business
   return data
 }
 
+/** Cria um agente default para tenant de simulador (onboarding) que ainda não tem agente. */
+async function getOrCreateAgentForSimTenant(supabaseAdmin: any, tenantId: string, tenantName?: string) {
+  const { data: existing } = await supabaseAdmin
+    .from("agent")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .limit(1)
+    .maybeSingle()
+  if (existing) return existing.id
+
+  const { data: newAgent, error } = await supabaseAdmin
+    .from("agent")
+    .insert({
+      tenant_id: tenantId,
+      name: tenantName || "Agente Simulador",
+      status: "active",
+      channel_primary: "web",
+    })
+    .select("id")
+    .single()
+  if (error) throw error
+
+  await supabaseAdmin.from("agent_setting").insert({
+    agent_id: newAgent.id,
+    tone: "professional",
+    language: "pt-BR",
+    handoff_mode: "conditional",
+    business_config: {},
+    when_client_asks_price_no_value: "offer_handoff_or_booking",
+  })
+  return newAgent.id
+}
+
 type ChannelType = "web_simulator" | "whatsapp"
 
 async function getOrCreateChannel(supabaseAdmin: any, tenantId: string, agentId: string, channelType: ChannelType = "web_simulator") {
@@ -2509,6 +2542,9 @@ serve(async (req) => {
         .limit(1)
         .maybeSingle()
       agentId = firstAgent?.id ?? undefined
+    }
+    if (!agentId) {
+      agentId = await getOrCreateAgentForSimTenant(supabaseAdmin, tenant.id, config.business_name)
     }
     if (!agentId) {
       return json({ error: "tenant sem agente configurado; agent_id obrigatorio para conversation/channel" }, 400)
