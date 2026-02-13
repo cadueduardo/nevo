@@ -127,7 +127,7 @@ export async function POST(
   // Indicador de digitação (3 pontinhos) enquanto processa
   // Evolution API: POST /chat/sendPresence/{instance} | doc: https://doc.evolution-api.com/v2/api-reference/chat-controller/send-presence
   const presenceUrl = `${baseUrl}/chat/sendPresence/${instance}`
-  const numberOrJid = numberForEvolution.includes('@') ? numberForEvolution : `${numberForEvolution}@s.whatsapp.net`
+  const presenceNumber = numberForEvolution
   try {
     const presenceRes = await fetch(presenceUrl, {
       method: 'POST',
@@ -137,11 +137,11 @@ export async function POST(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        number: numberOrJid,
+        number: presenceNumber,
         options: {
           presence: 'composing',
-          delay: 10000,
-          number: numberOrJid,
+          delay: 15000,
+          number: presenceNumber,
         },
       }),
     })

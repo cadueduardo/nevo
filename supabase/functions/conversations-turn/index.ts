@@ -2508,6 +2508,12 @@ serve(async (req) => {
     const { supabaseAdmin, envError } = createSupabaseAdmin()
     if (envError) return json({ error: envError }, 500)
 
+    const ctxLead = body.context?.lead_policy
+    const leadPolicy =
+      typeof ctxLead === "object" && ctxLead !== null
+        ? { reject_unlisted_services: true, use_ai_matching: true, ...ctxLead }
+        : { reject_unlisted_services: true, use_ai_matching: true }
+
     const config: SimulatorConfig = {
       business_name: body.context?.business_name,
       business_type: body.context?.business_type,
@@ -2519,7 +2525,7 @@ serve(async (req) => {
       schedule: body.context?.schedule,
       staff: body.context?.staff || [],
       dynamic_variables: body.context?.dynamic_variables || [],
-      lead_policy: body.context?.lead_policy,
+      lead_policy: leadPolicy,
       holidays_attend: body.context?.holidays_attend,
       closure_periods: body.context?.closure_periods,
       allow_sequence_booking: body.context?.allow_sequence_booking ?? false,
