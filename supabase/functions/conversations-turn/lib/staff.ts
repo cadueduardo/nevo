@@ -8,7 +8,8 @@ export function getStaffList(config: SimulatorConfig): Array<{ name: string; use
 }
 
 export function resolveStaffFromText(text: string, staffList: Array<{ name: string }>): string | null {
-  const msg = normalizeText(text)
+  const cleaned = text.replace(/^\s*\d+\s*-\s*/, "")
+  const msg = normalizeText(cleaned)
   for (const staff of staffList) {
     const name = normalizeText(staff.name)
     if (name && (msg === name || msg.includes(name))) return staff.name
@@ -30,8 +31,10 @@ export function getScheduleForStaff(config: SimulatorConfig, staffName?: string)
 }
 
 export function getOtherStaffOptions(config: SimulatorConfig, staffName?: string): string[] {
+  const list = getStaffList(config)
+  if (list.length <= 1) return []
   const key = staffName ? normalizeText(staffName) : ""
-  return getStaffList(config)
+  return list
     .filter((s) => normalizeText(s.name) !== key)
     .map((s) => s.name)
 }

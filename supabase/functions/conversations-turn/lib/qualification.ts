@@ -9,7 +9,7 @@ import { buildServicePrompt } from "./builders.ts"
 import { buildMultiBookingIntro } from "./builders.ts"
 import type { SimulatorConfig, SimulatorState, SimulatorResult } from "./types.ts"
 
-/** Verifica se o match tem contexto suficiente para resposta personalizada. */
+/** Verifica se o match tem contexto suficiente para resposta de rejeição (qualquer serviço não definido na lista do negócio). */
 export function hasMatchContext(match: { inferred_area?: string; confidence?: number }): boolean {
   return (
     Boolean(match.inferred_area) &&
@@ -25,8 +25,7 @@ export function hasAdditionalBookings(
   return Boolean(
     interpreted?.has_additional ||
       (typeof interpreted?.count === "number" && interpreted.count > 0) ||
-      orchestrator?.inferred_attendees === "multiple" ||
-      orchestrator?.inferred_attendees === "other_person"
+      orchestrator?.inferred_attendees === "multiple"
   )
 }
 

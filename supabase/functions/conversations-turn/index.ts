@@ -22,6 +22,7 @@ import {
   parsePhone,
   hasExplicitDate,
   parseTemplateChoice,
+  resolveOptionByNumber,
   formatTimePeriod,
   buildDailySlots,
   applyBreaks,
@@ -29,15 +30,19 @@ import {
   isWithinSchedule,
   isBusinessClosedForToday,
   getTodayIsoBusinessTz,
+  isTimeTooSoonForDate,
+  MIN_BOOKING_LEAD_MINUTES,
   isGreeting,
   isWhoAreYou,
   getGreetingByTime,
   isConfused,
+  isEndTestCommand,
   isFinalizedState,
   isPriceQuestion,
   isListServicesQuestion,
   isServiceDetailQuestion,
   isExplicitBookingIntent,
+  looksLikeAttendeeName,
   isVisitRequest,
   isAvailabilityQuestion,
   isYes,
@@ -63,6 +68,9 @@ import {
   buildStaffDayOptions,
   getNextAvailableSlot,
   getCordialPrefix,
+  getGreetingMessage,
+  buildListServicesMessage,
+  buildBookingConfirmationIntro,
   buildPriceNotAvailableMessage,
   buildDayNotServedMessage,
   buildDateBlockedMessage,
@@ -79,6 +87,7 @@ import {
   generateRejectionMessageWithAI,
   interpretFlowWithAI,
   interpretAdditionalBookingsWithAI,
+  interpretSlotsFromMessageWithAI,
   createSimulatorState,
   buildResult,
   resetSlotsForNextBooking,
@@ -88,12 +97,17 @@ import {
   uploadCalendarIcs,
   buildFinalBookingMessage,
   classifyServiceMatch,
+  areaMatchesServices,
   hasMatchContext,
   hasAdditionalBookings,
   applyAdditionalBookingState,
   handleShortDecline,
   tryAnswerInformationalQuestion,
+  isMyBookingQuestion,
+  getMyBookingAnswer,
   answerWithContextualAI,
+  generateAvailabilityResponseWithAI,
+  extractContactPreferenceFromText,
   isDateBlocked,
 } from "./lib/index.ts"
 import type {
@@ -107,7 +121,18 @@ import type {
 // ---- funções movidas para lib/ ----
 // Removido dead code: isAdditionalBookingRequest, extractCountFromText
 
-async function resolveBooking(config: SimulatorConfig, text: string, state: SimulatorState): Promise<SimulatorResult> {
+async function resolveBooking(
+  config: SimulatorConfig,
+  text: string,
+  state: SimulatorState,
+  history: Array<{ role: string; content: string }> = [],
+  senderDisplayName?: string
+): Promise<SimulatorResult> {
+  const toNumberedOptions = (options: string[]): string[] => options.map((option, idx) => `${idx + 1} - ${option}`)
+  const getOtherDayOptions = (schedule?: { days_of_week?: string[] } | null): string[] => {
+    const dayOptions = buildStaffDayOptions(schedule?.days_of_week || [])
+    return dayOptions.length > 0 ? dayOptions : ["Outro dia"]
+  }
   const nextState: SimulatorState = {
     ...state,
     step: "booking",
@@ -129,7 +154,27 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
     Boolean(nextState.slots.time) &&
     Boolean(nextState.slots.customer_name) &&
     contactOk
-  if (!state.pending_final_confirmation && !state.final_thanks_sent && isDonePhrase(text) && bookingComplete) {
+  // Cliente confirmou com frase de encerramento (ex.: "tudo certo", "confirmar") sem ter passado pelo botão "Confirmar agendamento".
+  // É obrigatório fazer push em completed_bookings e atualizar booked_slots para que o insert na tabela appointment seja feito ao final do turn.
+  // NÃO tratar como encerramento se está no meio da escolha de opção (ex: "Isso, mesmo dia e colaborador").
+  const isConfirm =
+    isDonePhrase(text) ||
+    (text.trim() === "1" && Array.isArray(state.last_confirm_options) && state.last_confirm_options.length > 0)
+  if (!state.pending_template_choice && !state.pending_second_service_choice && !state.pending_final_confirmation && !state.final_thanks_sent && isConfirm && bookingComplete) {
+    nextState.booked_slots = addBookedSlot(
+      nextState.booked_slots,
+      nextState.slots.staff_name,
+      nextState.slots.date,
+      nextState.slots.time
+    )
+    if (!nextState.completed_bookings) nextState.completed_bookings = []
+    nextState.completed_bookings.push({
+      attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
+      service: nextState.slots.service,
+      date: nextState.slots.date,
+      time: nextState.slots.time,
+      staff_name: nextState.slots.staff_name,
+    })
     const finalResult = await buildFinalBookingMessage({
       config,
       service: nextState.slots.service,
@@ -139,12 +184,12 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
     })
     nextState.final_thanks_sent = true
     nextState.slots = resetSlotsForNextBooking(nextState)
-    const actionOptions = finalResult.calendar_url
-      ? [`open_url|Adicionar ao calendário|${finalResult.calendar_url}`]
-      : undefined
-    return buildResult(finalResult.message, nextState, actionOptions)
+    return buildResult(finalResult.message, nextState)
   }
-  if (!state.pending_final_confirmation && !state.final_thanks_sent && isDonePhrase(text)) {
+  const isConfirmShort =
+    isDonePhrase(text) ||
+    (text.trim() === "1" && Array.isArray(state.last_confirm_options) && state.last_confirm_options.length > 0)
+  if (!state.pending_template_choice && !state.pending_second_service_choice && !state.pending_final_confirmation && !state.final_thanks_sent && isConfirmShort) {
     const bookings = nextState.completed_bookings || []
     if (bookings.length > 0) {
       nextState.final_thanks_sent = true
@@ -152,6 +197,85 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       return buildResult(buildFinalThanksMessage(config.business_name, bookings), nextState)
     }
   }
+  // Resposta "2", "3", "4" às opções de confirmação (Outro horário, Outro dia, Trocar colaborador)
+  const lastConfirm = state.last_confirm_options
+  if (lastConfirm?.length && bookingComplete) {
+    const choiceNum = resolveOptionByNumber(text, lastConfirm)
+    if (choiceNum && !choiceNum.startsWith("Sim")) {
+      nextState.last_confirm_options = undefined
+      const last = nextState.last_booking
+      if (choiceNum.includes("Outro horario") && last?.date && last?.staff_name) {
+        const schedule = getScheduleForStaff(config, last.staff_name)
+        const serviceDuration = getServicesTotalDuration(config, nextState.slots.service)
+        const availability = last.date
+          ? getMockAvailability(last.date, schedule, nextState.booked_slots, last.staff_name, serviceDuration ?? 30)
+          : { available: [] as string[], occupied: [] as string[] }
+        if (availability.available.length) {
+          nextState.slots.date = last.date
+          nextState.slots.staff_name = last.staff_name
+          nextState.last_time_options = availability.available.slice(0, 24)
+          nextState.last_time_options_date = last.date
+          nextState.last_time_options_staff = last.staff_name
+          return buildResult(
+            "Qual horario voce prefere no mesmo dia?",
+            nextState,
+            toNumberedOptions(availability.available.slice(0, 24))
+          )
+        }
+      }
+      if (choiceNum.includes("Outro dia")) {
+        nextState.slots.date = undefined
+        nextState.slots.time = undefined
+        return buildResult("Qual dia voce prefere?", nextState)
+      }
+      if (choiceNum.includes("Trocar colaborador") || choiceNum.includes("colaborador")) {
+        nextState.slots.staff_name = undefined
+        const staffOptions = [...getStaffList(config).map((s) => s.name), "Tanto faz"]
+        return buildResult("Com qual colaborador voce prefere agendar?", nextState, [
+          ...toNumberedOptions(staffOptions),
+        ])
+      }
+    }
+  }
+
+  // REGRA CRÍTICA: dígito "1"/"2"/"3" com attendee e sem data = seleção de serviço → perguntar dia, NUNCA horário
+  const isDigitOnlyEarly = /^[1-9]\d*$/.test(text.trim())
+  const serviceOpts = buildServiceOptions(config.services || [])
+  const canResolveService = serviceOpts.length > 0 && resolveOptionByNumber(text, serviceOpts)
+  if (
+    isDigitOnlyEarly &&
+    nextState.slots.attendee_name &&
+    !nextState.slots.service &&
+    !nextState.slots.date &&
+    !state.last_confirm_options?.length &&
+    !state.pending_template_choice &&
+    !state.pending_second_service_choice &&
+    canResolveService
+  ) {
+    const serviceFromNum = resolveOptionByNumber(text, serviceOpts)!
+    nextState.slots.service = serviceFromNum === "Quero agendar uma visita" ? "visita" : serviceFromNum
+    nextState.last_service_options = undefined
+    // Seleção numérica de serviço deve sempre reiniciar etapa de agenda (evita herdar data/horário antigo da sessão).
+    nextState.slots.date = undefined
+    nextState.slots.time = undefined
+    nextState.slots.time_period = undefined
+    nextState.pending_date_confirmation = undefined
+    nextState.last_time_options = undefined
+    nextState.last_time_options_date = undefined
+    nextState.last_time_options_staff = undefined
+    const staffName = nextState.slots.staff_name || (getStaffList(config)[0]?.name)
+    const schedule = staffName ? getScheduleForStaff(config, staffName) : null
+    const days = schedule?.days_of_week || []
+    const dayOpts = buildStaffDayOptions(days)
+    if (!nextState.slots.staff_name && staffName) nextState.slots.staff_name = staffName
+    nextState.just_identified_service = true
+    return buildResult(
+      `Entendi, voce precisa de ${nextState.slots.service}. Em qual dia voce gostaria de agendar? (ex: Hoje, Amanha ou dia da semana)`,
+      nextState,
+      toNumberedOptions(dayOpts)
+    )
+  }
+
   if (state.pending_final_confirmation) {
     if (isConfirmAction(text) || isYes(text)) {
       nextState.pending_final_confirmation = false
@@ -174,14 +298,158 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
     Boolean(state.slots?.time) &&
     Boolean(state.slots?.customer_name) &&
     (cp === "phone" ? Boolean(state.slots?.customer_phone) : cp === "email" ? Boolean(state.slots?.customer_email) : Boolean(state.slots?.customer_phone) && Boolean(state.slots?.customer_email))
-  const interpretedAdditional = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: hasCompletedBooking })
+  const interpretedAdditional = await interpretAdditionalBookingsWithAI(text, {
+    has_completed_booking: hasCompletedBooking,
+    history,
+  })
   const interpretedCountRaw = typeof interpretedAdditional?.count === "number" ? interpretedAdditional.count : null
   const interpretedCount = interpretedCountRaw !== null ? Math.max(0, interpretedCountRaw) : null
   const interpretedHasAdditional =
     interpretedAdditional?.has_additional === true || (interpretedCount !== null && interpretedCount > 0)
 
+  const lastAssistantMsg =
+    state.last_prompt || (history.length > 0 ? history.filter((m) => m.role === "assistant").pop()?.content : undefined)
+  const waitingFor = nextState.pending_attendee_name
+    ? "attendee_name"
+    : !nextState.slots.service
+      ? "service"
+      : !nextState.slots.date
+        ? "date"
+        : !nextState.slots.time
+          ? "time"
+          : undefined
+  const slotsInterpretation =
+    waitingFor || nextState.pending_attendee_name
+      ? await interpretSlotsFromMessageWithAI(text, {
+          waiting_for: waitingFor,
+          current_slots: nextState.slots,
+          services: config.services || [],
+          history,
+          last_assistant_message: lastAssistantMsg,
+          sender_display_name: senderDisplayName,
+        }, config)
+      : null
+  const normalizedText = normalizeText(text)
+  const allowAiDateAutofill =
+    hasExplicitDate(text) ||
+    normalizedText.includes("hoje") ||
+    normalizedText.includes("amanha")
+
+  // Não usar slots da IA quando a mensagem é só número (ex: "1" = opção de serviço)
+  const isDigitOnly = /^[1-9]\d*$/.test(text.trim())
+  if (
+    waitingFor === "service" &&
+    slotsInterpretation?.service &&
+    !nextState.slots.service &&
+    !isDigitOnly
+  ) {
+    nextState.slots.service = slotsInterpretation.service
+  }
+
+  if (
+    waitingFor === "date" &&
+    slotsInterpretation?.date &&
+    !nextState.slots.date &&
+    !isDigitOnly &&
+    allowAiDateAutofill &&
+    /^\d{4}-\d{2}-\d{2}$/.test(slotsInterpretation.date)
+  ) {
+    nextState.slots.date = slotsInterpretation.date
+  }
+  if (
+    waitingFor === "time" &&
+    slotsInterpretation?.time &&
+    !nextState.slots.time &&
+    !isDigitOnly
+  ) {
+    nextState.slots.time = slotsInterpretation.time
+  }
+  if (
+    waitingFor === "attendee_name" &&
+    slotsInterpretation?.attendee_name &&
+    !nextState.slots.attendee_name &&
+    !isDigitOnly
+  ) {
+    nextState.slots.attendee_name = slotsInterpretation.attendee_name
+    if (!nextState.slots.customer_name) nextState.slots.customer_name = slotsInterpretation.attendee_name
+  }
+
+  // Cliente perguntou "tem horário às 14?" — consultar agenda e responder de forma fluida
+  // Não executar quando msg é só número (ex: "1" = opção de serviço)
+  if (slotsInterpretation?.needs_availability_check && slotsInterpretation?.time && !isDigitOnly) {
+    const dateIso = nextState.slots.date || getTodayIsoBusinessTz()
+    const staffList = getStaffList(config)
+    const staffName = nextState.slots.staff_name || (staffList[0]?.name)
+    const schedule = getScheduleForStaff(config, staffName)
+    const serviceDuration = getServicesTotalDuration(
+      config,
+      nextState.slots.service || nextState.pending_default_service
+    ) ?? 30
+    const availability = getMockAvailability(
+      dateIso,
+      schedule,
+      nextState.booked_slots,
+      staffName,
+      serviceDuration
+    )
+    const requestedTime = slotsInterpretation.time.includes(":")
+      ? slotsInterpretation.time
+      : `${String(parseInt(slotsInterpretation.time, 10)).padStart(2, "0")}:00`
+    const isAvailable = availability.available.includes(requestedTime)
+
+    const fluidResponse = await generateAvailabilityResponseWithAI(config, {
+      attendee_name: nextState.slots.attendee_name,
+      requested_time: requestedTime,
+      date_iso: dateIso,
+      is_available: isAvailable,
+      available_slots: availability.available.slice(0, 12),
+      service: nextState.slots.service,
+    }, history)
+
+    if (isAvailable) {
+      nextState.slots.date = dateIso
+      nextState.slots.time = requestedTime
+      nextState.slots.staff_name = staffName
+      nextState.pending_attendee_name = false
+      const options = [
+        `Sim, ${requestedTime}`,
+        "Outro horario",
+        ...(getOtherStaffOptions(config, staffName).length > 0 ? ["Outro colaborador"] : []),
+      ]
+      return buildResult(fluidResponse, nextState, options)
+    }
+    return buildResult(fluidResponse, nextState, availability.available.slice(0, 8))
+  }
+
   if (!nextState.slots.service) {
-    if (explicitService) nextState.slots.service = explicitService
+    const serviceFromNumber =
+      state.last_service_options?.length && resolveOptionByNumber(text, state.last_service_options)
+    if (serviceFromNumber) {
+      nextState.slots.service = serviceFromNumber === "Quero agendar uma visita" ? "visita" : serviceFromNumber
+      nextState.last_service_options = undefined
+      // Ao escolher serviço por número, não carregar data/horário previamente preenchidos.
+      nextState.slots.date = undefined
+      nextState.slots.time = undefined
+      nextState.slots.time_period = undefined
+      nextState.pending_date_confirmation = undefined
+      nextState.last_time_options = undefined
+      nextState.last_time_options_date = undefined
+      nextState.last_time_options_staff = undefined
+      // Se a GUARDA no início não pegou (ex: fluxo sem attendee), perguntar dia quando faltar data
+      if (!nextState.slots.date) {
+        const staffName = nextState.slots.staff_name || (getStaffList(config)[0]?.name)
+        const schedule = staffName ? getScheduleForStaff(config, staffName) : null
+        const days = schedule?.days_of_week || []
+        const dayOpts = buildStaffDayOptions(days)
+        nextState.just_identified_service = true
+        if (!nextState.slots.staff_name && staffName) nextState.slots.staff_name = staffName
+        return buildResult(
+          `Entendi, voce precisa de ${nextState.slots.service}. Em qual dia voce gostaria de agendar? (ex: Hoje, Amanha ou dia da semana)`,
+          nextState,
+          toNumberedOptions(dayOpts)
+        )
+      }
+    } else if (explicitService) nextState.slots.service = explicitService
     else if (isVisitRequest(text)) nextState.slots.service = "visita"
     else if (nextState.pending_default_service && nextState.pending_default_service_locked)
       nextState.slots.service = nextState.pending_default_service
@@ -201,24 +469,50 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
   }
 
   if (nextState.pending_attendee_name) {
-    const name = text.trim()
+    // Fallback: assistente pediu o nome e cliente respondeu só com o nome (ex: "Cesar") — usar como attendee
+    const lastAskedForName = lastAssistantMsg && /qual[\s\w]*nome/.test(normalizeText(lastAssistantMsg))
+    const directNameAnswer = lastAskedForName && looksLikeAttendeeName(text)
+    if (slotsInterpretation?.relationship_only && !directNameAnswer) {
+      const rel = slotsInterpretation.relationship || "pessoa"
+      const question =
+        rel === "filho"
+          ? "Claro, vamos comecar pelo seu filho. Qual o nome dele?"
+          : rel === "filha"
+            ? "Claro, vamos comecar pela sua filha. Qual o nome dela?"
+            : rel === "marido"
+              ? "Claro, vamos comecar pelo seu marido. Qual o nome dele?"
+              : rel === "esposa"
+                ? "Claro, vamos comecar pela sua esposa. Qual o nome dela?"
+                : `Claro! Qual o nome ${rel === "pessoa" ? "dessa pessoa" : `do(a) seu(sua) ${rel}`}?`
+      return buildResult(question, nextState)
+    }
+
+    const name =
+      slotsInterpretation?.attendee_name && slotsInterpretation.attendee_name.trim()
+        ? slotsInterpretation.attendee_name.trim()
+        : text.trim()
     if (!name || interpretedHasAdditional || isExplicitBookingIntent(text)) {
       return buildResult(`${buildMultiBookingIntro()} De quem sera o primeiro agendamento?`, nextState)
     }
     nextState.slots.attendee_name = name
     if (!nextState.slots.customer_name) nextState.slots.customer_name = name
+    if (slotsInterpretation?.service && !nextState.slots.service) {
+      nextState.slots.service = slotsInterpretation.service
+    }
     nextState.pending_attendee_name = false
     if (nextState.last_booking && !nextState.pending_template_choice) {
       nextState.pending_template_choice = true
       const staffLabel = nextState.last_booking.staff_name ? ` da ${nextState.last_booking.staff_name}` : ""
       const dateLabel = nextState.last_booking.date ? formatDatePt(nextState.last_booking.date) : "esse dia"
       const hasOtherStaff = getOtherStaffOptions(config, nextState.last_booking.staff_name).length > 0
-      const options = [
+      const rawOpts = [
         "Mesmo dia e colaborador (proximo horario)",
         "Outro horario no mesmo dia",
         "Outro dia",
         ...(hasOtherStaff ? ["Trocar colaborador"] : []),
       ]
+      const options = rawOpts.map((o, i) => `${i + 1} - ${o}`)
+      nextState.last_template_options = options
       const optsText = hasOtherStaff
         ? "Prefere o proximo horario, outro horario no mesmo dia, outro dia ou trocar colaborador?"
         : "Prefere o proximo horario, outro horario no mesmo dia ou outro dia?"
@@ -226,47 +520,78 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
     }
     const staffList = getStaffList(config)
     if (staffList.length > 1) {
+      const staffOptions = [...staffList.map((s) => s.name), "Tanto faz"]
       return buildResult("Com qual colaborador voce prefere agendar?", nextState, [
-        ...staffList.map((s) => s.name),
-        "Tanto faz",
+        ...toNumberedOptions(staffOptions),
       ])
     }
-    const prompt = buildServicePrompt(config, text, { attendee_name: nextState.slots.attendee_name })
-    return buildResult(`Vamos la, ${name}. ${prompt.message}`, nextState, prompt.action_options)
+    const serviceOpts = buildServiceOptions(config.services || [])
+    const numberedOpts = serviceOpts.map((o, i) => `${i + 1} - ${o}`)
+    nextState.last_service_options = serviceOpts
+    const msg = `Otimo! Vamos agendar primeiro para o ${name}. Qual servico seria? (responda com o numero ou nome)`
+    return buildResult(msg, nextState, numberedOpts)
+  }
+
+  if (nextState.pending_second_service_choice) {
+    const serviceOptions = buildServiceOptions(config.services || [])
+    const resolved = resolveOptionByNumber(text, serviceOptions) || findServiceFromText(text, config.services || [])
+    const serviceNames = (config.services || []).map((s) => s.name).filter(Boolean)
+    if (resolved && (resolved === "Quero agendar uma visita" || serviceNames.includes(resolved))) {
+      nextState.pending_second_service_choice = false
+      nextState.slots.service = resolved === "Quero agendar uma visita" ? "visita" : resolved
+      const last = nextState.last_booking
+      if (last?.date && last?.staff_name) {
+        const serviceDuration = getServicesTotalDuration(config, nextState.slots.service)
+        const next = getNextAvailableSlot(last.date, config, nextState.booked_slots, last.staff_name, last.time, serviceDuration)
+        if (next) {
+          nextState.slots.date = last.date
+          nextState.slots.time = next
+          nextState.slots.staff_name = last.staff_name
+          const firstName = last.attendee_name || "o primeiro"
+          const confirmOpts = [`1 - Sim, ${next}`, "2 - Outro horario no mesmo dia", "3 - Outro dia", ...(getOtherStaffOptions(config, last.staff_name).length > 0 ? ["4 - Trocar colaborador"] : [])]
+          nextState.last_confirm_options = confirmOpts
+          return buildResult(
+            `Otimo, vamos agendar ${nextState.slots.attendee_name || "ele"} em seguida ao ${firstName}. Sugeri ${next} em ${formatDatePt(last.date)}. Posso confirmar?`,
+            nextState,
+            confirmOpts
+          )
+        }
+        const hasOtherStaff = getOtherStaffOptions(config, last.staff_name).length > 0
+        const msg = hasOtherStaff
+          ? "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia ou trocar colaborador?"
+          : "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia?"
+        return buildResult(msg, nextState, [
+          "1 - Outro dia",
+          ...(hasOtherStaff ? ["2 - Trocar colaborador"] : []),
+        ])
+      }
+    } else {
+      const opts = buildServiceOptions(config.services || []).map((o, i) => `${i + 1} - ${o}`)
+      return buildResult("Qual servico voce prefere? (responda com o numero ou nome)", nextState, opts)
+    }
   }
 
   if (nextState.pending_template_choice) {
-    const choice = parseTemplateChoice(text)
+    const templateOpts = state.last_template_options || []
+    const choice = parseTemplateChoice(text, templateOpts.length > 0 ? templateOpts : undefined)
     const last = nextState.last_booking
     if (choice && last) {
       nextState.pending_template_choice = false
+      nextState.last_template_options = undefined
       if (choice === "same_next") {
-        const dateIso = last.date
         const staffName = last.staff_name
-        const serviceForSlots = nextState.slots.service || nextState.pending_default_service || last.service
-        const serviceDuration = getServicesTotalDuration(config, serviceForSlots)
-        const next = dateIso
-          ? getNextAvailableSlot(dateIso, config, nextState.booked_slots, staffName, last.time, serviceDuration)
-          : null
-        if (!dateIso || !next) {
-          const hasOtherStaff = getOtherStaffOptions(config, staffName).length > 0
-          const msg = hasOtherStaff
-            ? "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia ou trocar colaborador?"
-            : "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia?"
-          return buildResult(msg, nextState, [
-            "Outro dia",
-            ...(hasOtherStaff ? ["Trocar colaborador"] : []),
-          ])
-        }
-        nextState.slots.date = dateIso
-        nextState.slots.time = next
-        nextState.slots.staff_name = staffName
-        return buildResult(`Perfeito. Sugeri ${next} em ${formatDatePt(dateIso)}. Posso confirmar?`, nextState, [
-          `Sim, ${next}`,
-          "Outro horario no mesmo dia",
-          "Outro dia",
-          ...(getOtherStaffOptions(config, staffName).length > 0 ? ["Trocar colaborador"] : []),
-        ])
+        const defaultService = nextState.slots.service || nextState.pending_default_service || last.service
+        const serviceList = buildServiceOptions(config.services || [])
+        const numberedServiceOpts = serviceList.map((o, i) => `${i + 1} - ${o}`)
+        nextState.pending_second_service_choice = true
+        const firstName = last.attendee_name || "o primeiro"
+        const secondName = nextState.slots.attendee_name || "ele"
+        const defaultLabel = defaultService === "visita" ? "visita" : defaultService
+        const question =
+          defaultService
+            ? `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. O dele tambem vai ser ${defaultLabel}? Ou prefere trocar o servico:`
+            : `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. Qual servico?`
+        return buildResult(question, nextState, numberedServiceOpts)
       }
       if (choice === "same_day") {
         if (last.date) nextState.slots.date = last.date
@@ -281,21 +606,26 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
           const closedToday =
             last.date === getTodayIsoBusinessTz() && isBusinessClosedForToday(schedule)
           const msg = closedToday
-            ? "Ja encerramos nossas atividades por hoje. Gostaria de marcar outro dia?"
+            ? "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce."
             : getOtherStaffOptions(config, nextState.slots.staff_name).length > 0
               ? "Esse dia esta cheio. Quer tentar outro dia ou trocar colaborador?"
               : "Esse dia esta cheio. Quer tentar outro dia?"
+          const closedDayOptions = getOtherDayOptions(schedule)
           return buildResult(msg, nextState, [
-            "Outro dia",
+            ...(closedToday ? closedDayOptions : ["Outro dia"]),
             ...(getOtherStaffOptions(config, nextState.slots.staff_name).length > 0
               ? ["Trocar colaborador"]
               : []),
           ])
         }
-        nextState.last_time_options = availability.available.slice(0, 8)
+        nextState.last_time_options = availability.available.slice(0, 24)
         nextState.last_time_options_date = nextState.slots.date
         nextState.last_time_options_staff = nextState.slots.staff_name
-        return buildResult("Qual horario voce prefere no mesmo dia?", nextState, availability.available.slice(0, 8))
+        return buildResult(
+          "Qual horario voce prefere no mesmo dia?",
+          nextState,
+          toNumberedOptions(availability.available.slice(0, 24))
+        )
       }
       if (choice === "other_day") {
         nextState.slots.date = undefined
@@ -304,9 +634,9 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       }
       if (choice === "other_staff") {
         nextState.slots.staff_name = undefined
+        const staffOptions = [...getStaffList(config).map((s) => s.name), "Tanto faz"]
         return buildResult("Com qual colaborador voce prefere agendar?", nextState, [
-          ...getStaffList(config).map((s) => s.name),
-          "Tanto faz",
+          ...toNumberedOptions(staffOptions),
         ])
       }
     }
@@ -319,42 +649,50 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
 
   if (staffList.length > 1) {
     if (!nextState.slots.staff_name) {
+      const staffOptions = [...staffList.map((s) => s.name), "Tanto faz"]
+      const selectedByNumber = resolveOptionByNumber(text, staffOptions)
       const selected = resolveStaffFromText(text, staffList)
-      if (selected) {
+      if (selectedByNumber && selectedByNumber !== "Tanto faz") {
+        nextState.slots.staff_name = selectedByNumber
+      } else if (selected) {
         nextState.slots.staff_name = selected
-      } else if (isAnyStaffRequest(text)) {
+      } else if (selectedByNumber === "Tanto faz" || isAnyStaffRequest(text)) {
         nextState.slots.staff_name = staffList[0].name
       }
     }
 
     if (!nextState.slots.staff_name) {
+      const staffOptions = [...staffList.map((s) => s.name), "Tanto faz"]
       return buildResult("Com qual colaborador voce prefere agendar?", nextState, [
-        ...staffList.map((s) => s.name),
-        "Tanto faz",
+        ...toNumberedOptions(staffOptions),
       ])
     }
 
     if (!state.slots?.staff_name && nextState.slots.staff_name && nextState.slots.service && !nextState.slots.date) {
+      if (isGreeting(text)) {
+        return buildResult(getGreetingMessage(config), nextState)
+      }
       const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
       const days = schedule?.days_of_week || []
       if (days.length > 0) {
         const daysLabel = days.map((d) => buildStaffDayOptions([d])[0]).join(", ")
+        const dayOptions = buildStaffDayOptions(days)
         const intro =
           nextState.just_identified_service && nextState.slots.service
             ? `Entendi, voce precisa de ${nextState.slots.service}. `
             : ""
         nextState.just_identified_service = false
         return buildResult(
-          `${intro}Temos agenda com ${nextState.slots.staff_name} que esta disponivel para atendimento de ${daysLabel}. Em qual dia voce gostaria de agendar?`,
+          `${intro}Temos agenda com ${nextState.slots.staff_name} que esta disponivel (${daysLabel}). Em qual dia voce gostaria de agendar? (ex: Hoje, Amanha ou dia da semana)`,
           nextState,
-          buildStaffDayOptions(days)
+          toNumberedOptions(dayOptions)
         )
       }
       if (isBusinessClosedForToday(schedule) && (schedule?.days_of_week || []).length > 0) {
         return buildResult(
-          "Ja encerramos nossas atividades por hoje. Gostaria de marcar outro dia?",
+          "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce.",
           nextState,
-          ["Sim, outro dia"]
+          getOtherDayOptions(schedule)
         )
       }
     }
@@ -364,6 +702,7 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
     let extraCount = interpretedCount && interpretedCount > 0 ? interpretedCount : 0
     if (!extraCount && interpretedHasAdditional) extraCount = 1
     nextState.last_booking = {
+      attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
       service: nextState.slots.service,
       date: nextState.slots.date,
       time: nextState.slots.time,
@@ -399,18 +738,74 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
   }
 
   if (state.pending_date_confirmation) {
-    if (isYes(text)) {
+    const pendingDate = state.pending_date_confirmation
+    const pendingDateLabel = formatDatePt(pendingDate)
+    const pendingDateOptions = [`Sim, ${pendingDateLabel}`, "Outra data"]
+    const dateConfirmationInput = resolveOptionByNumber(text, pendingDateOptions) || text
+    const normalizedConfirmation = normalizeText(dateConfirmationInput).trim()
+    const parsedDateFromConfirmation = parseDateOrWeekday(dateConfirmationInput)
+
+    if (parsedDateFromConfirmation) {
       const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
-      const confirmedDate = state.pending_date_confirmation
+      const usedWeekday = !hasExplicitDate(dateConfirmationInput) && parseWeekdayDate(dateConfirmationInput)
+      let candidateDate = parsedDateFromConfirmation
+
+      if (
+        usedWeekday &&
+        candidateDate === getTodayIsoBusinessTz() &&
+        isBusinessClosedForToday(schedule)
+      ) {
+        candidateDate = addDaysToIsoDate(candidateDate, 7)
+      } else if (
+        !usedWeekday &&
+        candidateDate === getTodayIsoBusinessTz() &&
+        isBusinessClosedForToday(schedule)
+      ) {
+        nextState.pending_date_confirmation = undefined
+        return buildResult(
+          "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce.",
+          nextState,
+          getOtherDayOptions(schedule)
+        )
+      }
+
+      const blocked = await isDateBlocked(candidateDate, {
+        holidays_attend: config.holidays_attend,
+        closure_periods: config.closure_periods,
+      })
+      if (blocked.blocked) {
+        nextState.pending_date_confirmation = undefined
+        return buildResult(
+          buildDateBlockedMessage(blocked.reason || "Essa data nao esta disponivel."),
+          nextState,
+          ["Outro dia"]
+        )
+      }
+
+      if (usedWeekday) {
+        nextState.pending_date_confirmation = candidateDate
+        return buildResult(`Voce quis dizer ${formatDatePt(candidateDate)}?`, nextState, [
+          `Sim, ${formatDatePt(candidateDate)}`,
+          "Outra data",
+        ])
+      }
+
+      nextState.slots.date = candidateDate
+      nextState.pending_date_confirmation = undefined
+    }
+
+    if (isYes(dateConfirmationInput) || normalizedConfirmation === "s") {
+      const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
+      const confirmedDate = pendingDate
       if (
         confirmedDate === getTodayIsoBusinessTz() &&
         isBusinessClosedForToday(schedule)
       ) {
         nextState.pending_date_confirmation = undefined
         return buildResult(
-          "Ja encerramos nossas atividades por hoje. Gostaria de marcar outro dia?",
+          "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce.",
           nextState,
-          ["Sim, outro dia"]
+          getOtherDayOptions(schedule)
         )
       }
       const blocked = await isDateBlocked(confirmedDate, {
@@ -427,7 +822,11 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       }
       nextState.slots.date = confirmedDate
       nextState.pending_date_confirmation = undefined
-    } else if (isNo(text) || normalizeText(text).includes("outra")) {
+    } else if (
+      isNo(dateConfirmationInput) ||
+      normalizedConfirmation === "n" ||
+      normalizeText(dateConfirmationInput).includes("outra")
+    ) {
       nextState.pending_date_confirmation = undefined
       return buildResult("Qual dia voce prefere?", nextState)
     }
@@ -436,33 +835,77 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
   if (normalizeText(text).includes("outro dia") || normalizeText(text).includes("outra data")) {
     nextState.slots.date = undefined
     nextState.slots.time = undefined
-    return buildResult("Qual dia voce prefere?", nextState)
+    const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
+    return buildResult("Qual dia voce prefere?", nextState, getOtherDayOptions(schedule))
   }
 
-  const dateCandidate = !nextState.slots.date ? parseDateOrWeekday(text) : null
+  // Priorizar pergunta de preço: mesmo com staff+service (sem data), responder preço + botões como no WhatsApp
+  if (isPriceQuestion(text)) {
+    const cordial = getCordialPrefix(config, false)
+    const serviceName = findServiceFromText(text, config.services || [])
+    const svc = getServiceWithPrice(config.services || [], serviceName)
+    if (serviceName && svc && svc.base_price != null) {
+      nextState.slots.service = svc.name
+      nextState.just_identified_service = true
+      return buildResult(
+        cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+        nextState,
+        ["Quero agendar", "Só queria saber"]
+      )
+    }
+    // Rejeição para qualquer serviço que não esteja na lista do negócio (preço, agendamento, etc.)
+    if (!serviceName && (config.services || []).length > 0) {
+      const match = await classifyServiceMatch(text, config)
+      if (hasMatchContext(match) && !match.service) {
+        const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, true)
+        return buildResult(rejectionMessage, nextState)
+      }
+    }
+    const withPrice = (config.services || []).filter((s) => s.base_price != null)
+    if (withPrice.length > 0) {
+      const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+      nextState.last_service_options = serviceOptions
+      return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
+    }
+    const noPrice = buildPriceNotAvailableMessage(config, serviceName || undefined)
+    return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
+  }
+
+  const scheduleForDateCandidate = getScheduleForStaff(config, nextState.slots.staff_name)
+  const rawDayOptionsForDateCandidate = buildStaffDayOptions(scheduleForDateCandidate?.days_of_week || [])
+  const expectsDateInput = waitingFor === "date"
+  const lastActionNormalized = (state.last_action_options || []).map((opt) =>
+    normalizeText(String(opt || "").replace(/^\d+\s*-\s*/, "").trim())
+  )
+  const rawDayOptionsNormalized = rawDayOptionsForDateCandidate.map((opt) => normalizeText(opt))
+  const isCurrentPromptDayOptions =
+    rawDayOptionsForDateCandidate.length > 0 &&
+    lastActionNormalized.length === rawDayOptionsNormalized.length &&
+    rawDayOptionsNormalized.every((opt, idx) => lastActionNormalized[idx] === opt)
+  const dateInputCandidate = expectsDateInput
+    ? (isCurrentPromptDayOptions
+        ? (resolveOptionByNumber(text, rawDayOptionsForDateCandidate) || text)
+        : text)
+    : text
+  const dateCandidate = !nextState.slots.date ? parseDateOrWeekday(dateInputCandidate) : null
   if (!nextState.slots.date && !dateCandidate && nextState.slots.staff_name && nextState.slots.service) {
+    if (isGreeting(text)) {
+      return buildResult(getGreetingMessage(config), nextState)
+    }
     const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
     const days = schedule?.days_of_week || []
-    if (days.length > 0) {
-      const daysLabel = days.map((d) => buildStaffDayOptions([d])[0]).join(", ")
-      const intro =
-        nextState.just_identified_service && nextState.slots.service
-          ? `Entendi, voce precisa de ${nextState.slots.service}. `
-          : ""
-      nextState.just_identified_service = false
-      return buildResult(
-        `${intro}Temos agenda com ${nextState.slots.staff_name} que esta disponivel para atendimento de ${daysLabel}. Em qual dia voce gostaria de agendar?`,
-        nextState,
-        buildStaffDayOptions(days)
-      )
-    }
-    if (isBusinessClosedForToday(schedule) && (schedule?.days_of_week || []).length > 0) {
-      return buildResult(
-        "Ja encerramos nossas atividades por hoje. Gostaria de marcar outro dia?",
-        nextState,
-        ["Sim, outro dia"]
-      )
-    }
+    const dayOptions = buildStaffDayOptions(days)
+    const daysLabel = days.length > 0 ? days.map((d) => buildStaffDayOptions([d])[0]).join(", ") : "segunda a sabado"
+    const intro =
+      nextState.just_identified_service && nextState.slots.service
+        ? `Entendi, voce precisa de ${nextState.slots.service}. `
+        : ""
+    nextState.just_identified_service = false
+    return buildResult(
+      `${intro}Temos agenda com ${nextState.slots.staff_name} que esta disponivel (${daysLabel}). Em qual dia voce gostaria de agendar? (ex: Hoje, Amanha ou dia da semana)`,
+      nextState,
+      toNumberedOptions(dayOptions)
+    )
   }
 
   if (state.pending_contact_field) {
@@ -474,27 +917,57 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       nextState.slots.customer_name = name
       nextState.pending_contact_field = undefined
     } else if (state.pending_contact_field === "contact_preference") {
-      const t = text.toLowerCase().trim()
-      if (/(s[oó]|apenas)\s*celular|celular\s*apenas/.test(t)) {
+      const prefOptions = ["Só celular", "Só email", "Celular e email"]
+      const prefInput = resolveOptionByNumber(text, prefOptions) || text
+      const t = prefInput.toLowerCase().trim()
+      let pref: "phone" | "email" | "both" | null = null
+      // Reconhece "celular mesmo", "só celular", "cell", etc.
+      if (/(s[oó]|apenas)\s*celular|celular\s*(apenas|mesmo)|celular\s+\d/.test(t)) pref = "phone"
+      else if (/(s[oó]|apenas)\s*email|email\s*apenas/.test(t)) pref = "email"
+      else if (/(ambos|celular\s*e\s*email|os\s*dois)/.test(t)) pref = "both"
+      if (!pref) {
+        pref = await extractContactPreferenceFromText(prefInput, history)
+      }
+      if (pref === "phone") {
         nextState.contact_preference = "phone"
         nextState.pending_contact_field = undefined
-        return buildResult("Qual seu celular com DDD?", nextState)
-      }
-      if (/(s[oó]|apenas)\s*email|email\s*apenas/.test(t)) {
+        // Se a mensagem já contém o número (ex: "Celular mesmo 11972763228"), extrair e não perguntar de novo
+        const phoneFromText = parsePhone(text)
+        if (phoneFromText) {
+          nextState.slots.customer_phone = phoneFromText
+          // não retorna aqui; o fluxo continua abaixo e avança para o próximo passo
+        } else {
+          nextState.pending_contact_field = "phone"
+          return buildResult("Qual seu celular com DDD?", nextState)
+        }
+      } else if (pref === "email") {
         nextState.contact_preference = "email"
         nextState.pending_contact_field = undefined
-        return buildResult("Qual seu email?", nextState)
-      }
-      if (/(ambos|celular\s*e\s*email|os\s*dois)/.test(t)) {
+        const emailFromText = parseEmail(text)
+        if (emailFromText) {
+          nextState.slots.customer_email = emailFromText
+        } else {
+          nextState.pending_contact_field = "email"
+          return buildResult("Qual seu email?", nextState)
+        }
+      } else if (pref === "both") {
         nextState.contact_preference = "both"
         nextState.pending_contact_field = undefined
+        const phoneFromText = parsePhone(text)
+        if (phoneFromText) {
+          nextState.slots.customer_phone = phoneFromText
+          nextState.pending_contact_field = "email"
+          return buildResult("Qual seu email?", nextState)
+        }
+        nextState.pending_contact_field = "phone"
         return buildResult("Qual seu celular com DDD?", nextState)
+      } else {
+        return buildResult(
+          "Como prefere ser contatado? Escolha: Só celular, Só email ou Celular e email.",
+          nextState,
+          prefOptions
+        )
       }
-      return buildResult(
-        "Como prefere ser contatado? Escolha: Só celular, Só email ou Celular e email.",
-        nextState,
-        ["Só celular", "Só email", "Celular e email"]
-      )
     } else if (state.pending_contact_field === "phone") {
       const phone = parsePhone(text)
       if (!phone) {
@@ -541,10 +1014,21 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
   }
 
   if (!nextState.slots.date) {
-    let date = parseDateOrWeekday(text)
+    const scheduleForDate = getScheduleForStaff(config, nextState.slots.staff_name)
+    const rawDayOptions = buildStaffDayOptions(scheduleForDate?.days_of_week || [])
+    const rawDayOptionsNorm = rawDayOptions.map((opt) => normalizeText(opt))
+    const isPromptDayOptions =
+      rawDayOptions.length > 0 &&
+      lastActionNormalized.length === rawDayOptionsNorm.length &&
+      rawDayOptionsNorm.every((opt, idx) => lastActionNormalized[idx] === opt)
+    const dateInput =
+      expectsDateInput && isPromptDayOptions
+        ? (resolveOptionByNumber(text, rawDayOptions) || text)
+        : text
+    let date = parseDateOrWeekday(dateInput)
     if (date) {
       const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
-      const usedWeekday = !hasExplicitDate(text) && parseWeekdayDate(text)
+      const usedWeekday = !hasExplicitDate(dateInput) && parseWeekdayDate(dateInput)
       const allowedDays = schedule?.days_of_week
 
       // Dia da semana fora do expediente? Responder logo, sem pedir confirmação de data
@@ -573,9 +1057,9 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       ) {
         nextState.slots.date = undefined
         return buildResult(
-          "Ja encerramos nossas atividades por hoje. Gostaria de marcar outro dia?",
+          "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce.",
           nextState,
-          ["Sim, outro dia"]
+          getOtherDayOptions(schedule)
         )
       }
       if (usedWeekday && !state.pending_date_confirmation) {
@@ -604,12 +1088,36 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
     const time = parseTime(text)
     if (time) {
       const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
+      const start = schedule?.start_time || "09:00"
+      const end = schedule?.end_time || "18:00"
+      let options: string[] | undefined =
+        Array.isArray(state.last_time_options) && state.last_time_options.length > 0
+          ? state.last_time_options
+          : undefined
+      if (!options && nextState.slots.date) {
+        const serviceDuration = getServicesTotalDuration(
+          config,
+          nextState.slots.service || nextState.pending_default_service
+        )
+        const availability = getMockAvailability(
+          nextState.slots.date,
+          schedule,
+          nextState.booked_slots,
+          nextState.slots.staff_name,
+          serviceDuration
+        )
+        if (availability.available.length > 0) options = availability.available.slice(0, 24)
+      }
+      if (nextState.slots.date === getTodayIsoBusinessTz() && isTimeTooSoonForDate(nextState.slots.date, time)) {
+        const msg =
+          `Este horario nao pode ser agendado agora. Trabalhamos com antecedencia minima de ${MIN_BOOKING_LEAD_MINUTES} minutos. Qual horario voce prefere?`
+        return buildResult(msg, nextState, options ? toNumberedOptions(options) : undefined)
+      }
       const within = isWithinSchedule(time, schedule)
       if (!within.ok) {
-        return buildResult(
-          `Poxa, infelizmente nao consigo te atender nesse horario. ${within.reason} Qual horario voce prefere?`,
-          nextState
-        )
+        const msg =
+          `Nosso horário de atendimento é das ${start} às ${end}. Só estão disponíveis as opções que te listei. Qual horário você prefere?`
+        return buildResult(msg, nextState, options ? toNumberedOptions(options) : undefined)
       }
       nextState.slots.time = time
     }
@@ -645,23 +1153,27 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
     )
     if (availability.available.length === 0) {
       const otherStaff = getOtherStaffOptions(config, nextState.slots.staff_name)
-      const options = otherStaff.length > 0 ? [...otherStaff, "Outro dia"] : ["Outro dia"]
       const closedToday =
         nextState.slots.date === getTodayIsoBusinessTz() && isBusinessClosedForToday(schedule)
       const msg = closedToday
-        ? "Ja encerramos nossas atividades por hoje. Gostaria de marcar outro dia?"
+        ? "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce."
         : otherStaff.length > 0
           ? `Esse dia esta cheio com ${nextState.slots.staff_name || "este colaborador"}. Posso sugerir horarios com outro colaborador ou prefere outro dia?`
           : `Esse dia esta cheio. Quer tentar outro dia?`
+      const options = closedToday
+        ? [...getOtherDayOptions(schedule), ...otherStaff]
+        : otherStaff.length > 0
+          ? [...otherStaff, "Outro dia"]
+          : ["Outro dia"]
       return buildResult(msg, nextState, options)
     }
-    nextState.last_time_options = availability.available.slice(0, 8)
+    nextState.last_time_options = availability.available.slice(0, 24)
     nextState.last_time_options_date = nextState.slots.date
     nextState.last_time_options_staff = nextState.slots.staff_name
     return buildResult(
       `Tenho estes horarios livres em ${formatDatePt(nextState.slots.date)}. Qual voce prefere?`,
       nextState,
-      availability.available.slice(0, 8)
+      toNumberedOptions(availability.available.slice(0, 24))
     )
   }
 
@@ -672,16 +1184,32 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       time_period: nextState.slots.time_period,
       attendee_name: nextState.slots.attendee_name,
     })
-    return buildResult(prompt.message, nextState, prompt.action_options)
+    nextState.last_service_options = buildServiceOptions(config.services || [])
+    return buildResult(prompt.message, nextState, toNumberedOptions(prompt.action_options))
   }
 
   if (!nextState.slots.date) {
+    const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
+    const days = schedule?.days_of_week || []
+    const dayOpts = buildStaffDayOptions(days)
     const prefix = nextState.slots.time
       ? `Anotei ${nextState.slots.service} no horario ${nextState.slots.time}. `
       : nextState.slots.time_period
         ? `Anotei ${nextState.slots.service} no periodo ${formatTimePeriod(nextState.slots.time_period)}. `
         : `Certo, ${nextState.slots.service}. `
-    return buildResult(`${prefix}Qual dia voce prefere?`, nextState)
+    return buildResult(
+      `${prefix}Qual dia voce prefere? (ex: Hoje, Amanha ou dia da semana)`,
+      nextState,
+      toNumberedOptions(dayOpts)
+    )
+  }
+
+  if (!nextState.slots.time) {
+    const timeFromNumber =
+      Array.isArray(state.last_time_options) && state.last_time_options.length > 0
+        ? resolveOptionByNumber(text, state.last_time_options)
+        : null
+    if (timeFromNumber) nextState.slots.time = timeFromNumber
   }
 
   if (!nextState.slots.time) {
@@ -697,18 +1225,22 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       nextState.slots.staff_name,
       serviceDuration
     )
-    const options = availability.available.slice(0, 8)
+    const options = availability.available.slice(0, 24)
     if (availability.available.length === 0) {
       const otherStaff = getOtherStaffOptions(config, nextState.slots.staff_name)
-      const optionList = otherStaff.length > 0 ? [...otherStaff, "Outro dia"] : ["Outro dia"]
       const closedToday =
         nextState.slots.date === getTodayIsoBusinessTz() && isBusinessClosedForToday(schedule)
       const msg = closedToday
-        ? "Ja encerramos nossas atividades por hoje. Gostaria de marcar outro dia?"
+        ? "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce."
         : otherStaff.length > 0
           ? `Esse dia esta cheio com ${nextState.slots.staff_name || "este colaborador"}. Posso sugerir horarios com outro colaborador ou prefere outro dia?`
           : `Esse dia esta cheio. Quer tentar outro dia?`
-      return buildResult(msg, nextState, optionList)
+      const optionList = closedToday
+        ? [...getOtherDayOptions(schedule), ...otherStaff]
+        : otherStaff.length > 0
+          ? [...otherStaff, "Outro dia"]
+          : ["Outro dia"]
+      return buildResult(msg, nextState, toNumberedOptions(optionList))
     }
     nextState.last_time_options = options
     nextState.last_time_options_date = nextState.slots.date
@@ -717,10 +1249,10 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       return buildResult(
         `Perfeito, ${formatTimePeriod(nextState.slots.time_period)}. Qual horario voce prefere?`,
         nextState,
-        options
+        toNumberedOptions(options)
       )
     }
-    return buildResult("Qual horario voce prefere?", nextState, options)
+    return buildResult("Qual horario voce prefere?", nextState, toNumberedOptions(options))
   }
 
   const dateIso = nextState.slots.date
@@ -738,6 +1270,17 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       nextState.slots.staff_name,
       serviceDuration
     )
+    if (isTimeTooSoonForDate(dateIso, time)) {
+      nextState.slots.time = undefined
+      nextState.last_time_options = availability.available.slice(0, 24)
+      nextState.last_time_options_date = dateIso
+      nextState.last_time_options_staff = nextState.slots.staff_name
+      return buildResult(
+        `Esse horario nao esta disponivel para agora. A antecedencia minima e de ${MIN_BOOKING_LEAD_MINUTES} minutos. Vou te mostrar os proximos horarios livres.`,
+        nextState,
+        toNumberedOptions(availability.available.slice(0, 24))
+      )
+    }
     const isTimeFromLastOptions =
       Array.isArray(state.last_time_options) &&
       state.last_time_options.includes(time) &&
@@ -776,6 +1319,7 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
         const completedDate = nextState.slots.date
         const completedTime = nextState.slots.time
         nextState.last_booking = {
+          attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
           service: completedService,
           date: completedDate,
           time: completedTime,
@@ -840,10 +1384,7 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       })
       nextState.final_thanks_sent = true
       nextState.slots = resetSlotsForNextBooking(nextState)
-      const actionOptions = finalResult.calendar_url
-        ? [`open_url|Adicionar ao calendário|${finalResult.calendar_url}`]
-        : undefined
-      return buildResult(finalResult.message, nextState, actionOptions)
+      return buildResult(finalResult.message, nextState)
     }
 
     const next = availability.available.find((slot) => slot > time) || availability.available[0]
@@ -856,9 +1397,10 @@ async function resolveBooking(config: SimulatorConfig, text: string, state: Simu
       dateIso === getTodayIsoBusinessTz() && isBusinessClosedForToday(schedule)
     return buildResult(
       closedToday
-        ? "Ja encerramos nossas atividades por hoje. Gostaria de marcar outro dia?"
+      ? "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce."
         : "Esse dia esta cheio. Quer tentar outro dia?",
-      nextState
+    nextState,
+    closedToday ? getOtherDayOptions(schedule) : undefined
     )
   }
 
@@ -913,9 +1455,17 @@ async function processSimulatorMessage(
   input: string,
   config: SimulatorConfig,
   state: SimulatorState,
-  history: Array<{ role: string; content: string }> = []
+  history: Array<{ role: string; content: string }> = [],
+  senderDisplayName?: string
 ): Promise<SimulatorResult> {
-  const text = input.trim()
+  const incomingText = input.trim()
+  const singleOptionResolved =
+    /^[1-9]\d*$/.test(incomingText) &&
+    Array.isArray(state.last_action_options) &&
+    state.last_action_options.length === 1
+      ? resolveOptionByNumber(incomingText, state.last_action_options)
+      : null
+  const text = singleOptionResolved || incomingText
   const nextState: SimulatorState = {
     ...state,
     slots: { ...(state.slots || {}), quote_answers: state.slots?.quote_answers || {} },
@@ -923,7 +1473,7 @@ async function processSimulatorMessage(
 
   const isFirst = isFirstMessage(state)
 
-  // Conversa finalizada: IA responde de forma natural com os dados do config
+  // Conversa finalizada: responder só o que foi perguntado (endereço, horários etc.) sem pedir confirmação de novo
   if (isFinalizedState(nextState)) {
     const msg = normalizeText(text)
     const isThanks =
@@ -936,17 +1486,25 @@ async function processSimulatorMessage(
       nextState.final_thanks_sent = true
       return buildResult(`Disponha! Foi um prazer te atender. ${company} agradece o seu contato, tenha um(a) ${saudacao}.`, nextState)
     }
-    // IA entende QUALQUER mensagem e responde com o config como contexto (finalized = não pedir dados novamente)
-    const aiAnswer = await answerWithContextualAI(config, text, history, true)
-    if (aiAnswer) {
-      nextState.final_thanks_sent = true
-      return buildResult(aiAnswer, nextState)
+    // Primeiro: perguntas sobre a marcação do próprio cliente (ex: "qual dia e horário foi marcado?")
+    if (isMyBookingQuestion(msg)) {
+      const myBookingAnswer = getMyBookingAnswer(nextState)
+      if (myBookingAnswer) {
+        nextState.final_thanks_sent = true
+        return buildResult(myBookingAnswer, nextState)
+      }
     }
-    // Fallback se API falhar: padrões determinísticos
+    // Depois: outras perguntas informativas (endereço, horários, serviços) — resposta direta, sem pedir confirmação
     const infoAnswer = tryAnswerInformationalQuestion(config, text)
     if (infoAnswer) {
       nextState.final_thanks_sent = true
       return buildResult(infoAnswer, nextState)
+    }
+    // Depois: IA para outras mensagens (finalized = não pedir dados/confirmação de novo)
+    const aiAnswer = await answerWithContextualAI(config, text, history, true)
+    if (aiAnswer) {
+      nextState.final_thanks_sent = true
+      return buildResult(aiAnswer, nextState)
     }
     nextState.final_thanks_sent = true
     return buildResult("Se precisar de algo no futuro, fico à disposição.", nextState)
@@ -954,59 +1512,91 @@ async function processSimulatorMessage(
 
   // PRIORIDADE: Se é primeira mensagem, processar contexto ANTES de qualquer outra coisa
   if (isFirst && !nextState.mode && !nextState.step) {
-    const cordial = getCordialPrefix(config, true)
-    const business = config.business_name ? `da ${config.business_name}` : "da empresa"
-    const greeting = `Oi! Sou a assistente ${business}. Obrigado por entrar em contato. `
+    const greeting = getGreetingMessage(config)
+
+    // Perguntas informativas (endereço, horários) em qualquer momento — resposta direta do cadastro
+    const firstInfoAnswer = tryAnswerInformationalQuestion(config, text)
+    if (firstInfoAnswer) {
+      return buildResult(`${greeting}\n\n${firstInfoAnswer}`, { ...nextState, step: "qualification" }, ["Quero agendar"])
+    }
+
+    // Primeira mensagem com intenção explícita de agendamento deve ir direto para fluxo de booking,
+    // mesmo sem "oi/olá" e mesmo sem citar serviço.
+    if (isExplicitBookingIntent(text)) {
+      nextState.mode = "booking"
+      nextState.step = undefined
+      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+      if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
+        nextState.pending_additional_booking = true
+        nextState.pending_attendee_name = true
+        nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
+        nextState.expected_additional_count = nextState.pending_additional_count
+        return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
+      }
+      if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
+      const serviceFromText = findServiceFromText(text, config.services || [])
+      if (serviceFromText) {
+        nextState.slots.service = serviceFromText
+        nextState.just_identified_service = true
+        return resolveBooking(config, text, nextState, history, senderDisplayName)
+      }
+      const prompt = buildServicePrompt(config, text, { attendee_name: nextState.slots.attendee_name })
+      nextState.last_service_options = buildServiceOptions(config.services || [])
+      return buildResult(prompt.message, nextState, prompt.action_options)
+    }
 
     // Pergunta de preço ou lista de serviços no início: responder de forma cordial e objetiva
     if (isListServicesQuestion(text)) {
       const listMsg = buildServicesListWithPrices(config)
-      return buildResult(cordial + listMsg, { ...nextState, step: "qualification" }, ["Quero agendar"])
+      const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+      return buildResult(`${greeting}\n\n${listMsg}`, { ...nextState, step: "qualification", last_service_options: serviceOptions })
     }
     if (isServiceDetailQuestion(text)) {
       const serviceName = findServiceFromText(text, config.services || [])
       const svc = getServiceWithPrice(config.services || [], serviceName)
       if (svc?.description) {
-        return buildResult(cordial + `${svc.name}: ${svc.description} Quer agendar?`, nextState, ["Quero agendar"])
+        return buildResult(greeting + " " + `${svc.name}: ${svc.description} Quer agendar?`, nextState, ["Quero agendar"])
       }
       if (serviceName) {
         return buildResult(
-          cordial + `Os detalhes do ${serviceName} podem ser combinados direto conosco. Quer que eu te ajude a agendar?`,
+          greeting + " " + `Os detalhes do ${serviceName} podem ser combinados direto conosco. Quer que eu te ajude a agendar?`,
           nextState,
           ["Quero agendar"]
         )
       }
     }
     if (isPriceQuestion(text)) {
+      const priceIntro = `Obrigado por entrar em contato${config.business_name ? ` com a ${config.business_name}` : ""}.`
       const serviceName = findServiceFromText(text, config.services || [])
       const svc = getServiceWithPrice(config.services || [], serviceName)
       if (serviceName && svc && svc.base_price != null) {
         nextState.slots.service = svc.name
         nextState.just_identified_service = true
         return buildResult(
-          cordial + `O ${svc.name} sai por R$ ${svc.base_price}. Quer agendar?`,
+          priceIntro + " " + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
           ["Quero agendar", "Só queria saber"]
         )
       }
       if (serviceName && svc) {
         const noPrice = buildPriceNotAvailableMessage(config, serviceName)
-        return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
+        return buildResult(priceIntro + " " + noPrice.message, nextState, noPrice.action_options)
       }
       if (!serviceName && (config.services || []).length > 0) {
         const match = await classifyServiceMatch(text, config)
         if (hasMatchContext(match) && !match.service) {
           const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, true)
-          return buildResult(`${greeting}${rejectionMessage}`, { ...nextState, step: "qualification_rejected" })
+          return buildResult(`${greeting} ${rejectionMessage}`, { ...nextState, step: "qualification_rejected" })
         }
       }
       const withPrice = (config.services || []).filter((s) => s.base_price != null)
       if (withPrice.length > 0) {
-        const lines = withPrice.map((s) => `${s.name}: R$ ${s.base_price}`).join("; ")
-        return buildResult(cordial + `Os valores são: ${lines}. Quer agendar algum?`, nextState, ["Quero agendar"])
+        const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+        nextState.last_service_options = serviceOptions
+        return buildResult(priceIntro + " " + buildServicesListWithPrices(config), nextState)
       }
       const noPrice = buildPriceNotAvailableMessage(config)
-      return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
+      return buildResult(priceIntro + " " + noPrice.message, nextState, noPrice.action_options)
     }
 
     const shouldClassify =
@@ -1021,35 +1611,87 @@ async function processSimulatorMessage(
       if (match.service) {
         nextState.slots.service = match.service
         nextState.just_identified_service = true
+        // Pergunta de preço deve responder preço primeiro, sem puxar disponibilidade.
+        if (isPriceQuestion(text)) {
+          const priced = getServiceWithPrice(config.services || [], match.service)
+          if (priced?.base_price != null) {
+            return buildResult(
+              `${greeting} O ${priced.name} está R$ ${Number(priced.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+              nextState,
+              ["Quero agendar", "Só queria saber"]
+            )
+          }
+          const noPrice = buildPriceNotAvailableMessage(config, match.service)
+          return buildResult(`${greeting} ${noPrice.message}`, nextState, noPrice.action_options)
+        }
+        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+        if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
+          nextState.pending_additional_booking = true
+          nextState.pending_attendee_name = true
+          nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
+          nextState.expected_additional_count = nextState.pending_additional_count
+        }
         const thanks = config.business_name ? `Obrigado por escolher a ${config.business_name}. ` : ""
         const intro = `${greeting}${thanks}Entendi, você precisa de ajuda com ${match.service}. `
         if (config.context_mode === "booking") {
-          const result = await resolveBooking(config, text, nextState)
-          return buildResult(`${intro}${result.message}`, result.state, result.action_options)
+          const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+          return buildResult(intro + " " + result.message, result.state, result.action_options)
         }
         if (config.context_mode === "quote") {
           return buildResult(`${intro}O que você precisa orçar?`, nextState)
         }
         return buildResult(`${intro}Você prefere agendar um horário ou pedir um orçamento?`, nextState)
-      } else if (hasContext) {
+      }
+
+      // Sem match exato: verificar se é pedido genérico + múltiplos ANTES de rejeitar
+      const orchestrator = await interpretFlowWithAI(text, history, nextState, config)
+      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+      const hasMultiple = interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple"
+      const isGenericList = orchestrator?.suggested_action === "list_services"
+      const areaMatches = areaMatchesServices(match.inferred_area, config.services || [])
+
+      // Pedido genérico ou temos serviços relacionados: listar em vez de rejeitar
+      if ((isGenericList || areaMatches) && !match.reject) {
+        const listMsg = buildServicesListWithPrices(config)
+        if (hasMultiple) {
+          nextState.pending_additional_booking = true
+          nextState.pending_attendee_name = true
+          nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
+          nextState.expected_additional_count = nextState.pending_additional_count
+          nextState.mode = "booking"
+          nextState.step = undefined
+          return buildResult(
+            `${greeting}\n\n${buildMultiBookingIntro()} ${listMsg}\n\nDe quem será o primeiro agendamento?`,
+            nextState,
+            ["Quero agendar"]
+          )
+        }
+        const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+        return buildResult(`${greeting}\n\n${listMsg}`, { ...nextState, step: "qualification", last_service_options: serviceOptions })
+      }
+
+      if (hasContext && match.reject) {
         const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, hasContext)
         return buildResult(`${greeting}${rejectionMessage}`, { ...nextState, step: "qualification_rejected" })
-      } else {
-        const orchestrator = await interpretFlowWithAI(text, history, nextState, config)
-        if (orchestrator && orchestrator.confidence >= 0.5 && orchestrator.suggested_action === "no_match_fallback") {
-          const aiAnswer = await answerWithContextualAI(config, text, history)
-          if (aiAnswer) return buildResult(`${greeting}${aiAnswer}`, { ...nextState, step: "qualification" })
-          return buildResult(`${greeting}${buildGenericFallback(config)}`, { ...nextState, step: "qualification" })
-        }
-        return buildResult(`${greeting}Como posso te ajudar hoje?`, { ...nextState, step: "qualification" })
       }
+      if (hasContext && !areaMatches) {
+        const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, hasContext)
+        return buildResult(`${greeting}${rejectionMessage}`, { ...nextState, step: "qualification_rejected" })
+      }
+
+      if (orchestrator?.confidence >= 0.5 && orchestrator.suggested_action === "no_match_fallback") {
+        const aiAnswer = await answerWithContextualAI(config, text, history)
+        if (aiAnswer) return buildResult(`${greeting}${aiAnswer}`, { ...nextState, step: "qualification" })
+        return buildResult(`${greeting}${buildGenericFallback(config)}`, { ...nextState, step: "qualification" })
+      }
+      return buildResult(greeting, { ...nextState, step: "qualification" })
     }
 
     if (isGreeting(text)) {
-      return buildResult(`${greeting}Como posso te ajudar hoje?`, { ...nextState, step: "qualification" })
+      return buildResult(greeting, { ...nextState, step: "qualification" })
     }
 
-    return buildResult(`${greeting}Como posso te ajudar hoje?`, { ...nextState, step: "qualification" })
+    return buildResult(greeting, { ...nextState, step: "qualification" })
   }
 
   if (!nextState.slots.service) {
@@ -1119,62 +1761,80 @@ async function processSimulatorMessage(
           nextState.just_identified_service = true
           nextState.step = undefined
           nextState.mode = "booking"
-          const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
+          const interpreted = await interpretAdditionalBookingsWithAI(text, {
+            has_completed_booking: false,
+            history,
+          })
           if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
             nextState.pending_additional_booking = true
             nextState.pending_attendee_name = true
             nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
             nextState.expected_additional_count = nextState.pending_additional_count
+          } else if (interpreted?.for_whom) {
+            nextState.slots.attendee_name = interpreted.for_whom
           }
           return buildResult(
-            cordial + `O ${svc.name} sai por R$ ${svc.base_price}. Quer agendar?`,
+            cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
             nextState,
             ["Quero agendar", "Só queria saber"]
           )
         }
         const withPrice = (config.services || []).filter((s) => s.base_price != null)
         if (withPrice.length > 0) {
-          const lines = withPrice.map((s) => `${s.name}: R$ ${s.base_price}`).join("; ")
           nextState.mode = "booking"
           nextState.step = undefined
-          const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
+          const interpreted = await interpretAdditionalBookingsWithAI(text, {
+            has_completed_booking: false,
+            history,
+          })
           if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
             nextState.pending_additional_booking = true
             nextState.pending_attendee_name = true
             nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
             nextState.expected_additional_count = nextState.pending_additional_count
+          } else if (interpreted?.for_whom) {
+            nextState.slots.attendee_name = interpreted.for_whom
           }
-          return buildResult(
-            getCordialPrefix(config, false) + `Os valores são: ${lines}. Quer agendar algum?`,
-            nextState,
-            ["Quero agendar"]
-          )
+          const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+          nextState.last_service_options = serviceOptions
+          return buildResult(getCordialPrefix(config, false) + " " + buildServicesListWithPrices(config), nextState)
         }
       }
       if (orchestrator.suggested_action === "list_services") {
-        const listMsg = buildServicesListWithPrices(config)
-        return buildResult(getCordialPrefix(config, false) + listMsg, { ...nextState, step: "qualification" }, ["Quero agendar"])
+        const listMsg = buildListServicesMessage(config, { intro: "after_generic" })
+        const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+        return buildResult(listMsg, { ...nextState, step: "qualification", last_service_options: serviceOptions })
       }
       if (orchestrator.suggested_action === "start_booking") {
         nextState.mode = "booking"
         nextState.step = undefined
-        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
-        if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator.inferred_attendees === "multiple" || orchestrator.inferred_attendees === "other_person") {
+        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+        if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple") {
           nextState.pending_additional_booking = true
           nextState.pending_attendee_name = true
           nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
           nextState.expected_additional_count = nextState.pending_additional_count
           return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
         }
+        if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
         const serviceFromOrchestrator = orchestrator.inferred_service ? getServiceWithPrice(config.services || [], orchestrator.inferred_service) : null
+        const msgNorm = normalizeText(text)
+        const useOrchestratorService =
+          serviceFromOrchestrator && msgNorm.includes(normalizeText(serviceFromOrchestrator.name))
         const serviceFromText = findServiceFromText(text, config.services || [])
-        const identifiedService = serviceFromOrchestrator?.name || (serviceFromText ? getServiceWithPrice(config.services || [], serviceFromText)?.name : null) || serviceFromText
+        const identifiedService =
+          (useOrchestratorService ? serviceFromOrchestrator?.name : null) ||
+          (serviceFromText ? getServiceWithPrice(config.services || [], serviceFromText)?.name : null) ||
+          serviceFromText
         if (identifiedService) {
           nextState.slots.service = identifiedService
           nextState.just_identified_service = true
-          return resolveBooking(config, text, nextState)
+          const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+          const intro = buildBookingConfirmationIntro(config)
+          return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
         }
         const prompt = buildServicePrompt(config, text)
+        nextState.last_service_options = buildServiceOptions(config.services || [])
         return buildResult(prompt.message, nextState, prompt.action_options)
       }
       if (orchestrator.suggested_action === "ask_clarification") {
@@ -1200,7 +1860,7 @@ async function processSimulatorMessage(
         nextState.just_identified_service = true
         nextState.step = undefined
         nextState.mode = "booking"
-        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
+        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
         if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
           nextState.pending_additional_booking = true
           nextState.pending_attendee_name = true
@@ -1208,30 +1868,38 @@ async function processSimulatorMessage(
           nextState.expected_additional_count = nextState.pending_additional_count
         }
         return buildResult(
-          cordial + `O ${svc.name} sai por R$ ${svc.base_price}. Quer agendar?`,
+          cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
           ["Quero agendar", "Só queria saber"]
         )
       }
+      if (!serviceName && (config.services || []).length > 0) {
+        const match = await classifyServiceMatch(text, config)
+        if (hasMatchContext(match) && !match.service) {
+          const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, true)
+          return buildResult(rejectionMessage, nextState)
+        }
+      }
       const withPrice = (config.services || []).filter((s) => s.base_price != null)
       if (withPrice.length > 0) {
-        const lines = withPrice.map((s) => `${s.name}: R$ ${s.base_price}`).join("; ")
         nextState.mode = "booking"
         nextState.step = undefined
-        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
+        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
         if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
           nextState.pending_additional_booking = true
           nextState.pending_attendee_name = true
           nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
           nextState.expected_additional_count = nextState.pending_additional_count
         }
-        return buildResult(cordial + `Os valores são: ${lines}. Quer agendar algum?`, nextState, ["Quero agendar"])
+        const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+        nextState.last_service_options = serviceOptions
+        return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
       }
     }
     if (isExplicitBookingIntent(text)) {
       nextState.mode = "booking"
       nextState.step = undefined
-      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
+      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
         nextState.pending_additional_booking = true
         nextState.pending_attendee_name = true
@@ -1239,13 +1907,15 @@ async function processSimulatorMessage(
         nextState.expected_additional_count = nextState.pending_additional_count
         return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
       }
+      if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
       const serviceFromText = findServiceFromText(text, config.services || [])
       if (serviceFromText) {
         nextState.slots.service = serviceFromText
         nextState.just_identified_service = true
-        return resolveBooking(config, text, nextState)
+        return resolveBooking(config, text, nextState, history, senderDisplayName)
       }
       const prompt = buildServicePrompt(config, text)
+      nextState.last_service_options = buildServiceOptions(config.services || [])
       return buildResult(prompt.message, nextState, prompt.action_options)
     }
     if (isDirectServiceInquiry(text) && (config.services || []).length > 0) {
@@ -1263,6 +1933,12 @@ async function processSimulatorMessage(
   }
 
   if (nextState.step === "qualification") {
+    // Detecção contextual em TODO momento: perguntas informativas (endereço, horários) ou transição para agendamento
+    const infoAnswer = tryAnswerInformationalQuestion(config, text)
+    if (infoAnswer) {
+      return buildResult(infoAnswer, nextState)
+    }
+
     const cordial = getCordialPrefix(config, isFirst)
     const n = normalizeText(text)
     const isShortDecline =
@@ -1292,63 +1968,93 @@ async function processSimulatorMessage(
           const rejectionMessage = await generateRejectionMessageWithAI(orchestrator.inferred_service, config, isFirst, true)
           return buildResult(rejectionMessage, nextState)
         }
+        if (!svc && isPriceQuestion(text) && (config.services || []).length > 0) {
+          const match = await classifyServiceMatch(text, config)
+          if (hasMatchContext(match) && !match.service) {
+            const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, isFirst, true)
+            return buildResult(rejectionMessage, nextState)
+          }
+        }
         if (svc && svc.base_price != null) {
           nextState.slots.service = svc.name
           nextState.just_identified_service = true
           nextState.step = undefined
           nextState.mode = "booking"
-          const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
-          if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator.inferred_attendees === "multiple" || orchestrator.inferred_attendees === "other_person") {
+          const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+          if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple") {
             nextState.pending_additional_booking = true
             nextState.pending_attendee_name = true
             nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
             nextState.expected_additional_count = nextState.pending_additional_count
+          } else if (interpreted?.for_whom) {
+            nextState.slots.attendee_name = interpreted.for_whom
           }
           return buildResult(
-            cordial + `O ${svc.name} sai por R$ ${svc.base_price}. Quer agendar?`,
+            cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
             nextState,
             ["Quero agendar", "Só queria saber"]
           )
         }
         const withPrice = (config.services || []).filter((s) => s.base_price != null)
         if (withPrice.length > 0) {
-          const lines = withPrice.map((s) => `${s.name}: R$ ${s.base_price}`).join("; ")
           nextState.mode = "booking"
           nextState.step = undefined
-          const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
-          if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator.inferred_attendees === "multiple" || orchestrator.inferred_attendees === "other_person") {
+          const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+          if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple") {
             nextState.pending_additional_booking = true
             nextState.pending_attendee_name = true
             nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
             nextState.expected_additional_count = nextState.pending_additional_count
+          } else if (interpreted?.for_whom) {
+            nextState.slots.attendee_name = interpreted.for_whom
           }
-          return buildResult(cordial + `Os valores são: ${lines}. Quer agendar algum?`, nextState, ["Quero agendar"])
+          const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+          nextState.last_service_options = serviceOptions
+          return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
         }
       }
       if (orchestrator.suggested_action === "list_services") {
-        const listMsg = buildServicesListWithPrices(config)
-        return buildResult(cordial + listMsg, nextState, ["Quero agendar"])
+        if (isPriceQuestion(text) && (config.services || []).length > 0) {
+          const match = await classifyServiceMatch(text, config)
+          if (hasMatchContext(match) && !match.service) {
+            const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, isFirst, true)
+            return buildResult(rejectionMessage, nextState)
+          }
+        }
+        const listMsg = buildListServicesMessage(config, { intro: "after_generic" })
+        const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+        return buildResult(listMsg, { ...nextState, last_service_options: serviceOptions })
       }
       if (orchestrator.suggested_action === "start_booking") {
         nextState.mode = "booking"
         nextState.step = undefined
-        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
-        if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator.inferred_attendees === "multiple" || orchestrator.inferred_attendees === "other_person") {
+        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+        if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple") {
           nextState.pending_additional_booking = true
           nextState.pending_attendee_name = true
           nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
           nextState.expected_additional_count = nextState.pending_additional_count
           return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
         }
+        if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
         const serviceFromOrchestrator = orchestrator.inferred_service ? getServiceWithPrice(config.services || [], orchestrator.inferred_service) : null
+        const msgNorm = normalizeText(text)
+        const useOrchestratorService =
+          serviceFromOrchestrator && msgNorm.includes(normalizeText(serviceFromOrchestrator.name))
         const serviceFromText = findServiceFromText(text, config.services || [])
-        const identifiedService = serviceFromOrchestrator?.name || (serviceFromText ? getServiceWithPrice(config.services || [], serviceFromText)?.name : null) || serviceFromText
+        const identifiedService =
+          (useOrchestratorService ? serviceFromOrchestrator?.name : null) ||
+          (serviceFromText ? getServiceWithPrice(config.services || [], serviceFromText)?.name : null) ||
+          serviceFromText
         if (identifiedService) {
           nextState.slots.service = identifiedService
           nextState.just_identified_service = true
-          return resolveBooking(config, text, nextState)
+          const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+          const intro = buildBookingConfirmationIntro(config)
+          return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
         }
         const prompt = buildServicePrompt(config, text)
+        nextState.last_service_options = buildServiceOptions(config.services || [])
         return buildResult(prompt.message, nextState, prompt.action_options)
       }
       if (orchestrator.suggested_action === "ask_clarification") {
@@ -1361,7 +2067,7 @@ async function processSimulatorMessage(
     if (isExplicitBookingIntent(text)) {
       nextState.mode = "booking"
       nextState.step = undefined
-      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
+      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
         nextState.pending_additional_booking = true
         nextState.pending_attendee_name = true
@@ -1369,18 +2075,23 @@ async function processSimulatorMessage(
         nextState.expected_additional_count = nextState.pending_additional_count
         return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
       }
+      if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
       const serviceFromText = findServiceFromText(text, config.services || [])
       if (serviceFromText) {
         nextState.slots.service = serviceFromText
         nextState.just_identified_service = true
-        return resolveBooking(config, text, nextState)
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
       }
       const prompt = buildServicePrompt(config, text)
+      nextState.last_service_options = buildServiceOptions(config.services || [])
       return buildResult(prompt.message, nextState, prompt.action_options)
     }
     if (isListServicesQuestion(text)) {
       const listMsg = buildServicesListWithPrices(config)
-      return buildResult(cordial + listMsg, nextState, ["Quero agendar"])
+      const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+      return buildResult(cordial + listMsg, { ...nextState, last_service_options: serviceOptions })
     }
     if (isPriceQuestion(text)) {
       const serviceName = findServiceFromText(text, config.services || [])
@@ -1390,15 +2101,17 @@ async function processSimulatorMessage(
         nextState.just_identified_service = true
         nextState.step = undefined
         nextState.mode = "booking"
-        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
+        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
         if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
           nextState.pending_additional_booking = true
           nextState.pending_attendee_name = true
           nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
           nextState.expected_additional_count = nextState.pending_additional_count
+        } else if (interpreted?.for_whom) {
+          nextState.slots.attendee_name = interpreted.for_whom
         }
         return buildResult(
-          cordial + `O ${svc.name} sai por R$ ${svc.base_price}. Quer agendar?`,
+          cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
           ["Quero agendar", "Só queria saber"]
         )
@@ -1418,17 +2131,20 @@ async function processSimulatorMessage(
       }
       const withPrice = (config.services || []).filter((s) => s.base_price != null)
       if (withPrice.length > 0) {
-        const lines = withPrice.map((s) => `${s.name}: R$ ${s.base_price}`).join("; ")
         nextState.mode = "booking"
         nextState.step = undefined
-        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false })
+        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
         if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
           nextState.pending_additional_booking = true
           nextState.pending_attendee_name = true
           nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
           nextState.expected_additional_count = nextState.pending_additional_count
+        } else if (interpreted?.for_whom) {
+          nextState.slots.attendee_name = interpreted.for_whom
         }
-        return buildResult(cordial + `Os valores são: ${lines}. Quer agendar algum?`, nextState, ["Quero agendar"])
+        const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+        nextState.last_service_options = serviceOptions
+        return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
       }
       const aiAnswer = await answerWithContextualAI(config, text, history)
       if (aiAnswer && /\bR\$\s*\d/.test(aiAnswer)) return buildResult(aiAnswer, nextState, ["Quero agendar", "Só queria saber"])
@@ -1494,16 +2210,8 @@ async function processSimulatorMessage(
   }
 
   if (!nextState.mode && isGreeting(text)) {
-    const business = config.business_name ? `da ${config.business_name}` : "da empresa"
-    const greeting = pickVariant(text, [
-      `Oi! Sou a assistente ${business}.`,
-      `Oi! Aqui e a assistente ${business}.`,
-      `Oi! Sou a assistente virtual ${business}.`,
-    ])
-    
-    // Se é greeting puro (sem contexto), apenas saudar e perguntar
-    // Se tem contexto na mensagem, já foi processado acima no bloco isFirst
-    return buildResult(`${greeting} Como posso te ajudar hoje?`, { ...nextState, step: "qualification" })
+    const greeting = getGreetingMessage(config)
+    return buildResult(greeting, { ...nextState, step: "qualification" })
   }
 
   if (!nextState.mode) {
@@ -1564,7 +2272,7 @@ async function processSimulatorMessage(
         nextState.slots.service = svc.name
         nextState.just_identified_service = true
         return buildResult(
-          cordial + `O ${svc.name} sai por R$ ${svc.base_price}. Quer agendar?`,
+          cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
           ["Quero agendar", "Só queria saber"]
         )
@@ -1573,10 +2281,18 @@ async function processSimulatorMessage(
         const noPrice = buildPriceNotAvailableMessage(config, serviceName)
         return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
       }
+      if (!serviceName && (config.services || []).length > 0) {
+        const match = await classifyServiceMatch(text, config)
+        if (hasMatchContext(match) && !match.service) {
+          const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, isFirst, true)
+          return buildResult(rejectionMessage, nextState)
+        }
+      }
       const withPrice = (config.services || []).filter((s) => s.base_price != null)
       if (withPrice.length > 0) {
-        const lines = withPrice.map((s) => `${s.name}: R$ ${s.base_price}`).join("; ")
-        return buildResult(cordial + `Os valores são: ${lines}. Quer agendar algum?`, nextState, ["Quero agendar"])
+        const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+        nextState.last_service_options = serviceOptions
+        return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
       }
       const noPrice = buildPriceNotAvailableMessage(config)
       return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
@@ -1584,7 +2300,8 @@ async function processSimulatorMessage(
     if (isListServicesQuestion(text)) {
       const cordial = getCordialPrefix(config, isFirst)
       const listMsg = buildServicesListWithPrices(config)
-      return buildResult(cordial + listMsg, nextState, ["Quero agendar"])
+      const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+      return buildResult(cordial + listMsg, { ...nextState, last_service_options: serviceOptions })
     }
     if (isServiceDetailQuestion(text)) {
       const cordial = getCordialPrefix(config, isFirst)
@@ -1602,10 +2319,10 @@ async function processSimulatorMessage(
       }
     }
     if (isFirst && !isGreeting(text)) {
-      const result = await resolveBooking(config, text, nextState)
+      const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
       return buildResult(result.message, result.state, result.action_options)
     }
-    return await resolveBooking(config, text, nextState)
+    return await resolveBooking(config, text, nextState, history, senderDisplayName)
   }
 
   return resolveQuote(config, text, nextState)
@@ -1698,6 +2415,19 @@ async function getOrCreateConversation(
       .maybeSingle()
     if (existing) return existing
   }
+
+  // Sem conversation_id (ex.: WhatsApp): reutilizar conversa aberta do mesmo contato/canal para manter estado igual ao simulador
+  const { data: existingRows } = await supabaseAdmin
+    .from("conversation")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("channel_id", channelId)
+    .eq("contact_id", contactId)
+    .eq("status", "open")
+    .order("last_message_at", { ascending: false })
+    .limit(1)
+  const existingByContact = Array.isArray(existingRows) ? existingRows[0] : null
+  if (existingByContact) return existingByContact
 
   const { data, error } = await supabaseAdmin
     .from("conversation")
@@ -1793,6 +2523,29 @@ serve(async (req) => {
     const contact = await getOrCreateContact(supabaseAdmin, tenant.id, channel.id, sessionIdForContact, config.business_name)
     const conversation = await getOrCreateConversation(supabaseAdmin, tenant.id, channel.id, contact.id, agentId, body.conversation_id)
 
+    // Comando para encerrar/reiniciar a conversa (testes): zera o estado e responde que pode começar de novo
+    if (isEndTestCommand(body.message)) {
+      const resetState = createSimulatorState()
+      const nowIso = new Date().toISOString()
+      const replyText = "Conversa encerrada. Quando quiser, é só mandar uma mensagem para começar de novo."
+      await supabaseAdmin.from("conversation_messages").insert([
+        { tenant_id: tenant.id, conversation_id: conversation.id, role: "user", content_text: body.message, metadata: { channel: channelType } },
+        { tenant_id: tenant.id, conversation_id: conversation.id, role: "assistant", content_text: replyText, metadata: { channel: channelType } },
+      ])
+      await supabaseAdmin
+        .from("conversation")
+        .update({
+          state_json: { state: resetState, channel: channelType },
+          last_message_at: nowIso,
+        })
+        .eq("id", conversation.id)
+        .eq("tenant_id", tenant.id)
+      return json({
+        conversation_id: conversation.id,
+        messages: [{ role: "assistant", content: replyText, created_at: nowIso, action_options: undefined }],
+      })
+    }
+
     // Verificar se é a primeira mensagem da conversa
     const { count: messageCount } = await supabaseAdmin
       .from("conversation_messages")
@@ -1801,7 +2554,65 @@ serve(async (req) => {
       .eq("role", "user")
     const isFirstMessage = (messageCount || 0) === 0
 
-    const currentState = (conversation.state_json?.state as SimulatorState) || createSimulatorState()
+    const stateFromConversation = (conversation.state_json?.state as SimulatorState) || createSimulatorState()
+
+    const mergeBookedSlots = (
+      base?: Record<string, Record<string, string[]>>,
+      extra?: Record<string, Record<string, string[]>>
+    ): Record<string, Record<string, string[]>> => {
+      const merged: Record<string, Record<string, string[]>> = {}
+      const sources = [base || {}, extra || {}]
+      for (const src of sources) {
+        for (const staffKey of Object.keys(src)) {
+          if (!merged[staffKey]) merged[staffKey] = {}
+          const byDate = src[staffKey] || {}
+          for (const dateIso of Object.keys(byDate)) {
+            const existing = new Set(merged[staffKey][dateIso] || [])
+            for (const t of byDate[dateIso] || []) existing.add(t)
+            merged[staffKey][dateIso] = Array.from(existing).sort()
+          }
+        }
+      }
+      return merged
+    }
+
+    const toBusinessDateTime = (value: string): { dateIso: string; time: string } => {
+      const dt = new Date(value)
+      return {
+        dateIso: dt.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }),
+        time: dt.toLocaleTimeString("pt-BR", {
+          timeZone: "America/Sao_Paulo",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }),
+      }
+    }
+
+    // Hidrata agenda ocupada real para filtrar horários indisponíveis (além dos slots deste turno).
+    const todayIso = getTodayIsoBusinessTz()
+    const { data: appointmentRows, error: appointmentRowsError } = await supabaseAdmin
+      .from("appointment")
+      .select("staff_name, start_at, status")
+      .eq("tenant_id", tenant.id)
+      .eq("agent_id", agentId)
+      .neq("status", "cancelled")
+      .gte("start_at", `${todayIso}T00:00:00.000-03:00`)
+      .limit(3000)
+    if (appointmentRowsError) {
+      console.error("appointment hydration error:", appointmentRowsError)
+    }
+    let persistedBookedSlots: Record<string, Record<string, string[]>> = {}
+    for (const row of (appointmentRows || []) as Array<{ staff_name?: string | null; start_at?: string | null }>) {
+      if (!row?.staff_name || !row?.start_at) continue
+      const { dateIso, time } = toBusinessDateTime(row.start_at)
+      persistedBookedSlots = addBookedSlot(persistedBookedSlots, row.staff_name, dateIso, time)
+    }
+
+    const currentState: SimulatorState = {
+      ...stateFromConversation,
+      booked_slots: mergeBookedSlots(persistedBookedSlots, stateFromConversation.booked_slots),
+    }
     const stateWithFirstFlag = { ...currentState, _isFirstMessage: isFirstMessage }
 
     const { data: recentMessages } = await supabaseAdmin
@@ -1815,9 +2626,41 @@ serve(async (req) => {
       content: (m.content_text || "").trim(),
     }))
 
+    // WhatsApp: janela de 24h sem interação encerra (só templates depois). Avisar se inatividade próxima do limite.
+    const SESSION_WARN_HOURS = 18
+    const SESSION_WINDOW_HOURS = 24
+    let sessionExpiryWarning: string | null = null
+    if (channelType === "whatsapp") {
+      const { data: lastUserRows } = await supabaseAdmin
+        .from("conversation_messages")
+        .select("created_at")
+        .eq("conversation_id", conversation.id)
+        .eq("role", "user")
+        .order("created_at", { ascending: false })
+        .limit(1)
+      const lastUserMsg = Array.isArray(lastUserRows) ? lastUserRows[0] : null
+      const lastAt = lastUserMsg?.created_at
+      if (lastAt) {
+        const lastMs = new Date(lastAt).getTime()
+        const nowMs = Date.now()
+        const hoursSince = (nowMs - lastMs) / (60 * 60 * 1000)
+        if (hoursSince >= SESSION_WARN_HOURS && hoursSince < SESSION_WINDOW_HOURS) {
+          const hoursLeft = Math.max(0.5, Math.floor((SESSION_WINDOW_HOURS - hoursSince) * 10) / 10)
+          const nome = (currentState as SimulatorState).slots?.customer_name
+            || (currentState as SimulatorState).slots?.attendee_name
+            || contact?.display_name
+            || ""
+          const nomePart = nome ? `Oi ${nome}, ` : "Oi, "
+          sessionExpiryWarning =
+            `${nomePart}ainda está aí? Esta conversa vai encerrar em cerca de ${hoursLeft} hora(s) se não houver mais interação.`
+        }
+      }
+    }
+
+    const senderDisplayName = (body as { sender_display_name?: string }).sender_display_name?.trim() || undefined
     let result: SimulatorResult
     try {
-      result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history)
+      result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName)
     } catch (err) {
       console.error("processSimulatorMessage error:", err)
       result = {
@@ -1827,6 +2670,9 @@ serve(async (req) => {
       }
     }
     const rewritten = await rewriteWithTone(result.message, config.tone)
+    const finalMessage = sessionExpiryWarning
+      ? `${sessionExpiryWarning}\n\n${rewritten.message}`
+      : rewritten.message
 
     const nowIso = new Date().toISOString()
 
@@ -1842,7 +2688,7 @@ serve(async (req) => {
         tenant_id: tenant.id,
         conversation_id: conversation.id,
         role: "assistant",
-        content_text: rewritten.message,
+        content_text: finalMessage,
         metadata: {
           channel: channelType,
           tone: config.tone,
@@ -1884,11 +2730,14 @@ serve(async (req) => {
         const time = (b as { time?: string }).time
         const service = (b as { service?: string }).service
         if (!date || !time || !staffName) continue
-        const startAt = `${date}T${time}:00.000Z`
+        // Horário é em hora local do negócio (Brasil). Usar -03:00 para que 15:30 local = 18:30 UTC
+        // (evita bug onde 15:30 era armazenado como UTC e exibia 12:30 no calendário)
+        const startAt = `${date}T${time}:00.000-03:00`
         const duration = getServiceDurationMinutes(config, service) ?? 30
         const endAt = new Date(Date.parse(startAt) + duration * 60 * 1000).toISOString()
         const { error: insErr } = await supabaseAdmin.from("appointment").insert({
           tenant_id: tenantIdForAppointment,
+          agent_id: agentId,
           attendee_name: (b as { attendee_name?: string }).attendee_name ?? null,
           staff_name: staffName,
           service_names: service ? [service] : [],
@@ -1905,7 +2754,7 @@ serve(async (req) => {
       messages: [
         {
           role: "assistant",
-          content: rewritten.message,
+          content: finalMessage,
           created_at: nowIso,
           action_options: result.action_options,
         },

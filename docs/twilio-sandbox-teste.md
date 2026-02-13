@@ -98,6 +98,32 @@ Se você reiniciar o ngrok, a URL pode mudar (plano gratuito); aí basta atualiz
 
 ---
 
+## 6. Opções (botões) no WhatsApp
+
+No **simulador**, as respostas podem vir com botões (datas, dias, serviços, "Quero agendar", etc.). No WhatsApp hoje:
+
+- **Comportamento atual:** as mesmas opções são enviadas **em texto** no final da mensagem, por exemplo:
+  - _Opções (responda com o texto):_
+  - • Quero agendar
+  - • Só queria saber  
+  O usuário responde digitando o texto da opção (ex.: "Quero agendar"); o fluxo interpreta igual ao simulador.
+
+- **Botões nativos (futuro):** a Twilio suporta **Quick Reply** (até 3 botões na sessão) e **List** (até 10 itens) via **Content Template Builder** e envio com `ContentSid`. Exige criar e, em alguns casos, aprovar templates no Console Twilio. Quando quiser usar botões nativos, crie um template do tipo `twilio/quick-reply` ou `twilio/list-picker` e adapte o webhook para enviar com Content API em vez de só `Body`.
+
+---
+
+## 7. Encerrar / reiniciar conversa (testes)
+
+Para **reiniciar o atendimento** e testar do zero (WhatsApp ou simulador), envie uma destas mensagens:
+
+- **encerrar** ou **encerrar teste**
+- **reiniciar** ou **resetar**
+- **encerrar conversa** ou **reiniciar conversa**
+
+O agente responde: *"Conversa encerrada. Quando quiser, é só mandar uma mensagem para começar de novo."* e o estado da conversa é zerado. A próxima mensagem inicia o fluxo do início (saudação, etc.).
+
+---
+
 ## Resumo do fluxo
 
 1. Usuário envia mensagem no WhatsApp para o número do sandbox.

@@ -42,9 +42,24 @@ export function isFinalizedState(state: SimulatorState): boolean {
   return last.includes("agendamento") && last.includes("confirmad")
 }
 
+/** Comando para encerrar/reiniciar a conversa (testes). Ex.: "encerrar", "encerrar teste", "reiniciar" */
+export function isEndTestCommand(text: string): boolean {
+  const msg = normalizeText(text)
+  return /^(encerrar|encerrar teste|reiniciar teste|encerrar conversa|reiniciar conversa|resetar|reiniciar)$/.test(msg) ||
+    /^encerrar (a )?conversa$/.test(msg)
+}
+
 export function isPriceQuestion(text: string): boolean {
   const msg = normalizeText(text)
-  return /(quanto custa|preco|preço|valor|quanto fica|quanto e|quanto é|quais os precos|quais os preços|quanto sao|quanto são)/.test(msg)
+  return (
+    /(quanto custa|preco|preço|valor|quanto fica|quanto e|quanto é|quais os precos|quais os preços|quanto sao|quanto são)/.test(msg) ||
+    /\bquanto\s+ta\b/.test(msg) ||
+    /\bquanto\s+tá\b/.test(msg) ||
+    /\bqual\s+o\s+valor\b/.test(msg) ||
+    /\bvalor\s+do\b/.test(msg) ||
+    /\bpreco\s+do\b/.test(msg) ||
+    /\bpreço\s+do\b/.test(msg)
+  )
 }
 
 export function isListServicesQuestion(text: string): boolean {
@@ -55,6 +70,16 @@ export function isListServicesQuestion(text: string): boolean {
 export function isServiceDetailQuestion(text: string): boolean {
   const msg = normalizeText(text)
   return /(o que inclui|o que e |o que é |me fala do servico|detalhe do |como e o |como é o )/.test(msg)
+}
+
+/** Resposta direta ao pedido "Qual o nome dele(a)?". Ex: "Cesar", "João", "Maria Silva". */
+export function looksLikeAttendeeName(text: string): boolean {
+  const t = text.trim()
+  if (t.length < 2 || t.length > 40) return false
+  const msg = normalizeText(t)
+  const relationshipWords = /(meu|minha|marido|filho|esposa|conjuge|cônjuge|filha|mae|mãe|pai|sogra|sogro)/
+  if (relationshipWords.test(msg)) return false
+  return /^[a-zà-ú\s\-]+$/.test(msg) && msg.replace(/\s/g, "").length >= 2
 }
 
 export function isExplicitBookingIntent(text: string): boolean {

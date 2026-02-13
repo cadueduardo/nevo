@@ -60,6 +60,7 @@ export default function AgentDetailPage() {
   const searchParams = useSearchParams()
   const agentId = params.agentId as string
   const tabParam = searchParams.get('tab')
+  const pendingParam = searchParams.get('pending')
   const [tab, setTab] = React.useState<TabValue>(() => parseTab(tabParam))
   const [data, setData] = React.useState<AgentDetailBootstrap | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -97,6 +98,10 @@ export default function AgentDetailPage() {
     url.searchParams.set('tab', value)
     window.history.replaceState({}, '', url.pathname + url.search)
   }, [])
+
+  const openWhatsappConfig = React.useCallback(() => {
+    handleTabChange('canais')
+  }, [handleTabChange])
 
   const handleSaveBasic = React.useCallback(
     async (payload: {
@@ -282,6 +287,23 @@ export default function AgentDetailPage() {
             )}
           </div>
         </div>
+
+        {agent.status === 'draft' && (
+          <Card className="mt-4 border-amber-500/40 bg-amber-500/5">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Configuração pendente</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Este agente está em rascunho e aguardando finalização da configuração do WhatsApp.
+                {pendingParam === 'whatsapp' ? ' Finalize a conexão para começar a receber mensagens reais.' : ''}
+              </p>
+              <Button size="sm" variant="outline" onClick={openWhatsappConfig}>
+                Conectar WhatsApp
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         <Tabs value={tab} onValueChange={handleTabChange} className="mt-6">
           <TabsList className="flex flex-wrap gap-1 h-auto p-1 bg-muted/50">

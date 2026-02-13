@@ -1,0 +1,71 @@
+# Evolution API - docker-compose para uso local com Nevo
+# Uso: docker compose -f docker-compose.evolution.yaml up -d
+# API: http://localhost:8080  |  Manager: http://localhost:8080/manager
+#
+# NOTA: atendai/evolution-api tem bug conhecido (count:0 sem QR, RESTART 404).
+# Este compose usa evoapicloud (imagem oficial/mantida do repositório EvolutionAPI).
+
+services:
+  evolution-api:
+    # Imagem oficial do repositório EvolutionAPI (evoapicloud). atendai tem bugs de QR Code.
+    image: evoapicloud/evolution-api:latest
+    container_name: evolution_api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - evolution-redis
+      - evolution-postgres
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - evolution-net
+    environment:
+      SERVER_URL: http://localhost:8080
+      AUTHENTICATION_API_KEY: evonevo2025
+      # Phone version: corrige QR Code não gerando (count:0). Obtenha a versão atual em:
+      # https://web.whatsapp.com/check-update?version=0&platform=web (campo "currentVersion")
+      CONFIG_SESSION_PHONE_VERSION: "2.2413.51"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution123@evolution-postgres:5432/evolution_api
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379
+      LANGUAGE: pt-BR
+      LOG_LEVEL: ERROR,WARN,DEBUG,INFO
+      # Proxy opcional: se count:0 persistir, alguns usuários relatam que proxy resolve.
+      # Descomente e preencha se tiver um proxy HTTP disponível:
+      # PROXY_HOST: seu-proxy.exemplo.com
+      # PROXY_PORT: "8080"
+      # PROXY_PROTOCOL: http
+
+  evolution-redis:
+    image: redis:7-alpine
+    container_name: evolution_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - evolution_redis:/data
+    networks:
+      - evolution-net
+
+  evolution-postgres:
+    image: postgres:15-alpine
+    container_name: evolution_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: evolution_api
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution123
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+    networks:
+      - evolution-net
+
+volumes:
+  evolution_instances:
+  evolution_redis:
+  evolution_postgres_data:
+
+networks:
+  evolution-net:
+    driver: bridge

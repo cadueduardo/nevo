@@ -69,19 +69,29 @@ export interface SimulatorState {
   pending_additional_count?: number
   pending_attendee_name?: boolean
   pending_template_choice?: boolean
+  /** Segundo agendamento: após "mesmo dia e colaborador", esperando cliente escolher serviço. */
+  pending_second_service_choice?: boolean
   pending_default_service?: string
   pending_default_service_locked?: boolean
   expected_additional_count?: number
   pending_final_confirmation?: boolean
   final_thanks_sent?: boolean
   completed_bookings?: Array<{ attendee_name?: string; service?: string; date?: string; time?: string }>
-  last_booking?: { service?: string; date?: string; time?: string; staff_name?: string }
+  last_booking?: { attendee_name?: string; service?: string; date?: string; time?: string; staff_name?: string }
   pending_contact_field?: "name" | "phone" | "email" | "contact_preference"
   contact_preference?: "phone" | "email" | "both"
   last_prompt?: string
   last_time_options?: string[]
   last_time_options_date?: string
   last_time_options_staff?: string
+  /** Últimas opções de template exibidas (para resolver "1", "2" por número). */
+  last_template_options?: string[]
+  /** Últimas opções de confirmação (ex: "1 - Sim, 15:30"). Resposta "1" = confirmar. */
+  last_confirm_options?: string[]
+  /** Últimas opções de serviço (para resolver "1", "2" por número). */
+  last_service_options?: string[]
+  /** Últimas opções exibidas no turno (fallback genérico para resolver respostas numéricas como "1 - Quero agendar"). */
+  last_action_options?: string[]
   booked_slots?: Record<string, Record<string, string[]>>
   slots: {
     staff_name?: string
@@ -113,6 +123,8 @@ export interface ConversationTurnRequest {
   channel?: "web_simulator" | "whatsapp"
   /** Para channel=whatsapp: número do remetente (ex: whatsapp:+5511999999999). Usado como session_id/contact external_id. */
   from?: string
+  /** Nome de exibição do remetente (ex: pushName do WhatsApp). Usado para evitar que a IA confunda quem agenda com quem recebe o serviço. */
+  sender_display_name?: string
   context?: {
     business_name?: string
     business_type?: string

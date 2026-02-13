@@ -1,9 +1,9 @@
 // @ts-nocheck
 /** Detecção e resposta para perguntas informativas (endereço, horários, ramos/serviços).
  * Permite que o usuário pergunte dados do cadastro mesmo após a conversa finalizada. */
-import { normalizeText } from "./utils.ts"
+import { normalizeText, formatDatePt } from "./utils.ts"
 import { buildServicesListWithPrices } from "./builders.ts"
-import type { SimulatorConfig, EstablishmentAddress } from "./types.ts"
+import type { SimulatorConfig, EstablishmentAddress, SimulatorState } from "./types.ts"
 
 const DAY_NAMES: Record<string, string> = {
   sunday: "domingo",
@@ -36,8 +36,48 @@ export function isAddressQuestion(text: string): boolean {
   )
 }
 
-/** Detecta perguntas sobre horários de funcionamento. */
+/**
+ * Detecta perguntas sobre a marcação/agendamento do próprio cliente (ex: "qual o dia e horário que foi marcado?").
+ * Deve ter prioridade sobre isScheduleQuestion para não responder com horário de funcionamento.
+ */
+export function isMyBookingQuestion(text: string): boolean {
+  const msg = normalizeText(text)
+  return (
+    /\b(dia\s+e\s+horario|dia\s+e\s+horário|dia\s*e\s*horario|dia\s*e\s*horário)\s+(que\s+)?(foi\s+)?marcado/.test(msg) ||
+    /\b(qual\s+)?(dia\s+e\s+horario|dia\s+e\s+horário)\s*(mesmo)?\b/.test(msg) ||
+    /\b(qual\s+e\s+o\s+(dia|horario|horário)|qual\s+e\s+mesmo\s+o\s+(dia|horario|horário))/.test(msg) ||
+    /\b(minha\s+marcação|minha\s+marcacao|meu\s+agendamento|meu\s+horario|meu\s+horário)\b/.test(msg) ||
+    /\b(que\s+(dia|horario|horário)\s+(foi\s+)?marcou|quando\s+(foi\s+)?marcado|quando\s+agendei)\b/.test(msg) ||
+    /\b(foi\s+marcado\s+(para\s+)?(qual|que)|marcou\s+(para\s+)?(qual|que)\s+(dia|horario|horário))\b/.test(msg)
+  )
+}
+
+/** Retorna a resposta com os dados do agendamento do cliente, ou null se não houver. */
+export function getMyBookingAnswer(state: SimulatorState): string | null {
+  const bookings = state.completed_bookings ?? []
+  const slots = state.slots
+  if (bookings.length > 0) {
+    const lines = bookings.map((b) => {
+      const service = b.service || "atendimento"
+      const date = b.date ? formatDatePt(b.date) : "?"
+      const time = b.time || "?"
+      const staff = (b as { staff_name?: string }).staff_name ? ` com ${(b as { staff_name?: string }).staff_name}` : ""
+      return `• ${service}: ${date} às ${time}${staff}`
+    })
+    return `Seu(s) agendamento(s):\n${lines.join("\n")}\n\nPrecisa de mais alguma coisa?`
+  }
+  if (slots?.date && slots?.time && slots?.service) {
+    const date = formatDatePt(slots.date)
+    const time = slots.time
+    const staff = slots.staff_name ? ` com ${slots.staff_name}` : ""
+    return `Seu agendamento: ${slots.service} em ${date} às ${time}${staff}. Precisa de mais alguma coisa?`
+  }
+  return null
+}
+
+/** Detecta perguntas sobre horários de funcionamento (NÃO sobre a marcação do cliente). */
 export function isScheduleQuestion(text: string): boolean {
+  if (isMyBookingQuestion(text)) return false
   const msg = normalizeText(text)
   return (
     /\b(horario|horários|horarios|funcionamento|funcionam|atendem)\b/.test(msg) ||

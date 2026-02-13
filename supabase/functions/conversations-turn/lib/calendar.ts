@@ -110,8 +110,13 @@ export async function buildFinalBookingMessage(options: {
         })
       : null
   const calendarUrl = calendarIcs ? await uploadCalendarIcs(calendarIcs) : null
-  const baseMessage =
+  let message =
     `Perfeito! Seu agendamento de ${finalService}${staff} ficou confirmado para ${date} às ${hour}. ` +
     "Se precisar de algo, estou à disposição."
-  return { message: baseMessage, calendar_url: calendarUrl }
+  if (calendarUrl) {
+    message +=
+      "\n\nSe quiser, pode acessar o link abaixo e inserir este compromisso no seu calendário:\n" +
+      calendarUrl
+  }
+  return { message, calendar_url: calendarUrl }
 }

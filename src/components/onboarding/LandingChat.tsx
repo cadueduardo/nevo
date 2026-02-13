@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { ChatShell, type Message } from '@/components/shared/ChatShell'
 import { clearSessionId, getOrCreateSessionId } from '@/lib/onboarding/session'
 import { restoreOnboardingSession } from '@/lib/onboarding/restore'
@@ -59,6 +59,8 @@ function parseSummaryEditableItemsFromText(text: string) {
 
 export function LandingChat() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const isNewAgentOnboarding = searchParams.get('newAgent') === '1'
   const [sessionId, setSessionId] = useState<string>('')
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -70,11 +72,13 @@ export function LandingChat() {
   const [isSimulatorLoading, setIsSimulatorLoading] = useState(false)
   const [simulatorConversationId, setSimulatorConversationId] = useState<string | null>(null)
   const [authChoicePending, setAuthChoicePending] = useState(false)
+  const [configuredAgentRedirect, setConfiguredAgentRedirect] = useState<string | null>(null)
   const [signupError, setSignupError] = useState<string | null>(null)
   const [focusTrigger, setFocusTrigger] = useState(0)
   const [simulatorFocusTrigger, setSimulatorFocusTrigger] = useState(0)
   const supabase = useMemo(() => createClient(), [])
   const retriedCompletedSessionRef = useRef(false)
+  const migrationCompletedRef = useRef(false)
   /** Credenciais do último signup bem-sucedido; usadas ao clicar "Acessar minha área". */
   const lastSignupCredentialsRef = useRef<{ email: string; password: string } | null>(null)
 
@@ -233,6 +237,73 @@ export function LandingChat() {
       // Se backend pedir signup: manter apenas a mensagem do backend (Criar conta, Tenho conta, Continuar depois).
       // Não adicionar bloco duplicado — "Criar conta" abre o formulário direto (Google + email/senha).
       if (response.requires_action === 'signup') {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          let nextPath = '/app'
+          if (!migrationCompletedRef.current) {
+            const migrateResponse = await fetch('/api/onboarding/migrate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sessionId, new_agent: isNewAgentOnboarding }),
+            })
+            if (migrateResponse.ok) {
+              migrationCompletedRef.current = true
+              const migrateData = await migrateResponse.json().catch(() => ({}))
+              nextPath =
+                typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
+                  ? (migrateData as { redirect_to: string }).redirect_to
+                  : '/app'
+              setConfiguredAgentRedirect(nextPath)
+            } else {
+              const err = await migrateResponse.json().catch(() => ({}))
+              const fallbackName =
+                (response.extracted_data as { business_name?: string } | undefined)?.business_name ||
+                onboardingData.business_name ||
+                'novo agente'
+              const failMessage: Message = {
+                id: (Date.now() + 2).toString(),
+                role: 'assistant',
+                kind: 'text',
+                content:
+                  (err as { error?: string }).error ||
+                  `Você já está logado. Não consegui concluir o agente ${fallbackName} agora. Tente novamente em instantes.`,
+                timestamp: new Date(),
+                actionOptions: ['Simular atendimento'],
+              }
+              setMessages((prev) => {
+                const base = [...prev]
+                if (base.length > 0 && base[base.length - 1]?.id === assistantMessage.id) base.pop()
+                return [...base, failMessage]
+              })
+              setAuthChoicePending(false)
+              return
+            }
+          }
+
+          const fallbackName =
+            (response.extracted_data as { business_name?: string } | undefined)?.business_name ||
+            onboardingData.business_name ||
+            'novo agente'
+          const doneMessage: Message = {
+            id: (Date.now() + 2).toString(),
+            role: 'assistant',
+            kind: 'text',
+            content: `Seu agente ${fallbackName} foi configurado. O que você prefere fazer?`,
+            timestamp: new Date(),
+            actionOptions: ['Simular atendimento', 'Configurar Agente'],
+          }
+          setMessages((prev) => {
+            const base = [...prev]
+            if (base.length > 0 && base[base.length - 1]?.id === assistantMessage.id) base.pop()
+            return [...base, doneMessage]
+          })
+          setIsSimulatorAvailable(true)
+          setAuthChoicePending(false)
+          setCurrentStep('completed')
+          if (!configuredAgentRedirect) setConfiguredAgentRedirect(nextPath)
+          return
+        }
+
         setAuthChoicePending(true)
         // Se usuário digitou "criar" ou "tenho conta" e backend pediu uso do formulário, exibir o card
         const lowerContent = content.toLowerCase()
@@ -251,6 +322,31 @@ export function LandingChat() {
       if (response.next_step === 'completed' && currentStep !== 'completed') {
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
+          if (isNewAgentOnboarding && !migrationCompletedRef.current) {
+            migrationCompletedRef.current = true
+            const migrateResponse = await fetch('/api/onboarding/migrate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sessionId, new_agent: true }),
+            })
+            if (!migrateResponse.ok) {
+              const err = await migrateResponse.json().catch(() => ({}))
+              appendAssistant(
+                (err as { error?: string }).error ||
+                'Concluímos o onboarding, mas não consegui criar o novo agente agora.'
+              )
+              migrationCompletedRef.current = false
+              return
+            }
+            const migrateData = await migrateResponse.json().catch(() => ({}))
+            const nextPath =
+              typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
+                ? (migrateData as { redirect_to: string }).redirect_to
+                : '/app'
+            router.push(nextPath)
+            router.refresh()
+            return
+          }
           router.push('/app')
           router.refresh()
         }
@@ -414,16 +510,22 @@ export function LandingChat() {
       const migrateResponse = await fetch('/api/onboarding/migrate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId }),
+        body: JSON.stringify({ session_id: sessionId, new_agent: isNewAgentOnboarding }),
       })
       if (!migrateResponse.ok) {
         const err = await migrateResponse.json()
         appendAssistant(err.error || 'Entrei na sua conta, mas não consegui salvar o onboarding agora.')
         return
       }
+      migrationCompletedRef.current = true
+      const migrateData = await migrateResponse.json().catch(() => ({}))
+      const nextPath =
+        typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
+          ? (migrateData as { redirect_to: string }).redirect_to
+          : '/app'
       setMessages((prev) => prev.filter((m) => m.kind !== 'login'))
       setAuthChoicePending(false)
-      router.push('/app')
+      router.push(nextPath)
       router.refresh()
     } catch {
       appendAssistant('Não consegui entrar agora. Pode tentar novamente?')
@@ -475,12 +577,48 @@ export function LandingChat() {
       try {
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
+          if (isNewAgentOnboarding && !migrationCompletedRef.current) {
+            const migrateResponse = await fetch('/api/onboarding/migrate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sessionId, new_agent: true }),
+            })
+            if (migrateResponse.ok) {
+              migrationCompletedRef.current = true
+              const migrateData = await migrateResponse.json().catch(() => ({}))
+              const nextPath =
+                typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
+                  ? (migrateData as { redirect_to: string }).redirect_to
+                  : '/app'
+              router.push(nextPath)
+              router.refresh()
+              return
+            }
+          }
           router.push('/app')
           router.refresh()
           return
         }
         const { error } = await supabase.auth.signInWithPassword({ email: cred.email, password: cred.password })
         if (!error) {
+          if (isNewAgentOnboarding && !migrationCompletedRef.current) {
+            const migrateResponse = await fetch('/api/onboarding/migrate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sessionId, new_agent: true }),
+            })
+            if (migrateResponse.ok) {
+              migrationCompletedRef.current = true
+              const migrateData = await migrateResponse.json().catch(() => ({}))
+              const nextPath =
+                typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
+                  ? (migrateData as { redirect_to: string }).redirect_to
+                  : '/app'
+              router.push(nextPath)
+              router.refresh()
+              return
+            }
+          }
           router.push('/app')
           router.refresh()
         } else {
@@ -495,6 +633,12 @@ export function LandingChat() {
       if (lastSignupCredentialsRef.current) lastSignupCredentialsRef.current = null
       enableSimulator()
       setIsSimulatorOpen(true)
+      return
+    }
+    if (action === 'Configurar Agente') {
+      const target = configuredAgentRedirect || '/app/agentes'
+      router.push(target)
+      router.refresh()
       return
     }
     if (authChoicePending) {

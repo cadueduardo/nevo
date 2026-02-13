@@ -7,7 +7,26 @@ export function createSimulatorState(): SimulatorState {
 }
 
 export function buildResult(message: string, state: SimulatorState, actionOptions?: string[]): SimulatorResult {
-  return { message, state: { ...state, last_prompt: message }, action_options: actionOptions }
+  const normalizedOptions = Array.isArray(actionOptions)
+    ? actionOptions.map((opt, idx) => {
+        const value = String(opt || "").trim()
+        if (!value) return value
+        // Evita quebrar opções técnicas (ex: open_url|...)
+        if (/^[a-z_]+\|/i.test(value)) return value
+        // Evita duplicar numeração caso já venha "1 - ..."
+        if (/^\d+\s*-\s+/.test(value)) return value
+        return `${idx + 1} - ${value}`
+      })
+    : actionOptions
+  return {
+    message,
+    state: {
+      ...state,
+      last_prompt: message,
+      last_action_options: Array.isArray(normalizedOptions) && normalizedOptions.length > 0 ? normalizedOptions : undefined,
+    },
+    action_options: normalizedOptions,
+  }
 }
 
 export function resetSlotsForNextBooking(state: SimulatorState): SimulatorState["slots"] {

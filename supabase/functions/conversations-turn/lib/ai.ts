@@ -83,7 +83,7 @@ REGRAS:
 - Responda de forma natural e humana, como se estivesse numa conversa real.
 - CONSULTE OS DADOS ACIMA: use apenas as informações que estão no config. Nunca invente serviços, áreas ou ofertas.
 - CRÍTICO: O negócio atende SOMENTE as áreas/serviços listados. Se o cliente pedir algo FORA dessas áreas, responda com empatia mas diga claramente que não atuamos, explique quais áreas atendemos e pergunte se precisa de ajuda em alguma delas. NUNCA ofereça agendar para área que não está na lista.
-- PREÇOS: Se um serviço tem valor em "R$ X" nos dados, o cliente está perguntando o preço e você DEVE informar esse valor. NUNCA diga "não tenho os valores" se o preço está nos dados. Ex.: "Corte masculino — R$ 50" = quando perguntarem, diga "O corte masculino sai por R$ 50".
+- PREÇOS: Se um serviço tem valor em "R$ X" nos dados, o cliente está perguntando o preço e você DEVE informar esse valor. NUNCA diga "não tenho os valores" se o preço está nos dados. Use o nome exato do serviço do config ao informar.
 - Seja objetiva e prestativa.
 - Se não tiver a informação que ele pediu, diga com naturalidade.
 - Mantenha o tom profissional mas cordial.
@@ -157,9 +157,12 @@ Fluxos disponíveis:
 
 REGRAS:
 - Se o cliente PERGUNTOU preço (quanto custa, valor, etc.), retorne suggested_action: "answer_price". NUNCA pule para start_booking.
-- Se o cliente fez pergunta DIRETA sobre serviço que não oferecemos (ex: "não tem corte feminino?", "tem X?") NUNCA retorne ask_clarification com "não ficou claro". Use no_match_fallback ou considere que a intenção é saber se oferecemos - a resposta deve explicar o que oferecemos.
-- inferred_service: se a mensagem menciona um serviço/tema específico, retorne o que o cliente pediu (ex: "corte feminino"). Se houver match exato com a lista, use o nome da lista. Assim podemos verificar se oferecemos ou não.
-- Se o histórico indica que o cliente perguntou sobre X antes e agora pergunta sobre Y (ex: perguntou feminino, depois masculino), considere inferred_attendees: "other_person" ou "multiple".
+- Se o cliente fez pergunta DIRETA sobre serviço que não oferecemos (ex: "não tem X?", "tem Y?") NUNCA retorne ask_clarification com "não ficou claro". Use no_match_fallback ou considere que a intenção é saber se oferecemos - a resposta deve explicar o que oferecemos.
+- PEDIDO GENÉRICO vs ESPECÍFICO (muito importante):
+  * Se o cliente expressou vontade de forma GENÉRICA (ex: "quero um atendimento", "preciso de um serviço", "quero agendar algo") sem citar o nome exato de um serviço da lista, retorne suggested_action: "list_services" e NÃO preencha inferred_service. O sistema vai mostrar todas as opções para o cliente ESCOLHER.
+  * Só retorne suggested_action: "start_booking" com inferred_service quando o cliente tiver mencionado um serviço ESPECÍFICO da lista. NUNCA assuma um serviço específico só porque o cliente usou termo genérico da área.
+- inferred_service: use apenas quando a mensagem citar claramente um serviço da lista (nome exato ou variação direta). Para pedidos genéricos (categoria/tema sem escolha explícita), retorne list_services sem inferred_service.
+- Se o histórico indica que o cliente perguntou sobre X antes e agora pede Y para outra(s) pessoa(s), considere inferred_attendees: "other_person" ou "multiple".
 - Se não conseguir mapear, retorne suggested_action: "no_match_fallback".
 - Retorne APENAS JSON válido.`
 
@@ -217,25 +220,275 @@ Retorne JSON com: intent, inferred_service (o que o cliente pediu ou nome exato 
   }
 }
 
+/** Extração de slots a partir de mensagem livre. Usa IA para interpretar contexto. */
+export type SlotsInterpretation = {
+  /** Nome da pessoa (ex: "Cadu" de "meu marido, Cadu"). NÃO incluir termos de parentesco. */
+  attendee_name?: string | null
+  /** Cliente citou apenas parentesco sem nome (ex: "meu filho") — perguntar o nome. */
+  relationship_only?: boolean
+  /** Parentesco citado (ex: "filho", "marido") para contexto. */
+  relationship?: string | null
+  /** Serviço da lista que corresponde ao pedido. */
+  service?: string | null
+  /** Data em ISO (YYYY-MM-DD) ou dia da semana. */
+  date?: string | null
+  /** Horário no formato HH:MM. */
+  time?: string | null
+  /** Cliente quer saber se há horário disponível — consultar agenda antes de responder. */
+  needs_availability_check?: boolean
+}
+
+export async function interpretSlotsFromMessageWithAI(
+  message: string,
+  context: {
+    waiting_for?: "attendee_name" | "service" | "date" | "time"
+    current_slots?: { attendee_name?: string; service?: string; date?: string; time?: string }
+    services?: Array<{ name: string }>
+    history?: Array<{ role: string; content: string }>
+    last_assistant_message?: string
+    /** Nome do remetente (ex: pushName WhatsApp). Nunca usar como attendee_name. */
+    sender_display_name?: string
+  },
+  config: SimulatorConfig
+): Promise<SlotsInterpretation | null> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!apiKey) return null
+
+  const servicesList = (context.services || config.services || []).map((s) => s.name).filter(Boolean)
+  const servicesJson = servicesList.length ? JSON.stringify(servicesList) : "[]"
+  const historyText =
+    context.history && context.history.length > 0
+      ? context.history
+          .slice(-6)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : "(sem histórico)"
+  const lastAssistant = context.last_assistant_message || ""
+  const waitingFor = context.waiting_for || "attendee_name"
+  const slotsDesc = context.current_slots
+    ? `Slots atuais: attendee=${context.current_slots.attendee_name || "-"}, service=${context.current_slots.service || "-"}, date=${context.current_slots.date || "-"}, time=${context.current_slots.time || "-"}`
+    : ""
+
+  const senderNote =
+    context.sender_display_name && context.sender_display_name.trim()
+      ? `\nIDENTIDADE DO REMETENTE: A pessoa que ESCREVE pode ter o nome "${context.sender_display_name.trim()}".
+- Use "${context.sender_display_name.trim()}" como attendee_name QUANDO a mensagem indica que ELA MESMA quer o serviço: "quero agendar meu corte", "pra mim", "para mim", "agendar para mim".
+- NUNCA use "${context.sender_display_name.trim()}" como attendee_name QUANDO a mensagem indica agendamento PARA OUTRA PESSOA: "meu marido", "meu filho", "pro meu marido", "agenda para o meu filho", etc. Nestes casos, use relationship_only + relationship ou o nome da outra pessoa.`
+      : ""
+
+  const systemPrompt = `Você extrai informações estruturadas de mensagens livres do cliente em um fluxo de agendamento.
+${senderNote}
+
+REGRAS CRÍTICAS para attendee_name:
+- O attendee é SEMPRE quem VAI RECEBER o serviço. Quem está escrevendo pode estar agendando PARA outra pessoa (marido, filho, etc.).
+- "Meu marido, Cadu" ou "meu marido Cadu" → attendee_name: "Cadu" (o NOME do marido)
+- "Agenda para o meu marido Cesar" → attendee_name: "Cesar"
+- "Vamos agendar primeiro para o meu marido" (sem nome) → relationship_only: true, relationship: "marido"
+- "Agenda primeiro do meu marido as 14" (sem nome) → relationship_only: true, relationship: "marido"
+- "Vamos agendar primeiro para o meu filho" (sem nome) → relationship_only: true, relationship: "filho"
+- "Meu filho João" → attendee_name: "João"
+- CRÍTICO - Resposta direta ao pedido do nome: Se a última pergunta do assistente pede o nome (ex: "Qual o nome dele(a)?", "Qual é o nome?") e o cliente responde APENAS com um nome próprio (ex: "Cesar", "João", "Maria Silva"), retorne attendee_name com esse nome e relationship_only: false. NÃO retorne relationship_only nesses casos.
+- Ignore "meu", "minha", "meu marido", "minha esposa", "meu filho" como nome. O nome é SEMPRE o substantivo próprio explícito (Cesar, João, Maria). Se só há parentesco sem nome, relationship_only.
+
+REGRAS para service, date, time:
+- Extraia serviço apenas se corresponder à lista: ${servicesJson}
+- Datas: "hoje", "pra hoje", "para hoje" → date: YYYY-MM-DD de hoje. "amanhã", "pra amanhã", "para amanhã" → date: YYYY-MM-DD de amanhã. "segunda", "terça", etc. → a próxima ocorrência.
+- Horários: "às 14", "14h", "as 14" → time: "14:00"
+- "tem horário às 14?" ou "tem disponibilidade às 14?" → needs_availability_check: true, time: "14:00"
+- "quero agendar pra amanhã", "pra hoje ainda tem vaga?" → extraia a data (hoje/amanhã) em YYYY-MM-DD.
+
+Retorne APENAS JSON: attendee_name (string ou null), relationship_only (boolean), relationship (string ou null), service (string da lista ou null), date (YYYY-MM-DD ou null), time (HH:MM ou null), needs_availability_check (boolean).`
+
+  const userPrompt = `Última pergunta do assistente: "${lastAssistant}"
+
+${slotsDesc}
+
+Mensagem atual do cliente: "${message}"
+
+${historyText ? `Histórico:\n${historyText}` : ""}
+
+Extraia as informações. Retorne JSON.`
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 150,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+      }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    if (!content) return null
+    const parsed = JSON.parse(content)
+    let attendee =
+      parsed.attendee_name != null && typeof parsed.attendee_name === "string" && parsed.attendee_name.trim()
+        ? parsed.attendee_name.trim()
+        : undefined
+    let relOnly = parsed.relationship_only === true
+    let rel = parsed.relationship && typeof parsed.relationship === "string" ? parsed.relationship.trim() : null
+
+    // Só rejeitar attendee=remetente quando há evidência de que está agendando para OUTRA pessoa (marido, filho, etc.)
+    const sender = context.sender_display_name?.trim()
+    const schedulingForOther = relOnly || (rel && !/^(eu|mesm[ao]|mim)$/i.test(rel))
+    if (attendee && sender && normalizeText(attendee) === normalizeText(sender) && schedulingForOther) {
+      attendee = undefined
+      relOnly = true
+      rel = rel || "pessoa"
+    }
+    const svc =
+      parsed.service && typeof parsed.service === "string"
+        ? servicesList.find((s) => normalizeText(s) === normalizeText(parsed.service)) || parsed.service
+        : undefined
+    const time =
+      parsed.time && typeof parsed.time === "string"
+        ? parsed.time.includes(":")
+          ? parsed.time
+          : `${String(parseInt(parsed.time, 10)).padStart(2, "0")}:00`
+        : undefined
+    return {
+      attendee_name: attendee ?? null,
+      relationship_only: relOnly,
+      relationship: rel ?? null,
+      service: svc ?? null,
+      date: parsed.date && typeof parsed.date === "string" ? parsed.date : null,
+      time: time ?? null,
+      needs_availability_check: parsed.needs_availability_check === true,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Gera resposta fluida quando o cliente pergunta sobre disponibilidade.
+ * Ex: "Agenda para o Cesar, tem horário às 14?" → consulta agenda → "Claro! Temos sim às 14. Posso confirmar para o Cesar?"
+ */
+export async function generateAvailabilityResponseWithAI(
+  config: SimulatorConfig,
+  context: {
+    attendee_name?: string
+    requested_time: string
+    date_iso: string
+    is_available: boolean
+    available_slots?: string[]
+    service?: string
+  },
+  history: Array<{ role: string; content: string }> = []
+): Promise<string> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!apiKey) {
+    return context.is_available
+      ? `Claro! Temos horario as ${context.requested_time}. Posso confirmar?`
+      : `Infelizmente as ${context.requested_time} nao esta disponivel. Temos: ${(context.available_slots || []).slice(0, 6).join(", ")}. Qual prefere?`
+  }
+
+  const historyText =
+    history.length > 0
+      ? history
+          .slice(-4)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : ""
+  const attendeePart = context.attendee_name ? ` para ${context.attendee_name}` : ""
+  const servicePart = context.service ? ` (${context.service})` : ""
+
+  const systemPrompt = `Voce gera mensagens curtas e naturais para atendimento via chat.
+O cliente perguntou se ha horario disponivel. Voce ja consultou a agenda.
+
+Se is_available=true: confirme que temos o horario e pergunte se pode confirmar o agendamento. Seja cordial.
+Se is_available=false: informe que aquele horario nao esta livre e sugira alternativas da lista available_slots. Convide a escolher.
+
+Mantenha 1-2 frases. Retorne apenas o texto, sem markdown.`
+
+  const userPrompt = `Contexto:
+- Cliente quer agendar${attendeePart}${servicePart}
+- Horario solicitado: ${context.requested_time}
+- Data: ${context.date_iso}
+- Disponivel: ${context.is_available ? "sim" : "nao"}
+${!context.is_available && context.available_slots?.length ? `- Horarios livres: ${context.available_slots.slice(0, 10).join(", ")}` : ""}
+${historyText ? `\nHistorico:\n${historyText}` : ""}
+
+Gere a resposta fluida:`
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 150,
+        temperature: 0.5,
+      }),
+    })
+    if (!response.ok) throw new Error()
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    if (content) return content
+  } catch {
+    // fallback
+  }
+  return context.is_available
+    ? `Claro! Temos horario as ${context.requested_time}. Posso confirmar?`
+    : `Infelizmente as ${context.requested_time} nao esta disponivel. Temos: ${(context.available_slots || []).slice(0, 6).join(", ")}. Qual prefere?`
+}
+
+/** Retorno da análise de agendamentos: único vs múltiplos e para quem. */
+export type AdditionalBookingsInterpretation = {
+  count?: number
+  has_additional?: boolean
+  /** Quando é um ÚNICO agendamento para outra pessoa (ex: "quero agendar para meu marido"). */
+  for_whom?: string | null
+}
+
 export async function interpretAdditionalBookingsWithAI(
   text: string,
-  context?: { has_completed_booking?: boolean }
-): Promise<{ count?: number; has_additional?: boolean } | null> {
+  context?: { has_completed_booking?: boolean; history?: Array<{ role: string; content: string }> }
+): Promise<AdditionalBookingsInterpretation | null> {
   const openaiKey = Deno.env.get("OPENAI_API_KEY")
   if (!openaiKey) return null
 
+  const historyText =
+    context?.history && context.history.length > 0
+      ? context.history
+          .slice(-6)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : ""
+
   const systemPrompt =
     "Voce interpreta pedidos de agendamento em linguagem natural. " +
-    "Retorne apenas JSON valido com os campos: count (numero de agendamentos adicionais, inteiro >=0) " +
-    "e has_additional (true/false). Nao invente dados."
+    "Use o historico da conversa quando fornecido: o cliente pode ter feito perguntas antes (endereco, horarios, precos) e SO AGORA expressar o pedido. " +
+    "Retorne apenas JSON valido com os campos: count (numero de agendamentos adicionais, inteiro >=0), " +
+    "has_additional (true/false) e for_whom (string ou null). Nao invente dados."
   const userPrompt =
-    `Mensagem: "${text}"\n` +
+    (historyText ? `Historico recente:\n${historyText}\n\n` : "") +
+    `Mensagem atual: "${text}"\n` +
     `Contexto: ${context?.has_completed_booking ? "ja existe um agendamento finalizado" : "nao ha agendamento finalizado"}\n` +
-    "Se o cliente pedir mais de um agendamento (ex.: 'pra mim e meu primo', '2 agendamentos'), " +
-    "retorne count com a quantidade de agendamentos adicionais alem do principal. " +
-    "Se o cliente disser que quer agendar para outra pessoa (ex.: 'para meu filho', 'para minha esposa'), " +
-    "isso conta como adicional. " +
-    "Se nao houver adicional, retorne count 0 e has_additional false."
+    "REGRAS:\n" +
+    "- Um UNICO agendamento PARA outra pessoa (ex: 'quero agendar para meu marido', 'agendar para minha esposa', 'para o João') " +
+    "e UM so agendamento. Retorne has_additional FALSE, count 0 e for_whom com a mencao (ex: 'meu marido', 'minha esposa', 'João').\n" +
+    "- Multiplos agendamentos: so quando o cliente quer MAIS DE UM horario/pessoa (ex: 'pra mim e pro meu filho', 'dois agendamentos', 'um pra mim e outro pro João'). " +
+    "Retorne has_additional true e count com a quantidade de adicionais.\n" +
+    "- Se nao houver mencao a outra pessoa nem multiplos, retorne count 0, has_additional false e for_whom null."
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -262,8 +515,76 @@ export async function interpretAdditionalBookingsWithAI(
     const parsed = JSON.parse(content)
     const count = typeof parsed.count === "number" ? parsed.count : null
     const hasAdditional = typeof parsed.has_additional === "boolean" ? parsed.has_additional : null
-    if (count === null && hasAdditional === null) return null
-    return { count: count ?? undefined, has_additional: hasAdditional ?? undefined }
+    const forWhom =
+      parsed.for_whom === null || parsed.for_whom === undefined
+        ? undefined
+        : typeof parsed.for_whom === "string" && parsed.for_whom.trim()
+          ? parsed.for_whom.trim()
+          : undefined
+    if (count === null && hasAdditional === null && forWhom === undefined) return null
+    return {
+      count: count ?? undefined,
+      has_additional: hasAdditional ?? undefined,
+      for_whom: forWhom ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Extrai preferência de contato (celular, email ou ambos) a partir de texto livre.
+ * Usa IA para entender respostas como "pode ser pelo meu celular", "telefone", "por email", etc.
+ * Retorna "phone" | "email" | "both" | null.
+ */
+export async function extractContactPreferenceFromText(
+  message: string,
+  history: Array<{ role: string; content: string }> = []
+): Promise<"phone" | "email" | "both" | null> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!apiKey) return null
+
+  const historyText =
+    history.length > 0
+      ? history
+          .slice(-4)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : ""
+
+  const systemPrompt = `Você extrai a preferência de contato do cliente. O assistente perguntou como prefere ser contatado para confirmar o agendamento (opções: só celular/telefone, só email, ou os dois).
+O cliente respondeu em texto livre. Sua tarefa: identificar se ele quer ser contatado por CELULAR/TELEFONE, por EMAIL, ou pelos DOIS.
+Retorne APENAS uma das palavras: phone, email, both. Se não der para identificar, retorne: unknown.
+Exemplos: "pode ser pelo meu celular" -> phone. "celular" -> phone. "telefone" -> phone. "por email" -> email. "no meu email" -> email. "os dois" -> both. "tanto faz" -> unknown.`
+
+  const userPrompt = historyText
+    ? `Histórico recente:\n${historyText}\n\nResposta atual do cliente: "${message}"\n\nPreferência (phone/email/both/unknown):`
+    : `Resposta do cliente: "${message}"\n\nPreferência (phone/email/both/unknown):`
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 20,
+        temperature: 0.1,
+      }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = (data.choices?.[0]?.message?.content?.trim() || "").toLowerCase()
+    if (content === "phone") return "phone"
+    if (content === "email") return "email"
+    if (content === "both") return "both"
+    return null
   } catch {
     return null
   }

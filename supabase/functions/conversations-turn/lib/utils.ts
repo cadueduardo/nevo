@@ -67,8 +67,11 @@ export function hasExplicitDate(text: string): boolean {
 }
 
 export function parseTime(text: string): string | null {
-  const msg = normalizeText(text)
+  const t = text.trim()
   if (hasExplicitDate(text)) return null
+  // Evitar confundir "1", "2", etc. (opção numerada) com horário
+  if (/^[1-9]$/.test(t)) return null
+  const msg = normalizeText(text)
   const match = msg.match(/(?:as|a|às)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:h|hs)?\b/)
   if (!match) return null
   const hh = String(parseInt(match[1], 10)).padStart(2, "0")
@@ -89,11 +92,10 @@ export function parsePhone(text: string): string | null {
 
 export function parseDate(text: string, now = new Date()): string | null {
   const msg = normalizeText(text)
-  if (msg.includes("hoje")) return toIsoDate(now)
+  const todayIso = getTodayIsoBusinessTz(now)
+  if (msg.includes("hoje")) return todayIso
   if (msg.includes("amanha")) {
-    const d = new Date(now)
-    d.setDate(d.getDate() + 1)
-    return toIsoDate(d)
+    return addDaysToIsoDate(todayIso, 1)
   }
   const match = msg.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/)
   if (!match) return null
@@ -128,7 +130,10 @@ export function parseWeekdayDate(text: string, now = new Date()): string | null 
   const key = Object.keys(weekdayMap).find((k) => msg.includes(k))
   if (!key) return null
   const targetDay = weekdayMap[key]
-  const currentDay = now.getDay()
+  const todayIso = getTodayIsoBusinessTz(now)
+  const currentDay = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"].indexOf(
+    getWeekdayKey(todayIso)
+  )
   let diff = (targetDay - currentDay + 7) % 7
   const wantsNext =
     msg.includes("proxima") ||
@@ -138,16 +143,15 @@ export function parseWeekdayDate(text: string, now = new Date()): string | null 
     msg.includes("semana que vem")
   if (diff === 0 && wantsNext) diff = 7
   if (wantsNext && diff < 7) diff += 7
-  const date = new Date(now)
-  date.setDate(date.getDate() + diff)
-  return toIsoDate(date)
+  return addDaysToIsoDate(todayIso, diff)
 }
 
 export function parseTimePeriod(text: string): "morning" | "afternoon" | "evening" | null {
   const msg = normalizeText(text)
-  if (/(de\s+manha|manha|manhã)/.test(msg)) return "morning"
-  if (/(de\s+tarde|tarde)/.test(msg)) return "afternoon"
-  if (/(de\s+noite|noite)/.test(msg)) return "evening"
+  // Evita falso positivo em "amanha": so aceitar periodo com fronteira de palavra.
+  if (/\b(de\s+)?manha\b/.test(msg)) return "morning"
+  if (/\b(de\s+)?tarde\b/.test(msg)) return "afternoon"
+  if (/\b(de\s+)?noite\b/.test(msg)) return "evening"
   return null
 }
 
@@ -161,13 +165,32 @@ export function parseDateOrWeekday(text: string, now = new Date()): string | nul
   return parseDate(text, now) || parseWeekdayDate(text, now)
 }
 
-export function parseTemplateChoice(text: string): "same_next" | "same_day" | "other_day" | "other_staff" | null {
-  const msg = normalizeText(text)
+export function parseTemplateChoice(
+  text: string,
+  options?: string[]
+): "same_next" | "same_day" | "other_day" | "other_staff" | null {
+  let msg = normalizeText(text.trim())
+  if (options && options.length > 0 && /^[1-9]\d*$/.test(msg)) {
+    const idx = parseInt(msg, 10) - 1
+    if (idx >= 0 && idx < options.length) msg = normalizeText(options[idx])
+  }
   if (msg.includes("proximo horario") || msg.includes("próximo horario") || msg.includes("mesmo dia e colaborador")) return "same_next"
   if (msg.includes("mesmo dia") || msg.includes("outro horario no mesmo dia") || msg.includes("outro horário no mesmo dia"))
     return "same_day"
   if (msg.includes("outro dia") || msg.includes("outra data")) return "other_day"
   if (msg.includes("trocar colaborador") || msg.includes("outro colaborador")) return "other_staff"
+  return null
+}
+
+/** Resolve "1", "2", etc. para o item correspondente em options. Retorna o texto completo do item. */
+export function resolveOptionByNumber(text: string, options: string[]): string | null {
+  const t = text.trim()
+  if (/^[1-9]\d*$/.test(t)) {
+    const idx = parseInt(t, 10) - 1
+    if (idx >= 0 && idx < options.length) {
+      return options[idx].replace(/^\d+\s*-\s*/, "").trim()
+    }
+  }
   return null
 }
 
@@ -218,6 +241,7 @@ export function isWithinSchedule(time: string, schedule?: SimulatorConfig["sched
 }
 
 const BUSINESS_TZ = "America/Sao_Paulo"
+export const MIN_BOOKING_LEAD_MINUTES = 30
 
 function getNowInBusinessTz(now: Date = new Date()): { dateIso: string; time: string } {
   const dateIso = now.toLocaleDateString("en-CA", { timeZone: BUSINESS_TZ }) // YYYY-MM-DD
@@ -228,6 +252,29 @@ function getNowInBusinessTz(now: Date = new Date()): { dateIso: string; time: st
 /** Retorna a data de hoje (YYYY-MM-DD) no fuso do negócio. */
 export function getTodayIsoBusinessTz(now: Date = new Date()): string {
   return now.toLocaleDateString("en-CA", { timeZone: BUSINESS_TZ })
+}
+
+/** Retorna true quando a data é hoje (no fuso do negócio) e o horário já passou. */
+export function isTimeInPastForDate(dateIso: string, time: string, now: Date = new Date()): boolean {
+  const { dateIso: todayIso, time: nowTime } = getNowInBusinessTz(now)
+  if (dateIso !== todayIso) return false
+  const chosenMins = toMinutes(time)
+  const currentMins = toMinutes(nowTime)
+  return chosenMins <= currentMins
+}
+
+/** Retorna true quando o horário escolhido é cedo demais para hoje (antecedência mínima). */
+export function isTimeTooSoonForDate(
+  dateIso: string,
+  time: string,
+  minLeadMinutes: number = MIN_BOOKING_LEAD_MINUTES,
+  now: Date = new Date()
+): boolean {
+  const { dateIso: todayIso, time: nowTime } = getNowInBusinessTz(now)
+  if (dateIso !== todayIso) return false
+  const chosenMins = toMinutes(time)
+  const currentMins = toMinutes(nowTime)
+  return chosenMins <= currentMins + Math.max(0, minLeadMinutes)
 }
 
 /** Retorna true se o estabelecimento já encerrou o expediente de hoje (hora atual >= end_time). */
@@ -269,13 +316,10 @@ export function getMockAvailability(
   const { dateIso: todayIso, time: nowTime } = getNowInBusinessTz(now)
   if (dateIso === todayIso) {
     const nowMins = toMinutes(nowTime)
-    slots = slots.filter((slot) => toMinutes(slot) > nowMins)
+    const minAllowed = nowMins + MIN_BOOKING_LEAD_MINUTES
+    slots = slots.filter((slot) => toMinutes(slot) > minAllowed)
   }
   const occupied = new Set<string>()
-  const fixedOccupied = ["10:00", "15:00"]
-  fixedOccupied.forEach((t) => {
-    if (slots.includes(t)) occupied.add(t)
-  })
   const staffKey = staffName ? normalizeText(staffName) : "default"
   const alreadyBooked = bookedSlots?.[staffKey]?.[dateIso] || []
   alreadyBooked.forEach((t) => {

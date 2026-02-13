@@ -1,0 +1,22 @@
+# Configuração mínima para Supabase CLI (link, db push, functions deploy).
+# Ref.: https://supabase.com/docs/guides/cli/config
+
+project_id = "nevo"
+
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+major_version = 17
+
+[db.migrations]
+enabled = true
+
+[edge_runtime]
+enabled = true
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"

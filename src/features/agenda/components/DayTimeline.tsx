@@ -10,6 +10,7 @@ import {
   minutesBetween,
   minutesSinceStartHour,
   parseISO,
+  isSameISODate,
 } from '../utils'
 import { cn } from '@/lib/utils'
 
@@ -57,7 +58,26 @@ export function DayTimeline({
                     <div className="w-14 px-2 text-xs text-muted-foreground">
                       {hourLabel(h)}
                     </div>
-                    <div className="h-px flex-1 bg-border" />
+                    <div className="h-px flex-1 bg-border/80" />
+                  </div>
+                </div>
+              )
+            })}
+
+            {Array.from(
+              { length: END_HOUR - START_HOUR },
+              (_, i) => START_HOUR + i
+            ).map((h) => {
+              const top = ((h - START_HOUR) * 60 + 30) * PX_PER_MINUTE
+              return (
+                <div
+                  key={`half-${h}`}
+                  className="absolute left-0 right-0"
+                  style={{ top }}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-14 px-2 text-[10px] text-muted-foreground/70" />
+                    <div className="h-px flex-1 border-t border-dashed border-border/50" />
                   </div>
                 </div>
               )
@@ -83,7 +103,7 @@ export function DayTimeline({
               )
             })}
 
-            <NowLine totalMinutes={totalMinutes} />
+            <NowLine totalMinutes={totalMinutes} day={day} />
 
             {isEmpty && (
               <div
@@ -108,12 +128,14 @@ export function DayTimeline({
   )
 }
 
-function NowLine({ totalMinutes }: { totalMinutes: number }) {
+function NowLine({ totalMinutes, day }: { totalMinutes: number; day: Date }) {
   const [now, setNow] = React.useState(() => new Date())
   React.useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60_000)
     return () => clearInterval(t)
   }, [])
+
+  if (!isSameISODate(day, now)) return null
 
   const h = now.getHours()
   if (h < START_HOUR || h > END_HOUR) return null

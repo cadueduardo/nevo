@@ -1,16 +1,19 @@
 # Deploy Supabase: migrations + edge functions
-# Usa SUPABASE_PROJECT_REF e SUPABASE_DB_PASSWORD do .env.local (ou do ambiente).
+# Usa SUPABASE_PROJECT_REF e SUPABASE_DB_PASSWORD do .env ou .env.local (ou do ambiente).
+# .env e depois .env.local (o segundo sobrescreve).
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$envLocal = Join-Path $projectRoot ".env.local"
 
-if (Test-Path $envLocal) {
-  Get-Content $envLocal | ForEach-Object {
-    if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
-      $name = $matches[1].Trim()
-      $value = $matches[2].Trim().Trim('"').Trim("'")
-      Set-Item -Path "Env:$name" -Value $value
+foreach ($envFile in @(".env", ".env.local")) {
+  $path = Join-Path $projectRoot $envFile
+  if (Test-Path $path) {
+    Get-Content $path | ForEach-Object {
+      if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
+        $name = $matches[1].Trim()
+        $value = $matches[2].Trim().Trim('"').Trim("'")
+        Set-Item -Path "Env:$name" -Value $value
+      }
     }
   }
 }

@@ -48,6 +48,43 @@ export function getCordialPrefix(config: SimulatorConfig, isFirst: boolean): str
   return `Oi! Sou a assistente${name}. Obrigado por entrar em contato. `
 }
 
+/** Saudação inicial conforme o tom configurado (fluida, não robótica). */
+export function getGreetingMessage(config: SimulatorConfig): string {
+  const tone = config.tone || "profissional"
+  const biz = config.business_name || "nossa empresa"
+  const byTone: Record<string, string> = {
+    amigavel: `Olá! Obrigado por entrar em contato, somos da ${biz}. Como posso ajudar?`,
+    formal: `Olá. Agradecemos o contato. Somos da ${biz}. Como podemos ajudá-lo?`,
+    profissional: `Olá, obrigado por entrar em contato. Somos da ${biz}. Como posso ajudar?`,
+    engracado: `Oi! Que bom te ver por aqui, somos da ${biz}. Em que posso ajudar?`,
+  }
+  return byTone[tone] || byTone.profissional
+}
+
+/** Intro antes da lista de serviços quando o cliente expressou desejo genérico. */
+export function buildListServicesIntro(config: SimulatorConfig): string {
+  const tone = config.tone || "profissional"
+  const byTone: Record<string, string> = {
+    amigavel: "Certo! Será um prazer te receber no nosso estabelecimento, me conta, o que você quer fazer?",
+    formal: "Com prazer. Será um prazer recebê-lo em nosso estabelecimento. O que deseja realizar?",
+    profissional: "Claro! Será um prazer atendê-lo. O que você gostaria de fazer?",
+    engracado: "Show! Vai ser um prazer te receber. O que você quer fazer?",
+  }
+  return byTone[tone] || byTone.profissional
+}
+
+/** Confirmação curta ao iniciar o agendamento (cliente já escolheu o serviço). */
+export function buildBookingConfirmationIntro(config: SimulatorConfig): string {
+  const tone = config.tone || "profissional"
+  const byTone: Record<string, string> = {
+    amigavel: "Beleza! Vamos agendar agora!",
+    formal: "Perfeito. Vamos prosseguir com o agendamento.",
+    profissional: "Ótimo! Vamos agendar.",
+    engracado: "Bora! Vamos agendar.",
+  }
+  return byTone[tone] || byTone.profissional
+}
+
 export function buildPriceNotAvailableMessage(
   config: SimulatorConfig,
   _serviceName?: string | null
@@ -75,11 +112,27 @@ export function buildPriceNotAvailableMessage(
 export function buildServicesListWithPrices(config: SimulatorConfig): string {
   const services = config.services || []
   if (services.length === 0) return "No momento não temos a lista de serviços cadastrada. Posso te ajudar com algo mais?"
-  const lines = services.map((s) => {
-    const price = s.base_price != null ? ` — R$ ${s.base_price}` : ""
-    return `• ${s.name}${price}`
+  const lines = services.map((s, idx) => {
+    const price = s.base_price != null ? ` — R$ ${Number(s.base_price).toFixed(2).replace(".", ",")}` : ""
+    return `${idx + 1} - ${s.name}${price}`
   })
-  return "Trabalhamos com:\n" + lines.join("\n") + "\n\nQuer agendar algum?"
+  return (
+    "Confira a nossa lista de serviços e preços:\n\n" +
+    lines.join("\n") +
+    "\n\nGostaria de agendar um serviço, só escolher um número ou escrever o serviço desejado."
+  )
+}
+
+/** Lista de serviços com intro opcional (quando o cliente expressou desejo genérico). Respeita o tom. */
+export function buildListServicesMessage(
+  config: SimulatorConfig,
+  options?: { intro?: "default" | "after_generic" }
+): string {
+  const list = buildServicesListWithPrices(config)
+  if (options?.intro === "after_generic") {
+    return buildListServicesIntro(config) + "\n\n" + list
+  }
+  return list
 }
 
 export function buildGenericFallback(config: SimulatorConfig): string {
@@ -230,17 +283,17 @@ export async function generateRejectionMessageWithAI(
 
   const systemPrompt =
     "Você gera mensagens curtas e naturais de atendimento via chat, em português brasileiro. " +
-    "Diferencie dois casos: (1) o negócio NÃO atua na área que o cliente pediu; (2) o negócio atua na área mas não oferece aquela variação específica " +
-    "(ex: barbearia oferece corte masculino, mas cliente pediu corte feminino). " +
-    "NUNCA use frases fixas como 'não atendemos essa área'. Seja natural e explique o que o negócio oferece. " +
-    "Liste os serviços quando fizer sentido. Mantenha 1-3 frases. Retorne apenas o texto da mensagem, sem markdown."
+    "Use quando o cliente pediu qualquer serviço/área que NÃO está na lista de serviços oferecidos pelo negócio. " +
+    "Diferencie: (1) negócio não atua na área; (2) atua na área mas não tem aquela variação (ex.: cliente pediu X, lista tem só A, B, C). " +
+    "Seja natural, explique o que o negócio oferece e liste os serviços quando fizer sentido. Mantenha 1-3 frases. Retorne apenas o texto, sem markdown."
 
   const empathyHint = isFirst ? "Pode começar com 'Obrigado pelo contato! ' se fizer sentido. " : ""
   const userPrompt =
     `Cliente pediu: "${inferredArea || "algo que não oferecemos"}"\n` +
     `Tipo de negócio: ${businessType}\n` +
     `Serviços oferecidos: ${servicesList.length ? servicesList.join(", ") : "nenhum cadastrado"}\n` +
-    `${empathyHint}Gere uma mensagem educada que explique que não temos exatamente isso e indique o que oferecemos.`
+    `${empathyHint}IMPORTANTE: NUNCA mencione que não oferecemos algo que o cliente NÃO pediu. Ex: se o cliente pediu "corte para meu filho e marido" (ambos masculinos), NÃO diga "não temos corte feminino" - ele não pediu feminino. Liste apenas o que oferecemos.` +
+    `\nGere uma mensagem educada que explique o que oferecemos e convide a escolher.`
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {

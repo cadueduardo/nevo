@@ -47,7 +47,7 @@ export async function POST(
 
   const { data: agent, error: agentError } = await supabaseAdmin
     .from('agent')
-    .select('id, tenant_id')
+    .select('id, name, tenant_id')
     .eq('id', agentId)
     .single()
 
@@ -79,8 +79,9 @@ export async function POST(
   }
 
   const bc = (setting.business_config as Record<string, unknown>) ?? {}
+  const businessNameFromConfig = (bc.business_name as string)?.trim()
   const context = {
-    business_name: (bc.business_name as string) ?? '',
+    business_name: businessNameFromConfig || (agent.name ?? '') || '',
     business_type: bc.business_type ?? undefined,
     context_mode: bc.context_mode ?? 'booking',
     establishment_address: bc.establishment_address ?? undefined,
@@ -126,9 +127,23 @@ export async function POST(
   let replyText = 'Desculpe, tive um problema ao processar. Pode repetir?'
   if (turnResponse.ok) {
     try {
-      const data = (await turnResponse.json()) as { messages?: Array<{ content?: string }> }
+      const data = (await turnResponse.json()) as {
+        messages?: Array<{ content?: string; action_options?: string[] }>
+      }
       const lastMsg = Array.isArray(data.messages) ? data.messages[data.messages.length - 1] : null
-      if (lastMsg?.content) replyText = lastMsg.content
+      if (lastMsg?.content) {
+        replyText = lastMsg.content
+        // Incluir opções como lista no texto (usuário pode responder com o texto da opção)
+        const opts = lastMsg.action_options
+        if (Array.isArray(opts) && opts.length > 0) {
+          const optsLabel = opts.length === 1
+            ? '\n\n_Opção:_\n'
+            : '\n\n_Opções (responda com número ou texto):_\n'
+          const optsText = opts.join('\n')
+          const withOpts = replyText + optsLabel + optsText
+          if (withOpts.length <= 4096) replyText = withOpts
+        }
+      }
     } catch {
       // keep default replyText
     }

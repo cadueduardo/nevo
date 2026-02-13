@@ -192,12 +192,12 @@ Instruções CRÍTICAS:
 - Retorne APENAS JSON válido.
 - Analise APENAS a mensagem do cliente e identifique o assunto/área/necessidade mencionada, SEMPRE baseado no conteúdo real da mensagem.
 - IMPORTANTE: IGNORE completamente o ramo de atividade informado acima. Identifique o contexto baseado SOMENTE na mensagem do cliente.
-- Identifique o contexto CORRETO baseado nas palavras-chave da mensagem. Exemplos precisos:
-  * "prenderam meu filho" ou "meu primo foi preso" ou "foi preso" → "direito criminal" (NÃO "direito de família")
-  * "quero divorciar" ou "guarda dos filhos" ou "pensão alimentícia" → "direito de família"
-  * "dor de dente" ou "tratamento dentário" → "odontologia" ou "tratamento dental"
-  * "cortar cabelo" ou "corte" → "corte de cabelo" ou "serviço de beleza"
-  * "consertar carro" ou "reparo automotivo" → "mecânica automotiva" ou "reparo de veículos"
+- Identifique o contexto CORRETO baseado nas palavras-chave da mensagem. Exemplos (adaptáveis a QUALQUER ramo):
+  * "prenderam meu filho" ou "meu primo foi preso" → "direito criminal"
+  * "quero divorciar" ou "guarda dos filhos" → "direito de família"
+  * "dor de dente" ou "tratamento dentário" → "odontologia"
+  * "consertar carro" ou "reparo automotivo" → "mecânica automotiva"
+- CRÍTICO - USE O CONTEXTO "PARA QUEM": Se a mensagem disser PARA QUEM é o pedido, use isso. Ex: "corte para meu filho e meu marido" = clientes masculinos → NÃO inferir "feminino". "corte para minha esposa" pode indicar feminino só se o negócio tiver corte feminino. Sempre baseie na menção explícita (filho, marido, esposa, etc.).
 - "inferred_area" deve ser um resumo curto e preciso do assunto mencionado pelo cliente.
 - Use SOMENTE pistas claras do texto do cliente. Seja preciso na identificação.
 - NÃO assuma que o assunto está relacionado ao ramo informado. Se a mensagem menciona "preso", "prisão", "criminal", identifique como "direito criminal", mesmo que o ramo seja "advocacia".
