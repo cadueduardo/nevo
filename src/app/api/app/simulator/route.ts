@@ -64,8 +64,10 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       )
     }
-    const tenant_setting = 'agent_setting' in bootstrap ? bootstrap.agent_setting : bootstrap.tenant_setting
-    const businessName = 'agent' in bootstrap ? bootstrap.agent.name : tenant.name
+    const tenant_setting = bootstrapWithAgent
+      ? bootstrapWithAgent.agent_setting
+      : bootstrap.tenant_setting
+    const businessName = bootstrapWithAgent?.agent?.name ?? tenant.name
     const bc = tenant_setting.business_config as Record<string, unknown>
     const context = {
       business_name: businessName,
