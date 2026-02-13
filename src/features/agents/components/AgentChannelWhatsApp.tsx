@@ -50,7 +50,7 @@ export function AgentChannelWhatsApp({ agentId, onSave }: AgentChannelWhatsAppPr
   const [qrLoading, setQrLoading] = React.useState(false)
   const [qrError, setQrError] = React.useState<string | null>(null)
   const [qrDebug, setQrDebug] = React.useState<Record<string, unknown> | null>(null)
-  const [savedSuccess, setSavedSuccess] = React.useState(false)
+  const [savedSuccess, setSavedSuccess] = React.useState<boolean | 'with_key'>(false)
 
   // Intervalo de refresh do QR (30s) — o QR do WhatsApp expira rapidamente
   const QR_REFRESH_INTERVAL_MS = 30_000
