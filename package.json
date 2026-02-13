@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "tunnel": "ngrok http 3000",
-    "deploy:supabase": "powershell -ExecutionPolicy Bypass -File supabase/deploy.ps1"
+    "deploy:supabase": "powershell -ExecutionPolicy Bypass -File supabase/deploy.ps1",
+    "deploy:auto": "powershell -ExecutionPolicy Bypass -File scripts/deploy-and-push.ps1"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

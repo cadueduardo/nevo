@@ -1939,6 +1939,31 @@ async function processSimulatorMessage(
       return buildResult(infoAnswer, nextState)
     }
 
+    // Triagem: SEMPRE verificar contexto da mensagem antes de mostrar menu (ex.: "meu filho foi preso" após "olá")
+    if (
+      !isGreeting(text) &&
+      (config.services || []).length > 0 &&
+      !nextState.slots.service &&
+      (config.lead_policy?.reject_unlisted_services || config.lead_policy?.use_ai_matching)
+    ) {
+      const match = await classifyServiceMatch(text, config)
+      const hasContext = hasMatchContext(match)
+      if (match.service) {
+        nextState.slots.service = match.service
+        nextState.just_identified_service = true
+        nextState.step = undefined
+        nextState.mode = "booking"
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+      }
+      const areaMatches = areaMatchesServices(match.inferred_area, config.services || [])
+      if (match.reject || (hasContext && !match.service && !areaMatches)) {
+        const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, isFirst, hasContext)
+        return buildResult(rejectionMessage, { ...nextState, step: "qualification_rejected" })
+      }
+    }
+
     const cordial = getCordialPrefix(config, isFirst)
     const n = normalizeText(text)
     const isShortDecline =
