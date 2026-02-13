@@ -332,6 +332,17 @@ function buildAllEditableItems(data: any) {
     items.push({ id: 'schedule_interval', label: 'Intervalo entre atendimentos', value: '', type: 'schedule_interval' })
   }
 
+  if (data.schedule?.min_booking_lead_minutes != null) {
+    items.push({
+      id: 'min_booking_lead',
+      label: 'Antecedência mínima para agendamento',
+      value: `${data.schedule.min_booking_lead_minutes} min`,
+      type: 'min_booking_lead',
+    })
+  } else {
+    items.push({ id: 'min_booking_lead', label: 'Antecedência mínima para agendamento', value: '', type: 'min_booking_lead' })
+  }
+
   const policiesNote = typeof data.policies?.note === 'string' ? data.policies.note.trim() : ''
   items.push({
     id: 'policies',
@@ -503,6 +514,15 @@ function buildEditableItems(data: any) {
       label: 'Intervalo entre atendimentos',
       value: `${data.schedule.interval_minutes} min`,
       type: 'schedule_interval',
+    })
+  }
+
+  if (data.schedule?.min_booking_lead_minutes != null) {
+    items.push({
+      id: 'min_booking_lead',
+      label: 'Antecedência mínima para agendamento',
+      value: `${data.schedule.min_booking_lead_minutes} min`,
+      type: 'min_booking_lead',
     })
   }
 
@@ -971,6 +991,11 @@ async function processMessage(
       } else if (id === 'schedule_interval') {
         const mins = parseIntervalMinutes(value)
         if (mins != null) updated.schedule = { ...(updated.schedule || {}), interval_minutes: mins }
+      } else if (id === 'min_booking_lead') {
+        const mins = parseIntervalMinutes(value)
+        if (mins != null && [5, 10, 15, 20, 30].includes(mins)) {
+          updated.schedule = { ...(updated.schedule || {}), min_booking_lead_minutes: mins }
+        }
       } else if (id === 'schedule') {
         const partial = parseScheduleNarrative(value)
         const days = parseDaysFromText(value)
@@ -1483,6 +1508,37 @@ async function processMessage(
       ...(next.step === 'services_duration'
         ? {
             editable_items: buildServiceDurationItems(merged.services || [], value),
+          }
+        : {}),
+    }
+  }
+
+  if (currentStep === 'min_booking_lead') {
+    const value = parseIntervalMinutes(text)
+    const validMins = [5, 10, 15, 20, 30]
+    const mins = value != null && validMins.includes(value) ? value : value != null && value >= 1 && value <= 60 ? value : null
+    if (!mins) {
+      return {
+        assistant_message: 'Escolha uma das opções (5, 10, 15, 20 ou 30 minutos).',
+        next_step: 'min_booking_lead',
+        action_options: ['5 min', '10 min', '15 min', '20 min', '30 min'],
+        requires_action: 'min_booking_lead',
+      }
+    }
+    const merged = {
+      ...collectedData,
+      schedule: { ...(collectedData.schedule || {}), min_booking_lead_minutes: mins },
+    }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('min_booking_lead', merged))
+    return {
+      assistant_message: `✅ Antecedência mínima: ${mins} minutos.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { schedule: merged.schedule },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+      ...(next.step === 'services_duration'
+        ? {
+            editable_items: buildServiceDurationItems(merged.services || [], collectedData.schedule?.interval_minutes),
           }
         : {}),
     }

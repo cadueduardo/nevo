@@ -346,12 +346,17 @@ async function resolveBooking(
     nextState.slots.service = slotsInterpretation.service
   }
 
+  // Não usar data da IA para "hoje"/"amanhã" — a IA não tem data atual em tempo real.
+  // Deixar parseDateOrWeekday resolver (usa getTodayIsoBusinessTz), senão o filtro de
+  // horários passados falha (isTodayInBusinessTz dá false se a IA retornar data errada).
+  const isHojeOuAmanha = normalizedText.includes("hoje") || normalizedText.includes("amanha")
   if (
     waitingFor === "date" &&
     slotsInterpretation?.date &&
     !nextState.slots.date &&
     !isDigitOnly &&
     allowAiDateAutofill &&
+    !isHojeOuAmanha &&
     /^\d{4}-\d{2}-\d{2}$/.test(slotsInterpretation.date)
   ) {
     nextState.slots.date = slotsInterpretation.date
@@ -1108,9 +1113,10 @@ async function resolveBooking(
         )
         if (availability.available.length > 0) options = availability.available.slice(0, 24)
       }
-      if (nextState.slots.date === getTodayIsoBusinessTz() && isTimeTooSoonForDate(nextState.slots.date, time)) {
+      const minLead = schedule?.min_booking_lead_minutes ?? MIN_BOOKING_LEAD_MINUTES
+      if (nextState.slots.date === getTodayIsoBusinessTz() && isTimeTooSoonForDate(nextState.slots.date, time, minLead)) {
         const msg =
-          `Este horario nao pode ser agendado agora. Trabalhamos com antecedencia minima de ${MIN_BOOKING_LEAD_MINUTES} minutos. Qual horario voce prefere?`
+          `Este horario nao pode ser agendado agora. Trabalhamos com antecedencia minima de ${minLead} minutos. Qual horario voce prefere?`
         return buildResult(msg, nextState, options ? toNumberedOptions(options) : undefined)
       }
       const within = isWithinSchedule(time, schedule)
@@ -1211,8 +1217,10 @@ async function resolveBooking(
         : null
     if (timeFromNumber) {
       // Validar antes de aceitar: não permitir horário passado ou sem buffer mínimo para hoje
-      if (nextState.slots.date && isTimeTooSoonForDate(nextState.slots.date, timeFromNumber)) {
-        const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
+      const scheduleForLead = getScheduleForStaff(config, nextState.slots.staff_name)
+      const minLead = scheduleForLead?.min_booking_lead_minutes ?? MIN_BOOKING_LEAD_MINUTES
+      if (nextState.slots.date && isTimeTooSoonForDate(nextState.slots.date, timeFromNumber, minLead)) {
+        const schedule = scheduleForLead
         const serviceDuration = getServicesTotalDuration(
           config,
           nextState.slots.service || nextState.pending_default_service
@@ -1228,7 +1236,7 @@ async function resolveBooking(
         nextState.last_time_options_date = nextState.slots.date
         nextState.last_time_options_staff = nextState.slots.staff_name
         return buildResult(
-          `Este horário não pode ser agendado agora. Trabalhamos com antecedência mínima de ${MIN_BOOKING_LEAD_MINUTES} minutos. Qual horário você prefere?`,
+          `Este horário não pode ser agendado agora. Trabalhamos com antecedência mínima de ${minLead} minutos. Qual horário você prefere?`,
           nextState,
           toNumberedOptions(availability.available.slice(0, 24))
         )
@@ -1295,13 +1303,14 @@ async function resolveBooking(
       nextState.slots.staff_name,
       serviceDuration
     )
-    if (isTimeTooSoonForDate(dateIso, time)) {
+    const minLead = schedule?.min_booking_lead_minutes ?? MIN_BOOKING_LEAD_MINUTES
+    if (isTimeTooSoonForDate(dateIso, time, minLead)) {
       nextState.slots.time = undefined
       nextState.last_time_options = availability.available.slice(0, 24)
       nextState.last_time_options_date = dateIso
       nextState.last_time_options_staff = nextState.slots.staff_name
       return buildResult(
-        `Esse horario nao esta disponivel para agora. A antecedencia minima e de ${MIN_BOOKING_LEAD_MINUTES} minutos. Vou te mostrar os proximos horarios livres.`,
+        `Esse horario nao esta disponivel para agora. A antecedencia minima e de ${minLead} minutos. Vou te mostrar os proximos horarios livres.`,
         nextState,
         toNumberedOptions(availability.available.slice(0, 24))
       )
@@ -1656,11 +1665,15 @@ async function processSimulatorMessage(
           nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
           nextState.expected_additional_count = nextState.pending_additional_count
         }
-        const thanks = config.business_name ? `Obrigado por escolher a ${config.business_name}. ` : ""
-        const intro = `${greeting}${thanks}Entendi, você precisa de ajuda com ${match.service}. `
+        // Ao reconhecer o serviço, responder direto com fluxo de agendamento (formato esperado)
+        const intro =
+          config.context_mode === "booking"
+            ? `${buildBookingConfirmationIntro(config)} Entendi, voce precisa de ${match.service}. `
+            : `${greeting}${config.business_name ? `Obrigado por escolher a ${config.business_name}. ` : ""}Entendi, você precisa de ajuda com ${match.service}. `
         if (config.context_mode === "booking") {
+          nextState.mode = "booking"
           const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-          return buildResult(intro + " " + result.message, result.state, result.action_options)
+          return buildResult(intro + result.message, result.state, result.action_options)
         }
         if (config.context_mode === "quote") {
           return buildResult(`${intro}O que você precisa orçar?`, nextState)

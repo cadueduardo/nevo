@@ -290,6 +290,15 @@ export function determineNextStep(
         requires_action: 'schedule_interval',
       }
     }
+    if (missing.includes('schedule.min_booking_lead_minutes')) {
+      return {
+        step: 'min_booking_lead',
+        message:
+          'Com quanto tempo de **antecedência** o cliente pode agendar para hoje?\n\nHorários que já passaram ou estão muito próximos não aparecem. Ex.: com 20 min, às 14:55 só oferecemos horários a partir das 15:15.',
+        action_options: ['5 min', '10 min', '15 min', '20 min', '30 min'],
+        requires_action: 'min_booking_lead',
+      }
+    }
   }
 
   if (

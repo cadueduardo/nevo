@@ -41,6 +41,8 @@ export interface Schedule {
   end_time: string // HH:mm
   breaks?: ScheduleBreak[]
   interval_minutes: number // intervalo entre atendimentos
+  /** Antecedência mínima em minutos para agendamento (buffer antes do horário). */
+  min_booking_lead_minutes?: number
   capacity_per_slot?: number
 }
 

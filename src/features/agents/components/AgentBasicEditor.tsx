@@ -40,6 +40,7 @@ function defaultSchedule(): Schedule {
     start_time: '09:00',
     end_time: '18:00',
     interval_minutes: 30,
+    min_booking_lead_minutes: 20,
     breaks: [],
   }
 }
@@ -107,11 +108,16 @@ export function AgentBasicEditor({
   const [services, setServices] = React.useState<Service[]>(
     Array.isArray(initialConfig.services) ? initialConfig.services : []
   )
-  const [schedule, setSchedule] = React.useState<Schedule>(() =>
-    initialConfig.schedule && Array.isArray(initialConfig.schedule.days_of_week)
-      ? { ...initialConfig.schedule, breaks: initialConfig.schedule.breaks ?? [] }
-      : defaultSchedule()
-  )
+  const [schedule, setSchedule] = React.useState<Schedule>(() => {
+    const base =
+      initialConfig.schedule && Array.isArray(initialConfig.schedule.days_of_week)
+        ? { ...initialConfig.schedule, breaks: initialConfig.schedule.breaks ?? [] }
+        : defaultSchedule()
+    return {
+      ...base,
+      min_booking_lead_minutes: base.min_booking_lead_minutes ?? 20,
+    }
+  })
   const [loadingCep, setLoadingCep] = React.useState(false)
   const [locationMode, setLocationMode] = React.useState<string>(initialConfig.location_mode ?? '')
   const [address, setAddress] = React.useState<EstablishmentAddress>(
@@ -470,6 +476,28 @@ export function AgentBasicEditor({
                   }))
                 }
               />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Antecedência mínima para agendamento (min)</label>
+              <p className="text-muted-foreground text-xs">
+                Quanto tempo antes do horário o cliente precisa solicitar o agendamento.
+              </p>
+              <select
+                value={schedule.min_booking_lead_minutes ?? 20}
+                onChange={(e) =>
+                  setSchedule((p) => ({
+                    ...p,
+                    min_booking_lead_minutes: parseInt(e.target.value, 10),
+                  }))
+                }
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value={5}>5 min</option>
+                <option value={10}>10 min</option>
+                <option value={15}>15 min</option>
+                <option value={20}>20 min</option>
+                <option value={30}>30 min</option>
+              </select>
             </div>
           </div>
           <div>

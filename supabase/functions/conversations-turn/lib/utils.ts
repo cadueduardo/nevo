@@ -329,7 +329,8 @@ export function getMockAvailability(
   const { time: nowTime } = getNowInBusinessTz(now)
   if (isTodayInBusinessTz(dateIso, now)) {
     const nowMins = toMinutes(nowTime)
-    const minAllowed = nowMins + MIN_BOOKING_LEAD_MINUTES
+    const minLead = schedule?.min_booking_lead_minutes ?? MIN_BOOKING_LEAD_MINUTES
+    const minAllowed = nowMins + minLead
     slots = slots.filter((slot) => toMinutes(slot) > minAllowed)
   }
   const occupied = new Set<string>()

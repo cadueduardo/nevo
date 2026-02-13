@@ -33,10 +33,15 @@ if ($functionsChanged) {
   Write-Host "Alteracoes em supabase/functions/ detectadas. Fazendo deploy das Edge Functions..." -ForegroundColor Cyan
   $ref = $env:SUPABASE_PROJECT_REF
   $password = $env:SUPABASE_DB_PASSWORD
-  if ($ref) {
+  if (-not $ref) {
+    Write-Host "ERRO: SUPABASE_PROJECT_REF nao definido no .env" -ForegroundColor Red
+    exit 1
+  }
+  if ($password) {
     npx supabase link --project-ref $ref --password $password 2>$null | Out-Null
   }
-  npx supabase functions deploy
+  Write-Host "Deploy para projeto $ref ..." -ForegroundColor Gray
+  npx supabase functions deploy --project-ref $ref
   if ($LASTEXITCODE -ne 0) {
     Write-Host "ERRO: Deploy das Edge Functions falhou." -ForegroundColor Red
     exit 1

@@ -11,6 +11,7 @@ export type OnboardingStep =
   | 'schedule_breaks'
   | 'schedule_interval'
   | 'schedule_interval_custom'
+  | 'min_booking_lead'
   | 'services_duration'
   | 'services_pricing'
   | 'staff_mode'

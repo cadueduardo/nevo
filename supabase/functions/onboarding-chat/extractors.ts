@@ -450,6 +450,9 @@ export function identifyMissingFields(
     if (!data.schedule?.start_time) missing.push('schedule.start_time')
     if (!data.schedule?.end_time) missing.push('schedule.end_time')
     if (!data.schedule?.interval_minutes) missing.push('schedule.interval_minutes')
+    if (data.schedule?.interval_minutes && data.schedule?.min_booking_lead_minutes == null) {
+      missing.push('schedule.min_booking_lead_minutes')
+    }
   }
 
   return missing

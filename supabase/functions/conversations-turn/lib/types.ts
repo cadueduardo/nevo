@@ -34,6 +34,7 @@ export interface SimulatorConfig {
     end_time?: string
     breaks?: Array<{ start: string; end: string }>
     interval_minutes?: number
+    min_booking_lead_minutes?: number
   }
   staff?: Array<{
     name: string
@@ -44,6 +45,7 @@ export interface SimulatorConfig {
       end_time?: string
       breaks?: Array<{ start: string; end: string }>
       interval_minutes?: number
+      min_booking_lead_minutes?: number
     }
   }>
   dynamic_variables?: Array<{ key: string; label: string; type: string; context?: string }>

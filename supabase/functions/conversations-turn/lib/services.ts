@@ -180,10 +180,17 @@ export async function inferAreaWithAI(
 
   const business = config.business_name ? `Nome: ${config.business_name}` : ""
   const businessType = config.business_type ? `Ramo: ${config.business_type}` : ""
+  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
+  const servicesHint =
+    servicesList.length > 0
+      ? `\nServiços oferecidos pelo negócio (use estes nomes exatos quando fizer sentido): ${servicesList.join(", ")}\n`
+      : ""
+
   const prompt = `Você é um classificador de intenção. Sua tarefa é identificar o assunto principal ou necessidade do cliente a partir da mensagem.
 
 ${business}
 ${businessType}
+${servicesHint}
 
 Mensagem do cliente:
 "${message}"
@@ -191,10 +198,11 @@ Mensagem do cliente:
 Instruções CRÍTICAS:
 - Retorne APENAS JSON válido.
 - Analise APENAS a mensagem do cliente e identifique o assunto/área/necessidade mencionada, SEMPRE baseado no conteúdo real da mensagem.
-- IMPORTANTE: IGNORE completamente o ramo de atividade informado acima. Identifique o contexto baseado SOMENTE na mensagem do cliente.
+- IMPORTANTE: Quando possível, use o NOME EXATO de um serviço da lista acima (ex: se temos "Direito trabalhista" e o cliente disse "quero colocar a empresa na justiça", retorne inferred_area: "Direito trabalhista").
 - Identifique o contexto CORRETO baseado nas palavras-chave da mensagem. Exemplos (adaptáveis a QUALQUER ramo):
   * "prenderam meu filho" ou "meu primo foi preso" → "direito criminal"
   * "quero divorciar" ou "guarda dos filhos" → "direito de família"
+  * "quero colocar a empresa na justiça" ou "processo contra patrão" ou "demissão" ou "verbas rescisórias" ou "rescisão" ou "processo trabalhista" → "direito trabalhista"
   * "dor de dente" ou "tratamento dentário" → "odontologia"
   * "consertar carro" ou "reparo automotivo" → "mecânica automotiva"
 - CRÍTICO - USE O CONTEXTO "PARA QUEM": Se a mensagem disser PARA QUEM é o pedido, use isso. Ex: "corte para meu filho e meu marido" = clientes masculinos → NÃO inferir "feminino". "corte para minha esposa" pode indicar feminino só se o negócio tiver corte feminino. Sempre baseie na menção explícita (filho, marido, esposa, etc.).
@@ -265,6 +273,14 @@ export async function classifyServiceMatch(
       return { reject: true, confidence: ai.confidence, inferred_area: inferred }
     }
     return { inferred_area: inferred, confidence: ai.confidence }
+  }
+
+  // Se a IA retornou o nome exato de um serviço, aceitar diretamente
+  const exactServiceMatch = (config.services || []).find(
+    (s) => s.name && normalizeText(s.name) === normalizeText(inferred)
+  )
+  if (exactServiceMatch?.name && (ai.confidence ?? 0) >= minConfidence) {
+    return { service: exactServiceMatch.name, confidence: ai.confidence, inferred_area: inferred }
   }
 
   const matchedService = pickServiceByArea(inferred, config.services || [])

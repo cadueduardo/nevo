@@ -30,6 +30,7 @@ export interface EditableItem {
     | 'variable'
     | 'schedule'
     | 'schedule_interval'
+    | 'min_booking_lead'
     | 'service_area'
     | 'tone_of_voice'
     | 'policies'
