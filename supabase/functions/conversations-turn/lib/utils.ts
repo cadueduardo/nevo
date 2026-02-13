@@ -271,8 +271,8 @@ export function isTimeTooSoonForDate(
   minLeadMinutes: number = MIN_BOOKING_LEAD_MINUTES,
   now: Date = new Date()
 ): boolean {
-  const { dateIso: todayIso, time: nowTime } = getNowInBusinessTz(now)
-  if (dateIso !== todayIso) return false
+  if (!isTodayInBusinessTz(dateIso, now)) return false
+  const { time: nowTime } = getNowInBusinessTz(now)
   const chosenMins = toMinutes(time)
   const currentMins = toMinutes(nowTime)
   return chosenMins <= currentMins + Math.max(0, minLeadMinutes)

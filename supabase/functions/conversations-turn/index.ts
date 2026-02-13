@@ -1209,7 +1209,32 @@ async function resolveBooking(
       Array.isArray(state.last_time_options) && state.last_time_options.length > 0
         ? resolveOptionByNumber(text, state.last_time_options)
         : null
-    if (timeFromNumber) nextState.slots.time = timeFromNumber
+    if (timeFromNumber) {
+      // Validar antes de aceitar: não permitir horário passado ou sem buffer mínimo para hoje
+      if (nextState.slots.date && isTimeTooSoonForDate(nextState.slots.date, timeFromNumber)) {
+        const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
+        const serviceDuration = getServicesTotalDuration(
+          config,
+          nextState.slots.service || nextState.pending_default_service
+        )
+        const availability = getMockAvailability(
+          nextState.slots.date,
+          schedule,
+          nextState.booked_slots,
+          nextState.slots.staff_name,
+          serviceDuration
+        )
+        nextState.last_time_options = availability.available.slice(0, 24)
+        nextState.last_time_options_date = nextState.slots.date
+        nextState.last_time_options_staff = nextState.slots.staff_name
+        return buildResult(
+          `Este horário não pode ser agendado agora. Trabalhamos com antecedência mínima de ${MIN_BOOKING_LEAD_MINUTES} minutos. Qual horário você prefere?`,
+          nextState,
+          toNumberedOptions(availability.available.slice(0, 24))
+        )
+      }
+      nextState.slots.time = timeFromNumber
+    }
   }
 
   if (!nextState.slots.time) {
