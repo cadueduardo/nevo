@@ -241,7 +241,8 @@ export function isWithinSchedule(time: string, schedule?: SimulatorConfig["sched
 }
 
 const BUSINESS_TZ = "America/Sao_Paulo"
-export const MIN_BOOKING_LEAD_MINUTES = 30
+/** Antecedência mínima para agendamento hoje (em minutos). Ex.: 20 = não mostrar 14:30 se agora é 14:25. */
+export const MIN_BOOKING_LEAD_MINUTES = 20
 
 function getNowInBusinessTz(now: Date = new Date()): { dateIso: string; time: string } {
   const dateIso = now.toLocaleDateString("en-CA", { timeZone: BUSINESS_TZ }) // YYYY-MM-DD
@@ -301,6 +302,18 @@ export function filterDaysExcludingClosedToday(
   return days.filter((d) => d !== todayWeekday)
 }
 
+function normalizeDateIso(s: string | undefined): string {
+  if (!s || typeof s !== "string") return ""
+  return s.trim().replace(/\s+/g, "")
+}
+
+/** Retorna true se a data é hoje no fuso do negócio. */
+export function isTodayInBusinessTz(dateIso: string | undefined, now: Date = new Date()): boolean {
+  if (!dateIso) return false
+  const today = getTodayIsoBusinessTz(now)
+  return normalizeDateIso(dateIso) === normalizeDateIso(today)
+}
+
 export function getMockAvailability(
   dateIso: string,
   schedule?: SimulatorConfig["schedule"],
@@ -313,8 +326,8 @@ export function getMockAvailability(
   const end = schedule?.end_time || "18:00"
   const interval = serviceDurationMinutes || schedule?.interval_minutes || 60
   let slots = applyBreaks(buildDailySlots(start, end, interval), schedule?.breaks || [])
-  const { dateIso: todayIso, time: nowTime } = getNowInBusinessTz(now)
-  if (dateIso === todayIso) {
+  const { time: nowTime } = getNowInBusinessTz(now)
+  if (isTodayInBusinessTz(dateIso, now)) {
     const nowMins = toMinutes(nowTime)
     const minAllowed = nowMins + MIN_BOOKING_LEAD_MINUTES
     slots = slots.filter((slot) => toMinutes(slot) > minAllowed)
