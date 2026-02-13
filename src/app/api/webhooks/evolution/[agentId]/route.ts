@@ -94,7 +94,13 @@ export async function POST(
     schedule: bc.schedule ?? undefined,
     staff: Array.isArray(bc.staff) ? bc.staff : [],
     dynamic_variables: Array.isArray(bc.dynamic_variables) ? bc.dynamic_variables : [],
-    lead_policy: bc.lead_policy ?? undefined,
+    lead_policy: {
+      reject_unlisted_services: true,
+      use_ai_matching: true,
+      ...(typeof bc.lead_policy === 'object' && bc.lead_policy !== null
+        ? (bc.lead_policy as Record<string, unknown>)
+        : {}),
+    },
     holidays_attend: Array.isArray(bc.holidays_attend) ? bc.holidays_attend : [],
     closure_periods: Array.isArray(bc.closure_periods) ? bc.closure_periods : [],
     allow_sequence_booking: Boolean(bc.allow_sequence_booking),
