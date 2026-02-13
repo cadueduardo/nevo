@@ -235,14 +235,23 @@ export default function AgentDetailPage() {
   const agent = data.agent
   const setting = data.agent_setting
   const bc = setting.business_config ?? {}
+  const validContext = bc.context as string | undefined
+  const contextValue =
+    validContext === 'booking' || validContext === 'quote' || validContext === 'both'
+      ? validContext
+      : undefined
+  const validLocationMode = bc.location_mode as string | undefined
+  const locationModeValue =
+    validLocationMode === 'fixed' || validLocationMode === 'mobile' ? validLocationMode : undefined
+
   const initialConfig: Partial<BasicConfigPayload> = {
     services: (bc.services as Service[] | undefined) ?? [],
     schedule: (bc.schedule as Schedule | undefined) ?? undefined,
     greeting_message: (bc.greeting_message as string | undefined) ?? '',
     fallback_message: (bc.fallback_message as string | undefined) ?? '',
     business_name: (bc.business_name as string | undefined) ?? '',
-    context: (bc.context as string | undefined) ?? '',
-    location_mode: (bc.location_mode as string | undefined) ?? '',
+    context: contextValue,
+    location_mode: locationModeValue,
     establishment_address: (bc.establishment_address as BasicConfigPayload['establishment_address']) ?? undefined,
     service_area: (bc.service_area as BasicConfigPayload['service_area']) ?? undefined,
     policies: (bc.policies as BasicConfigPayload['policies']) ?? undefined,
