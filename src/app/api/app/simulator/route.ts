@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getAppBootstrap, getAppBootstrapByAgent } from '@/lib/app/bootstrap'
+import {
+  getAppBootstrap,
+  getAppBootstrapByAgent,
+  type AppBootstrapByAgentResult,
+} from '@/lib/app/bootstrap'
 
 /**
  * POST /api/app/simulator
@@ -43,8 +47,8 @@ export async function POST(req: NextRequest) {
 
     const tenant = bootstrap.tenant
     // Garantir agent_id para conversation/channel (NOT NULL no banco). Se não veio no body, usar agente do bootstrap ou primeiro do tenant.
-    let effectiveAgentId =
-      agentId ?? ('agent' in bootstrap && bootstrap.agent ? bootstrap.agent.id : undefined)
+    const bootstrapWithAgent = 'agent' in bootstrap ? (bootstrap as AppBootstrapByAgentResult) : null
+    let effectiveAgentId = agentId ?? bootstrapWithAgent?.agent?.id
     if (!effectiveAgentId) {
       const { data: firstAgent } = await supabase
         .from('agent')
