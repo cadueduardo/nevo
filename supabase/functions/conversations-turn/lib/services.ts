@@ -21,6 +21,67 @@ function normalizeForServiceMatch(s: string): string {
     .trim()
 }
 
+const SERVICE_STOPWORDS = new Set([
+  "quanto",
+  "custa",
+  "valor",
+  "preco",
+  "preço",
+  "ta",
+  "tá",
+  "do",
+  "da",
+  "de",
+  "o",
+  "a",
+  "os",
+  "as",
+  "um",
+  "uma",
+  "pra",
+  "para",
+  "quero",
+  "agendar",
+  "horario",
+  "horário",
+  "minha",
+  "meu",
+  "por",
+  "favor",
+])
+
+function tokenizeRelevant(text: string): string[] {
+  const normalized = normalizeText(text)
+  return normalized
+    .split(/[^a-z0-9]+/i)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && !SERVICE_STOPWORDS.has(t))
+}
+
+function findServiceByTokenOverlap(
+  text: string,
+  services: Array<{ name: string }> = []
+): string | null {
+  const msgTokens = tokenizeRelevant(text)
+  if (msgTokens.length === 0) return null
+
+  let best: { name: string; score: number } | null = null
+  for (const service of services) {
+    const name = service.name || ""
+    const svcTokens = tokenizeRelevant(name)
+    if (svcTokens.length === 0) continue
+    const overlap = svcTokens.filter((token) => msgTokens.includes(token)).length
+    if (overlap === 0) continue
+    const score = overlap / svcTokens.length
+    if (!best || score > best.score) {
+      best = { name: service.name, score }
+    }
+  }
+
+  if (!best) return null
+  return best.score >= 0.5 ? best.name : null
+}
+
 /** Mínimo de caracteres para match parcial. Evita que "O" case em "Implantação" (nameNorm.includes("o")). */
 const MIN_TEXT_LENGTH_FOR_PARTIAL_MATCH = 2
 
@@ -38,7 +99,7 @@ export function findServiceFromText(text: string, services: Array<{ name: string
     if (msgNorm.length < MIN_TEXT_LENGTH_FOR_PARTIAL_MATCH) continue
     if (msgNorm.includes(nameNorm) || nameNorm.includes(msgNorm)) return service.name
   }
-  return null
+  return findServiceByTokenOverlap(msg, services)
 }
 
 export function getServiceWithPrice(
