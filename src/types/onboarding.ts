@@ -25,6 +25,8 @@ export type OnboardingStep =
   | 'policies'
   | 'tone_of_voice'
   | 'handoff_mode'
+  | 'target_audience'
+  | 'interaction_style'
   | 'faq_offer'
   | 'faq_question'
   | 'faq_more'

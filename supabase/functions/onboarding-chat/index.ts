@@ -354,6 +354,32 @@ function buildAllEditableItems(data: any) {
     data.handoff_mode === 'always' ? 'Sempre humano' : data.handoff_mode === 'conditional' ? 'Condicional' : data.handoff_mode === 'never' ? 'Automático' : ''
   items.push({ id: 'handoff_mode', label: 'Passar para humano', value: handoffLabel, type: 'tone_of_voice' })
 
+  const targetAudienceLabel =
+    data.target_audience?.mode === 'women_only'
+      ? 'Somente mulheres'
+      : data.target_audience?.mode === 'men_only'
+        ? 'Somente homens'
+        : data.target_audience?.mode === 'kids_only'
+          ? 'Infantil'
+          : data.target_audience?.mode === 'custom'
+            ? data.target_audience?.note
+              ? `Personalizado (${data.target_audience.note})`
+              : 'Personalizado'
+            : data.target_audience?.mode === 'all'
+              ? 'Todos os públicos'
+              : ''
+  items.push({ id: 'target_audience', label: 'Público-alvo', value: targetAudienceLabel, type: 'target_audience' })
+
+  const interactionStyleLabel =
+    data.interaction_style === 'numbered_options'
+      ? 'Opções numeradas'
+      : data.interaction_style === 'conversational'
+        ? 'Conversa natural'
+        : data.interaction_style === 'hybrid'
+          ? 'Misto'
+          : ''
+  items.push({ id: 'interaction_style', label: 'Estilo de respostas', value: interactionStyleLabel, type: 'interaction_style' })
+
   if (Array.isArray(data.services) && data.services.length > 0) {
     const defaultMins = data.schedule?.interval_minutes
     data.services.forEach((s: any, i: number) => {
@@ -541,6 +567,32 @@ function buildEditableItems(data: any) {
     items.push({ id: 'handoff_mode', label: 'Passar para humano', value: handoffLabel, type: 'tone_of_voice' })
   }
 
+  if (data.target_audience) {
+    const targetAudienceLabel =
+      data.target_audience?.mode === 'women_only'
+        ? 'Somente mulheres'
+        : data.target_audience?.mode === 'men_only'
+          ? 'Somente homens'
+          : data.target_audience?.mode === 'kids_only'
+            ? 'Infantil'
+            : data.target_audience?.mode === 'custom'
+              ? data.target_audience?.note
+                ? `Personalizado (${data.target_audience.note})`
+                : 'Personalizado'
+              : 'Todos os públicos'
+    items.push({ id: 'target_audience', label: 'Público-alvo', value: targetAudienceLabel, type: 'target_audience' })
+  }
+
+  if (data.interaction_style) {
+    const interactionStyleLabel =
+      data.interaction_style === 'numbered_options'
+        ? 'Opções numeradas'
+        : data.interaction_style === 'conversational'
+          ? 'Conversa natural'
+          : 'Misto'
+    items.push({ id: 'interaction_style', label: 'Estilo de respostas', value: interactionStyleLabel, type: 'interaction_style' })
+  }
+
   // Feriados (booking/both) — sempre mostrar para poder editar/adicionar
   if (data.context === 'booking' || data.context === 'both') {
     const holidays = data.holidays_attend
@@ -693,6 +745,38 @@ function parseTone(value: string): 'formal' | 'friendly' | 'professional' | 'fun
   if (v.includes('amig') || v.includes('friendly')) return 'friendly'
   if (v.includes('prof')) return 'professional'
   if (v.includes('engra') || v.includes('funny')) return 'funny'
+  return null
+}
+
+function parseTargetAudience(
+  value: string
+): { mode: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'; note?: string } | null {
+  const v = (value || '').toLowerCase().trim()
+  if (!v) return null
+  if (v.includes('todos') || v.includes('todas') || v.includes('geral')) return { mode: 'all' }
+  if (v.includes('somente mulheres') || v.includes('so mulheres') || v.includes('feminino')) {
+    return { mode: 'women_only' }
+  }
+  if (v.includes('somente homens') || v.includes('so homens') || v.includes('masculino')) {
+    return { mode: 'men_only' }
+  }
+  if (v.includes('infantil') || v.includes('crianca') || v.includes('crianÃ§a')) {
+    return { mode: 'kids_only' }
+  }
+  if (v.includes('outro') || v.includes('especifico') || v.includes('especÃ­fico')) {
+    const note = value
+      .replace(/^(outro[s]?|publico especifico|publico especifico:)\s*[:\-]?\s*/i, '')
+      .trim()
+    return note ? { mode: 'custom', note } : { mode: 'custom' }
+  }
+  return { mode: 'custom', note: value.trim() }
+}
+
+function parseInteractionStyle(value: string): 'numbered_options' | 'conversational' | 'hybrid' | null {
+  const v = (value || '').toLowerCase()
+  if (v.includes('misto') || v.includes('hibrido') || v.includes('hÃ­brido')) return 'hybrid'
+  if (v.includes('numerad') || v.includes('numero') || v.includes('nÃºmero')) return 'numbered_options'
+  if (v.includes('conversa') || v.includes('natural') || v.includes('humana')) return 'conversational'
   return null
 }
 
@@ -1045,7 +1129,13 @@ async function processMessage(
         const h = value.toLowerCase()
         if (h.includes('sempre') || h.includes('always')) updated.handoff_mode = 'always'
         else if (h.includes('condicional') || h.includes('alguns')) updated.handoff_mode = 'conditional'
-        else if (h.includes('automático') || h.includes('automatic')) updated.handoff_mode = 'automatic'
+        else if (h.includes('automático') || h.includes('automatic')) updated.handoff_mode = 'never'
+      } else if (id === 'target_audience') {
+        const audience = parseTargetAudience(value)
+        if (audience) updated.target_audience = audience
+      } else if (id === 'interaction_style') {
+        const style = parseInteractionStyle(value)
+        if (style) updated.interaction_style = style
       } else if (id.startsWith('staff_')) {
         const idx = parseInt(id.replace('staff_', ''), 10)
         const staff = Array.isArray(updated.staff) ? [...updated.staff] : []
@@ -1093,6 +1183,8 @@ async function processMessage(
       const { id } = delCmd
       if (id === 'service_area') delete updated.service_area
       else if (id === 'tone_of_voice') delete updated.tone_of_voice
+      else if (id === 'target_audience') delete updated.target_audience
+      else if (id === 'interaction_style') delete updated.interaction_style
       else if (id === 'schedule') updated.schedule = {}
       else if (id === 'policies') delete updated.policies
       else if (id.startsWith('service_')) {
@@ -2358,6 +2450,57 @@ async function processMessage(
     }
   }
 
+  if (currentStep === 'target_audience') {
+    const audience = parseTargetAudience(text)
+    if (!audience) {
+      return {
+        assistant_message:
+          'Seu atendimento e focado em algum publico especifico?',
+        next_step: 'target_audience',
+        action_options: ['Atendo todos os publicos', 'Somente mulheres', 'Somente homens', 'Infantil', 'Outro publico especifico'],
+        requires_action: 'target_audience',
+      }
+    }
+    if (audience.mode === 'custom' && !audience.note) {
+      return {
+        assistant_message:
+          'Perfeito. Qual publico especifico voce quer atender? (responda em texto livre)',
+        next_step: 'target_audience',
+      }
+    }
+    const merged = { ...collectedData, target_audience: audience }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('target_audience', merged))
+    return {
+      assistant_message: `✅ Público-alvo anotado.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { target_audience: audience },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'interaction_style') {
+    const style = parseInteractionStyle(text)
+    if (!style) {
+      return {
+        assistant_message:
+          'Como voce prefere o estilo das respostas no chat?',
+        next_step: 'interaction_style',
+        action_options: ['Misto (recomendado)', 'Opcoes numeradas (mais agil)', 'Conversa natural (mais humana)'],
+        requires_action: 'interaction_style',
+      }
+    }
+    const merged = { ...collectedData, interaction_style: style }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('interaction_style', merged))
+    return {
+      assistant_message: `✅ Estilo de respostas definido.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { interaction_style: style },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
   if (currentStep === 'holidays_offer') {
     const wantsSkip = /(pular|pular por enquanto|depois|nao por enquanto)/i.test(text)
     const wantsNoAttend = /(nao atendo|não atendo|nenhum|nenhum feriado)/i.test(text)
@@ -3084,4 +3227,3 @@ serve(async (req) => {
     )
   }
 })
-

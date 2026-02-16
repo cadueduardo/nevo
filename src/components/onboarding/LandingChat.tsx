@@ -797,6 +797,8 @@ export function LandingChat() {
         schedule: onboardingData.schedule,
         staff: onboardingData.staff,
         dynamic_variables: onboardingData.dynamic_variables,
+        target_audience: onboardingData.target_audience,
+        interaction_style: onboardingData.interaction_style,
         lead_policy: onboardingData.lead_policy,
         holidays_attend: onboardingData.holidays_attend,
         closure_periods: onboardingData.closure_periods,

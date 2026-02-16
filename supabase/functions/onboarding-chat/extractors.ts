@@ -53,6 +53,11 @@ export interface BusinessModelExtraction {
   context?: 'booking' | 'quote' | 'both'
   tone_of_voice?: 'formal' | 'friendly' | 'professional' | 'funny'
   handoff_mode?: 'always' | 'conditional' | 'never'
+  target_audience?: {
+    mode: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'
+    note?: string
+  }
+  interaction_style?: 'numbered_options' | 'conversational' | 'hybrid'
   /** Cliente pode agendar vários serviços em sequência na mesma visita. */
   allow_sequence_booking?: boolean
   /** Serviços que podem ser combinados em sequência (quando allow_sequence_booking). */

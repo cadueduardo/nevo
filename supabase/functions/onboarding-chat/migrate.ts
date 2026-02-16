@@ -48,6 +48,11 @@ interface CollectedDataForMigration {
   faq?: Array<{ question: string; answer: string }>
   tone_of_voice?: 'formal' | 'friendly' | 'professional' | 'funny'
   handoff_mode?: 'always' | 'conditional' | 'never'
+  target_audience?: {
+    mode: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'
+    note?: string
+  }
+  interaction_style?: 'numbered_options' | 'conversational' | 'hybrid'
   context?: 'booking' | 'quote' | 'both'
 }
 
@@ -130,6 +135,8 @@ export async function migrateOnboardingToTenant(
       closure_periods: collectedData.closure_periods ?? [],
       allow_sequence_booking: collectedData.allow_sequence_booking ?? false,
       sequence_eligible_services: collectedData.sequence_eligible_services ?? [],
+      target_audience: collectedData.target_audience ?? { mode: 'all' },
+      interaction_style: collectedData.interaction_style ?? 'hybrid',
       context_mode: collectedData.context ?? 'booking',
       business_type: collectedData.business_type ?? null,
     }

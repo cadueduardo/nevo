@@ -118,6 +118,8 @@ export function ChatThread({
                 if (id === 'location_mode') return onActionClick?.(`${newValue}.`)
                 if (id === 'service_area') return onActionClick?.(`Minha região de atendimento é: ${newValue}.`)
                 if (id === 'tone_of_voice') return onActionClick?.(`Quero que o tom de voz seja ${newValue}.`)
+                if (id === 'target_audience') return onActionClick?.(`Meu público-alvo é ${newValue}.`)
+                if (id === 'interaction_style') return onActionClick?.(`Quero estilo de respostas ${newValue}.`)
                 if (id === 'schedule') return onActionClick?.(`Meu horário de atendimento é: ${newValue}.`)
 
                 if (id.startsWith('service_duration_') && item?.label) {
@@ -142,6 +144,8 @@ export function ChatThread({
 
                 if (id === 'service_area') return onActionClick?.('Quero remover minha região de atendimento por enquanto.')
                 if (id === 'tone_of_voice') return onActionClick?.('Quero remover/definir depois o tom de voz.')
+                if (id === 'target_audience') return onActionClick?.('Quero remover/definir depois o público-alvo.')
+                if (id === 'interaction_style') return onActionClick?.('Quero remover/definir depois o estilo de respostas.')
                 if (id === 'schedule') return onActionClick?.('Quero remover meu horário por enquanto.')
                 if (id === 'policies') return onActionClick?.('Não tenho políticas por enquanto.')
 

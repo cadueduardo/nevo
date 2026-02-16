@@ -73,6 +73,13 @@ export interface FAQ {
   category?: 'services' | 'pricing' | 'policies' | 'general'
 }
 
+export interface TargetAudience {
+  mode: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'
+  note?: string
+}
+
+export type InteractionStyle = 'numbered_options' | 'conversational' | 'hybrid'
+
 export interface BusinessModel {
   // Básico
   business_type: string
@@ -108,6 +115,8 @@ export interface BusinessModel {
   
   // Modo de decisão
   handoff_mode: 'always' | 'conditional' | 'never'
+  target_audience?: TargetAudience
+  interaction_style?: InteractionStyle
   
   // Contexto identificado
   context?: 'booking' | 'quote' | 'both'

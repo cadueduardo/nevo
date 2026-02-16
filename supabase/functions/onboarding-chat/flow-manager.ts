@@ -458,6 +458,27 @@ export function determineNextStep(
     }
   }
 
+
+  if (!(currentData as any).target_audience) {
+    return {
+      step: 'target_audience',
+      message:
+        'Seu atendimento e focado em algum publico especifico? Isso ajuda a qualificar melhor as conversas.',
+      action_options: ['Atendo todos os publicos', 'Somente mulheres', 'Somente homens', 'Infantil', 'Outro publico especifico'],
+      requires_action: 'target_audience',
+    }
+  }
+
+  if (!(currentData as any).interaction_style) {
+    return {
+      step: 'interaction_style',
+      message:
+        'Como voce prefere o estilo das respostas no chat?',
+      action_options: ['Misto (recomendado)', 'Opcoes numeradas (mais agil)', 'Conversa natural (mais humana)'],
+      requires_action: 'interaction_style',
+    }
+  }
+
   // Feriados: opcional (apenas para booking/both)
   if (
     !(currentData as any).holidays_skipped &&
@@ -681,6 +702,32 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
           ? 'Passa para humano em alguns casos'
           : 'Atendimento automático'
     parts.push(`• Passar para humano: ${handoffLabel}`)
+  }
+
+
+  if ((data as any).target_audience) {
+    const ta = (data as any).target_audience
+    const audienceLabel =
+      ta?.mode === 'women_only'
+        ? 'Somente mulheres'
+        : ta?.mode === 'men_only'
+          ? 'Somente homens'
+          : ta?.mode === 'kids_only'
+            ? 'Infantil'
+            : ta?.mode === 'custom'
+              ? `Personalizado${ta?.note ? ` (${ta.note})` : ''}`
+              : 'Todos os publicos'
+    parts.push(`• Publico-alvo: ${audienceLabel}`)
+  }
+
+  if ((data as any).interaction_style) {
+    const interactionStyleLabel =
+      (data as any).interaction_style === 'numbered_options'
+        ? 'Opcoes numeradas'
+        : (data as any).interaction_style === 'conversational'
+          ? 'Conversa natural'
+          : 'Misto'
+    parts.push(`• Estilo de respostas: ${interactionStyleLabel}`)
   }
 
   if (Array.isArray((data as any).dynamic_variables) && (data as any).dynamic_variables.length > 0) {

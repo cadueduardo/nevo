@@ -33,6 +33,8 @@ export interface EditableItem {
     | 'min_booking_lead'
     | 'service_area'
     | 'tone_of_voice'
+    | 'target_audience'
+    | 'interaction_style'
     | 'policies'
     | 'business_name'
     | 'business_type'
