@@ -283,7 +283,9 @@ export function LandingChat() {
         editableItems: response.editable_items || (inferredEditableItems && inferredEditableItems.length > 0 ? inferredEditableItems : undefined),
         selectableOptions: response.selectable_options,
         requiresAction: response.requires_action,
-        allowCustomInput: response.requires_action === 'services_list',
+        allowCustomInput:
+          response.requires_action === 'services_list' ||
+          response.requires_action === 'services_edit',
       }
 
       setMessages((prev) => [...prev, assistantMessage])
@@ -758,15 +760,18 @@ export function LandingChat() {
         return
       }
     }
-    // Se Continuar e a última mensagem tem service_price, enviar edits em lote
+    // Se Continuar e a última mensagem tem campos editáveis, enviar edits em lote.
     if (action === 'Continuar') {
       const lastMsg = messages[messages.length - 1]
       const items = lastMsg?.editableItems
-      const servicePrices = items?.filter((it) => it.type === 'service_price') ?? []
-      if (servicePrices.length > 0) {
-        const edits = servicePrices.map((it) => ({ id: it.id, value: (it.value || '').trim() }))
-        handleSend(action, { edits })
-        return
+      if (items && items.length > 0) {
+        const edits = items
+          .map((it) => ({ id: it.id, value: (it.value || '').trim() }))
+          .filter((it) => it.value.length > 0)
+        if (edits.length > 0) {
+          handleSend(action, { edits })
+          return
+        }
       }
     }
     handleSend(action)

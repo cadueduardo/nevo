@@ -112,8 +112,12 @@ export function ChatMessage({
   }
 
   const handleEditSave = (id: string) => {
-    if (editingValue.trim() && onItemEdit) {
-      onItemEdit(id, editingValue.trim(), editableItems)
+    if (editingValue.trim()) {
+      if (onItemEditLocal) {
+        onItemEditLocal(id, editingValue.trim())
+      } else if (onItemEdit) {
+        onItemEdit(id, editingValue.trim(), editableItems)
+      }
     }
     setEditingId(null)
     setEditingValue('')
@@ -122,6 +126,21 @@ export function ChatMessage({
   const handleEditCancel = () => {
     setEditingId(null)
     setEditingValue('')
+  }
+
+  const flushPendingInlineEdits = () => {
+    if (editingId && onItemEditLocal) {
+      const value = editingValue.trim()
+      if (value) onItemEditLocal(editingId, value)
+      setEditingId(null)
+      setEditingValue('')
+    }
+    if (editingPriceId && onItemEditLocal) {
+      const toSave = (editingPriceValue || '').trim()
+      onItemEditLocal(editingPriceId, toSave ? formatCurrencyBRL(editingPriceValue) : '')
+      setEditingPriceId(null)
+      setEditingPriceValue('')
+    }
   }
 
   const handleDelete = (id: string) => {
@@ -153,19 +172,19 @@ export function ChatMessage({
     ? customInputValue.split(',').map((s) => s.trim()).filter(Boolean).length
     : 0
   const isServicesSelection = requiresAction === 'services_list' && allowCustomInput
+  const isServicesEditInput = requiresAction === 'services_edit' && allowCustomInput
   const suggestionExamples = (selectableOptions || [])
     .map((option) => option.label.trim())
     .filter(Boolean)
     .slice(0, 4)
   const customInputPlaceholderText =
-    isServicesSelection && suggestionExamples.length > 0
+    (isServicesSelection || isServicesEditInput) && suggestionExamples.length > 0
       ? `Ex: ${suggestionExamples.join(', ')}`
       : customInputPlaceholder
-  const canConfirm =
-    selectedOptions.size > 0 ||
-    customItemsCount > 0 ||
-    requiresAction === 'holidays_select'
-  const totalCount = selectedOptions.size + customItemsCount
+  const canConfirm = isServicesEditInput
+    ? customItemsCount > 0
+    : selectedOptions.size > 0 || customItemsCount > 0 || requiresAction === 'holidays_select'
+  const totalCount = isServicesEditInput ? customItemsCount : selectedOptions.size + customItemsCount
 
   return (
     <div
@@ -310,8 +329,42 @@ export function ChatMessage({
           </div>
         )}
 
+        {/* Input enxuto para adicionar mais serviços em services_edit (sem checkboxes). */}
+        {!isUser && isServicesEditInput && (
+          <div className="mt-4 space-y-2">
+            <div className="rounded-lg border border-border bg-background/50 p-3">
+              <p className="text-xs text-muted-foreground mb-2">
+                Adicione mais serviços separados por vírgula.
+              </p>
+              <input
+                type="text"
+                value={customInputValue}
+                onChange={(e) => setCustomInputValue(e.target.value)}
+                placeholder={customInputPlaceholderText}
+                className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background placeholder:text-muted-foreground"
+              />
+            </div>
+            <button
+              onClick={() => {
+                if (!customInputValue.trim() || !onOptionSelect) return
+                onOptionSelect([], customInputValue.trim())
+                setCustomInputValue('')
+              }}
+              disabled={!canConfirm}
+              className={cn(
+                'w-full mt-3 px-4 py-2 rounded-lg text-sm font-normal transition-colors',
+                canConfirm
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'bg-muted text-muted-foreground cursor-not-allowed'
+              )}
+            >
+              Adicionar serviços ({totalCount})
+            </button>
+          </div>
+        )}
+
         {/* Checkboxes para seleção múltipla (dias da semana, serviços, etc) */}
-        {!isUser && selectableOptions && selectableOptions.length > 0 && (
+        {!isUser && selectableOptions && selectableOptions.length > 0 && !isServicesEditInput && (
           <div className="mt-4 space-y-2">
             {isServicesSelection && (
               <div className="mb-3 rounded-lg border border-border bg-background/50 p-3">
@@ -400,7 +453,10 @@ export function ChatMessage({
               return (
                 <button
                   key={index}
-                  onClick={() => onActionClick?.(option)}
+                  onClick={() => {
+                    if (option === 'Continuar') flushPendingInlineEdits()
+                    onActionClick?.(option)
+                  }}
                   className={cn(
                     'px-4 py-2',
                     'rounded-lg',

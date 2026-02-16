@@ -163,7 +163,7 @@ export function ChatThread({
                 onActionClick?.('Quero remover isso.')
               }}
               onOptionSelect={(selectedValues, customInput) => {
-                if (message.requiresAction === 'services_list') {
+                if (message.requiresAction === 'services_list' || message.requiresAction === 'services_edit') {
                   const parts = [...selectedValues]
                   if (customInput?.trim()) {
                     parts.push(...customInput.split(',').map((s) => s.trim()).filter(Boolean))

@@ -780,6 +780,97 @@ function parseInteractionStyle(value: string): 'numbered_options' | 'conversatio
   return null
 }
 
+function applyInlineEdit(updated: Record<string, any>, id: string, value: string): Record<string, any> {
+  if (id === 'business_name') updated.business_name = value
+  else if (id === 'business_type') updated.business_type = value
+  else if (id === 'service_area') updated.service_area = { ...(updated.service_area || {}), region: value }
+  else if (id === 'tone_of_voice') {
+    const t = parseTone(value)
+    if (t) updated.tone_of_voice = t
+  } else if (id === 'context') {
+    const c = parseContext(value)
+    if (c) updated.context = c
+  } else if (id === 'schedule_interval') {
+    const mins = parseIntervalMinutes(value)
+    if (mins != null) updated.schedule = { ...(updated.schedule || {}), interval_minutes: mins }
+  } else if (id === 'min_booking_lead') {
+    const mins = parseIntervalMinutes(value)
+    if (mins != null && [5, 10, 15, 20, 30].includes(mins)) {
+      updated.schedule = { ...(updated.schedule || {}), min_booking_lead_minutes: mins }
+    }
+  } else if (id === 'schedule') {
+    const partial = parseScheduleNarrative(value)
+    const days = parseDaysFromText(value)
+    updated.schedule = {
+      ...(updated.schedule || {}),
+      ...(days.length > 0 ? { days_of_week: days } : {}),
+      ...(partial.start_time ? { start_time: partial.start_time } : {}),
+      ...(partial.end_time ? { end_time: partial.end_time } : {}),
+      ...(partial.breaks && partial.breaks.length > 0 ? { breaks: partial.breaks } : {}),
+    }
+  } else if (id.startsWith('service_duration_')) {
+    const idx = parseInt(id.replace('service_duration_', ''), 10)
+    const services = Array.isArray(updated.services) ? [...updated.services] : []
+    const mins = parseDurationMinutes(value)
+    if (!Number.isNaN(idx) && idx >= 0 && idx < services.length && mins != null) {
+      services[idx] = { ...(services[idx] || {}), duration_minutes: mins }
+      updated.services = services
+    }
+  } else if (id.startsWith('service_price_')) {
+    const idx = parseInt(id.replace('service_price_', ''), 10)
+    const services = Array.isArray(updated.services) ? [...updated.services] : []
+    const price = parsePrice(value)
+    if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
+      services[idx] = { ...(services[idx] || {}), base_price: price ?? undefined }
+      updated.services = services
+    }
+  } else if (id.startsWith('service_') && !id.startsWith('service_price_') && !id.startsWith('service_duration_')) {
+    const idx = parseInt(id.replace('service_', ''), 10)
+    const services = Array.isArray(updated.services) ? [...updated.services] : []
+    if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
+      services[idx] = { ...(services[idx] || {}), name: value }
+      updated.services = services
+    }
+  } else if (id === 'policies') {
+    updated.policies = { note: value }
+  } else if (id === 'handoff_mode') {
+    const h = value.toLowerCase()
+    if (h.includes('sempre') || h.includes('always')) updated.handoff_mode = 'always'
+    else if (h.includes('condicional') || h.includes('alguns')) updated.handoff_mode = 'conditional'
+    else if (h.includes('automÃ¡tico') || h.includes('automatic')) updated.handoff_mode = 'never'
+  } else if (id === 'target_audience') {
+    const audience = parseTargetAudience(value)
+    if (audience) updated.target_audience = audience
+  } else if (id === 'interaction_style') {
+    const style = parseInteractionStyle(value)
+    if (style) updated.interaction_style = style
+  } else if (id.startsWith('staff_')) {
+    const idx = parseInt(id.replace('staff_', ''), 10)
+    const staff = Array.isArray(updated.staff) ? [...updated.staff] : []
+    if (!Number.isNaN(idx) && idx >= 0 && idx < staff.length) {
+      staff[idx] = { ...(staff[idx] || {}), name: value.trim() }
+      updated.staff = staff
+    }
+  } else if (id === 'closure_periods') {
+    const parts = value.split(/[;ï¼Œ]/).map((p) => p.trim()).filter(Boolean)
+    const periods: Array<{ start: string; end: string }> = []
+    for (const part of parts) {
+      const p = parseClosurePeriod(part)
+      if (p) periods.push(p)
+    }
+    if (periods.length > 0) {
+      updated.closure_periods = periods
+      updated.closure_skipped = true
+    }
+  } else if (id === 'sequence_eligible_services') {
+    const names = value.split(',').map((s) => s.trim()).filter(Boolean)
+    const validNames = (updated.services || []).map((s: any) => s?.name).filter(Boolean)
+    updated.sequence_eligible_services = names.filter((n) => validNames.includes(n))
+  }
+
+  return updated
+}
+
 function computeMissing(data: Partial<BusinessModelExtraction>) {
   return identifyMissingFields(data, (data as any).context)
 }
@@ -2840,11 +2931,11 @@ async function processMessage(
         const merged = { ...collectedData, services }
         const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_list', merged))
         return {
-          assistant_message: `Entendi que você oferece:\n- ${services.map((s) => s.name).join('\n- ')}\n\nQuer ajustar ou adicionar algum serviço?`,
+          assistant_message: 'Perfeito. Revise os serviços abaixo e, se quiser, adicione mais separados por vírgula.',
           next_step: 'services_list',
           extracted_data: { services },
           editable_items: buildServiceItems(services),
-          action_options: ['Adicionar serviço', 'Continuar'],
+          action_options: ['Continuar'],
           requires_action: 'services_edit',
         }
       }
@@ -2899,11 +2990,11 @@ async function processMessage(
       }
     }
     return {
-      assistant_message: `Entendi que você oferece:\n- ${unique.map((s) => s.name).join('\n- ')}\n\nQuer ajustar ou adicionar algum serviço?`,
+      assistant_message: 'Perfeito. Revise os serviços abaixo e, se quiser, adicione mais separados por vírgula.',
       next_step: 'services_list',
       extracted_data: { services: unique },
       editable_items: buildServiceItems(unique),
-      action_options: ['Adicionar serviço', 'Continuar'],
+      action_options: ['Continuar'],
       requires_action: 'services_edit',
     }
   }
@@ -2926,11 +3017,11 @@ async function processMessage(
       return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
     })
     return {
-      assistant_message: `✅ Serviço adicionado.\n\nServiços atuais:\n- ${mergedServices.map((s) => s.name).join('\n- ')}`,
+      assistant_message: '✅ Serviço(s) adicionado(s). Você pode revisar a lista abaixo e continuar quando quiser.',
       next_step: 'services_list',
       extracted_data: { services: mergedServices },
       editable_items: buildServiceItems(mergedServices),
-      action_options: ['Adicionar serviço', 'Continuar'],
+      action_options: ['Continuar'],
       requires_action: 'services_edit',
     }
   }
@@ -3129,18 +3220,10 @@ serve(async (req) => {
     const { session, isNew } = await getOrCreateSession(supabaseAdmin, body.session_id)
     let collectedData = { ...(session?.collected_data || {}) }
 
-    // Aplicar edits em lote (ex: preços ao clicar Continuar) antes de processar a mensagem
+    // Aplicar edits em lote (campos inline) antes de processar a mensagem
     if (Array.isArray(body.edits) && body.edits.length > 0) {
       for (const { id, value } of body.edits) {
-        if (id.startsWith('service_price_')) {
-          const idx = parseInt(id.replace('service_price_', ''), 10)
-          const services = Array.isArray(collectedData.services) ? [...collectedData.services] : []
-          const price = parsePrice(value)
-          if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
-            services[idx] = { ...(services[idx] || {}), base_price: price ?? undefined }
-            collectedData = { ...collectedData, services }
-          }
-        }
+        collectedData = applyInlineEdit({ ...collectedData }, id, value)
       }
     }
 
@@ -3189,7 +3272,11 @@ serve(async (req) => {
     const updatedData = { ...collectedData, ...(response.extracted_data || {}) }
 
     // IA como fonte principal de exemplos de serviços — categorização por ramo de atividade, sem mapeamento estático
-    if (response.next_step === 'services_list' && updatedData.business_type) {
+    if (
+      response.next_step === 'services_list' &&
+      updatedData.business_type &&
+      (response.requires_action === 'services_list' || response.requires_action === 'services_edit')
+    ) {
       const aiExamples = await suggestServicesWithAI(updatedData.business_type)
       response.selectable_options = buildServiceSelectableOptions(aiExamples)
     }
