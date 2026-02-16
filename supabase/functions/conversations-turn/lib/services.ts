@@ -21,16 +21,21 @@ function normalizeForServiceMatch(s: string): string {
     .trim()
 }
 
+/** Mínimo de caracteres para match parcial. Evita que "O" case em "Implantação" (nameNorm.includes("o")). */
+const MIN_TEXT_LENGTH_FOR_PARTIAL_MATCH = 2
+
 export function findServiceFromText(text: string, services: Array<{ name: string }> = []): string | null {
   const exact = findServiceByExactMatch(text, services)
   if (exact) return exact
   const msg = normalizeText(text)
+  if (msg.length < MIN_TEXT_LENGTH_FOR_PARTIAL_MATCH) return null
   for (const service of services) {
     const name = normalizeText(service.name || "")
     if (!name) continue
     if (msg.includes(name)) return service.name
     const msgNorm = normalizeForServiceMatch(msg)
     const nameNorm = normalizeForServiceMatch(name)
+    if (msgNorm.length < MIN_TEXT_LENGTH_FOR_PARTIAL_MATCH) continue
     if (msgNorm.includes(nameNorm) || nameNorm.includes(msgNorm)) return service.name
   }
   return null

@@ -1500,6 +1500,18 @@ async function processSimulatorMessage(
       ? resolveOptionByNumber(incomingText, state.last_action_options)
       : null
   const text = singleOptionResolved || incomingText
+
+  // Trava mínima: mensagens muito curtas (ex: "O", "a") — pedir esclarecimento. Exceto resposta numérica a opções.
+  const MIN_MSG_LENGTH = 2
+  const isNumericOption =
+    /^[1-9]\d*$/.test(text) && Array.isArray(state.last_action_options) && state.last_action_options.length > 0
+  if (text.length > 0 && text.length < MIN_MSG_LENGTH && !isNumericOption) {
+    const greeting = getGreetingMessage(config)
+    return buildResult(
+      `${greeting}\n\nNão entendi, pode repetir? Como posso ajudar?`,
+      { ...state, step: "qualification" }
+    )
+  }
   const nextState: SimulatorState = {
     ...state,
     slots: { ...(state.slots || {}), quote_answers: state.slots?.quote_answers || {} },
@@ -1544,192 +1556,114 @@ async function processSimulatorMessage(
     return buildResult("Se precisar de algo no futuro, fico à disposição.", nextState)
   }
 
-  // PRIORIDADE: Se é primeira mensagem, processar contexto ANTES de qualquer outra coisa
+  // PRIORIDADE: Se é primeira mensagem — IA interpreta intenção (sem decisões determinísticas)
   if (isFirst && !nextState.mode && !nextState.step) {
     const greeting = getGreetingMessage(config)
 
-    // Perguntas informativas (endereço, horários) em qualquer momento — resposta direta do cadastro
+    // Perguntas informativas (endereço, horários) — resposta direta do cadastro
     const firstInfoAnswer = tryAnswerInformationalQuestion(config, text)
     if (firstInfoAnswer) {
       return buildResult(`${greeting}\n\n${firstInfoAnswer}`, { ...nextState, step: "qualification" }, ["Quero agendar"])
     }
 
-    // Primeira mensagem com intenção explícita de agendamento deve ir direto para fluxo de booking,
-    // mesmo sem "oi/olá" e mesmo sem citar serviço.
-    if (isExplicitBookingIntent(text)) {
-      nextState.mode = "booking"
-      nextState.step = undefined
-      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
-      if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
-        nextState.pending_additional_booking = true
-        nextState.pending_attendee_name = true
-        nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
-        nextState.expected_additional_count = nextState.pending_additional_count
-        return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
-      }
-      if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
-      const serviceFromText = findServiceFromText(text, config.services || [])
-      if (serviceFromText) {
-        nextState.slots.service = serviceFromText
-        nextState.just_identified_service = true
-        return resolveBooking(config, text, nextState, history, senderDisplayName)
-      }
-      const prompt = buildServicePrompt(config, text, { attendee_name: nextState.slots.attendee_name })
-      nextState.last_service_options = buildServiceOptions(config.services || [])
-      return buildResult(prompt.message, nextState, prompt.action_options)
-    }
+    const orchestrator = await interpretFlowWithAI(text, history, nextState, config)
+    const minConfidence = 0.5
+    const hasConfidentOrchestrator = orchestrator && (orchestrator.confidence ?? 0) >= minConfidence
 
-    // Pergunta de preço ou lista de serviços no início: responder de forma cordial e objetiva
-    if (isListServicesQuestion(text)) {
-      const listMsg = buildServicesListWithPrices(config)
-      const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-      return buildResult(`${greeting}\n\n${listMsg}`, { ...nextState, step: "qualification", last_service_options: serviceOptions })
-    }
-    if (isServiceDetailQuestion(text)) {
-      const serviceName = findServiceFromText(text, config.services || [])
-      const svc = getServiceWithPrice(config.services || [], serviceName)
-      if (svc?.description) {
-        return buildResult(greeting + " " + `${svc.name}: ${svc.description} Quer agendar?`, nextState, ["Quero agendar"])
-      }
-      if (serviceName) {
-        return buildResult(
-          greeting + " " + `Os detalhes do ${serviceName} podem ser combinados direto conosco. Quer que eu te ajude a agendar?`,
-          nextState,
-          ["Quero agendar"]
-        )
-      }
-    }
-    if (isPriceQuestion(text)) {
-      const priceIntro = `Obrigado por entrar em contato${config.business_name ? ` com a ${config.business_name}` : ""}.`
-      const serviceName = findServiceFromText(text, config.services || [])
-      const svc = getServiceWithPrice(config.services || [], serviceName)
-      if (serviceName && svc && svc.base_price != null) {
-        nextState.slots.service = svc.name
-        nextState.just_identified_service = true
-        return buildResult(
-          priceIntro + " " + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
-          nextState,
-          ["Quero agendar", "Só queria saber"]
-        )
-      }
-      if (serviceName && svc) {
-        const noPrice = buildPriceNotAvailableMessage(config, serviceName)
+    if (hasConfidentOrchestrator) {
+      const action = orchestrator!.suggested_action
+
+      if (action === "answer_price") {
+        const priceIntro = `Obrigado por entrar em contato${config.business_name ? ` com a ${config.business_name}` : ""}.`
+        const serviceName =
+          orchestrator!.inferred_service ?? findServiceFromText(text, config.services || []) ?? (await classifyServiceMatch(text, config)).service
+        const svc = serviceName ? getServiceWithPrice(config.services || [], serviceName) : null
+        if (serviceName && svc && svc.base_price != null) {
+          nextState.slots.service = svc.name
+          nextState.just_identified_service = true
+          return buildResult(
+            priceIntro + " " + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+            nextState,
+            ["Quero agendar", "Só queria saber"]
+          )
+        }
+        if (serviceName && svc) {
+          const noPrice = buildPriceNotAvailableMessage(config, serviceName)
+          return buildResult(priceIntro + " " + noPrice.message, nextState, noPrice.action_options)
+        }
+        const withPrice = (config.services || []).filter((s) => s.base_price != null)
+        if (withPrice.length > 0) {
+          nextState.last_service_options = (config.services || []).map((s) => s.name).filter(Boolean)
+          return buildResult(priceIntro + " " + buildServicesListWithPrices(config), nextState)
+        }
+        const noPrice = buildPriceNotAvailableMessage(config)
         return buildResult(priceIntro + " " + noPrice.message, nextState, noPrice.action_options)
       }
-      if (!serviceName && (config.services || []).length > 0) {
-        const match = await classifyServiceMatch(text, config)
-        if (hasMatchContext(match) && !match.service) {
-          const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, true)
-          return buildResult(`${greeting} ${rejectionMessage}`, { ...nextState, step: "qualification_rejected" })
-        }
-      }
-      const withPrice = (config.services || []).filter((s) => s.base_price != null)
-      if (withPrice.length > 0) {
+
+      if (action === "list_services") {
+        const listMsg = buildServicesListWithPrices(config)
         const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-        nextState.last_service_options = serviceOptions
-        return buildResult(priceIntro + " " + buildServicesListWithPrices(config), nextState)
+        return buildResult(`${greeting}\n\n${listMsg}`, { ...nextState, step: "qualification", last_service_options: serviceOptions })
       }
-      const noPrice = buildPriceNotAvailableMessage(config)
-      return buildResult(priceIntro + " " + noPrice.message, nextState, noPrice.action_options)
-    }
 
-    const shouldClassify =
-      (config.services || []).length > 0 &&
-      !nextState.slots.service &&
-      (config.lead_policy?.use_ai_matching ?? true)
-
-    if (shouldClassify && !isGreeting(text)) {
-      const match = await classifyServiceMatch(text, config)
-      const hasContext = hasMatchContext(match)
-
-      if (match.service) {
-        nextState.slots.service = match.service
-        nextState.just_identified_service = true
-        // Pergunta de preço deve responder preço primeiro, sem puxar disponibilidade.
-        if (isPriceQuestion(text)) {
-          const priced = getServiceWithPrice(config.services || [], match.service)
-          if (priced?.base_price != null) {
-            return buildResult(
-              `${greeting} O ${priced.name} está R$ ${Number(priced.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
-              nextState,
-              ["Quero agendar", "Só queria saber"]
-            )
-          }
-          const noPrice = buildPriceNotAvailableMessage(config, match.service)
-          return buildResult(`${greeting} ${noPrice.message}`, nextState, noPrice.action_options)
-        }
+      if (action === "start_booking") {
+        nextState.mode = "booking"
+        nextState.step = undefined
         const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
         if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
           nextState.pending_additional_booking = true
           nextState.pending_attendee_name = true
           nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
           nextState.expected_additional_count = nextState.pending_additional_count
+          return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
         }
-        // Ao reconhecer o serviço, responder direto com fluxo de agendamento (formato esperado)
-        const intro =
-          config.context_mode === "booking"
-            ? `${buildBookingConfirmationIntro(config)} Entendi, voce precisa de ${match.service}. `
-            : `${greeting}${config.business_name ? `Obrigado por escolher a ${config.business_name}. ` : ""}Entendi, você precisa de ajuda com ${match.service}. `
-        if (config.context_mode === "booking") {
-          nextState.mode = "booking"
-          const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-          return buildResult(intro + result.message, result.state, result.action_options)
+        if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
+        const serviceName = orchestrator!.inferred_service ?? findServiceFromText(text, config.services || [])
+        if (serviceName) {
+          nextState.slots.service = serviceName
+          nextState.just_identified_service = true
+          return resolveBooking(config, text, nextState, history, senderDisplayName)
         }
-        if (config.context_mode === "quote") {
-          return buildResult(`${intro}O que você precisa orçar?`, nextState)
-        }
-        return buildResult(`${intro}Você prefere agendar um horário ou pedir um orçamento?`, nextState)
+        const prompt = buildServicePrompt(config, text, { attendee_name: nextState.slots.attendee_name })
+        nextState.last_service_options = buildServiceOptions(config.services || [])
+        return buildResult(prompt.message, nextState, prompt.action_options)
       }
 
-      // Sem match exato: verificar se é pedido genérico + múltiplos ANTES de rejeitar
-      const orchestrator = await interpretFlowWithAI(text, history, nextState, config)
-      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
-      const hasMultiple = interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple"
-      const isGenericList = orchestrator?.suggested_action === "list_services"
-      const areaMatches = areaMatchesServices(match.inferred_area, config.services || [])
-
-      // Pedido genérico ou temos serviços relacionados: listar em vez de rejeitar
-      if ((isGenericList || areaMatches) && !match.reject) {
-        const listMsg = buildServicesListWithPrices(config)
-        if (hasMultiple) {
-          nextState.pending_additional_booking = true
-          nextState.pending_attendee_name = true
-          nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
-          nextState.expected_additional_count = nextState.pending_additional_count
-          nextState.mode = "booking"
-          nextState.step = undefined
+      if (action === "service_detail") {
+        const serviceName = orchestrator!.inferred_service ?? findServiceFromText(text, config.services || [])
+        const svc = serviceName ? getServiceWithPrice(config.services || [], serviceName) : null
+        if (svc?.description) {
+          return buildResult(greeting + " " + `${svc.name}: ${svc.description} Quer agendar?`, nextState, ["Quero agendar"])
+        }
+        if (serviceName) {
           return buildResult(
-            `${greeting}\n\n${buildMultiBookingIntro()} ${listMsg}\n\nDe quem será o primeiro agendamento?`,
+            greeting + " " + `Os detalhes do ${serviceName} podem ser combinados direto conosco. Quer que eu te ajude a agendar?`,
             nextState,
             ["Quero agendar"]
           )
         }
-        const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-        return buildResult(`${greeting}\n\n${listMsg}`, { ...nextState, step: "qualification", last_service_options: serviceOptions })
       }
 
-      if (hasContext && match.reject) {
-        const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, hasContext)
-        return buildResult(`${greeting}${rejectionMessage}`, { ...nextState, step: "qualification_rejected" })
-      }
-      if (hasContext && !areaMatches) {
-        const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, hasContext)
-        return buildResult(`${greeting}${rejectionMessage}`, { ...nextState, step: "qualification_rejected" })
+      if (action === "ask_clarification") {
+        const msg =
+          orchestrator!.clarification_question?.trim() || "Não entendi, pode repetir? Como posso ajudar?"
+        return buildResult(`${greeting}\n\n${msg}`, { ...nextState, step: "qualification" })
       }
 
-      if (orchestrator?.confidence >= 0.5 && orchestrator.suggested_action === "no_match_fallback") {
+      if (action === "no_match_fallback") {
         const aiAnswer = await answerWithContextualAI(config, text, history)
         if (aiAnswer) return buildResult(`${greeting}${aiAnswer}`, { ...nextState, step: "qualification" })
         return buildResult(`${greeting}${buildGenericFallback(config)}`, { ...nextState, step: "qualification" })
       }
-      return buildResult(greeting, { ...nextState, step: "qualification" })
     }
 
-    if (isGreeting(text)) {
-      return buildResult(greeting, { ...nextState, step: "qualification" })
-    }
-
-    return buildResult(greeting, { ...nextState, step: "qualification" })
+    // Baixa confiança ou IA indisponível — tratar como mensagem ambígua
+    const aiAnswer = await answerWithContextualAI(config, text, history)
+    if (aiAnswer) return buildResult(`${greeting}${aiAnswer}`, { ...nextState, step: "qualification" })
+    return buildResult(
+      `${greeting}\n\n${buildGenericFallback(config)}`,
+      { ...nextState, step: "qualification" }
+    )
   }
 
   if (!nextState.slots.service) {
