@@ -48,6 +48,19 @@ export function getCordialPrefix(config: SimulatorConfig, isFirst: boolean): str
   return `Oi! Sou a assistente${name}. Obrigado por entrar em contato. `
 }
 
+/** Mensagem clara quando não entendeu a mensagem do cliente (respeita tom, sem redundância). Sem artigo antes do nome da empresa. */
+export function buildClarificationMessage(config: SimulatorConfig): string {
+  const tone = config.tone || "profissional"
+  const biz = config.business_name ? ` com ${config.business_name}` : ""
+  const byTone: Record<string, string> = {
+    formal: `Obrigado por entrar em contato${biz}. Não compreendi sua mensagem. Poderia repetir? Como podemos ajudá-lo?`,
+    profissional: `Olá, não entendi sua mensagem. Pode repetir? Como posso ajudar?`,
+    amigavel: "Oi! Não entendi, pode repetir? Como posso ajudar?",
+    engracado: "Opa, não pegou! Pode repetir? Como posso ajudar?",
+  }
+  return byTone[tone] || byTone.profissional
+}
+
 /** Saudação inicial conforme o tom configurado (fluida, não robótica). */
 export function getGreetingMessage(config: SimulatorConfig): string {
   const tone = config.tone || "profissional"
