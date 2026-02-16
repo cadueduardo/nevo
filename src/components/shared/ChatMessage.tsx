@@ -152,6 +152,15 @@ export function ChatMessage({
   const customItemsCount = allowCustomInput && customInputValue.trim()
     ? customInputValue.split(',').map((s) => s.trim()).filter(Boolean).length
     : 0
+  const isServicesSelection = requiresAction === 'services_list' && allowCustomInput
+  const suggestionExamples = (selectableOptions || [])
+    .map((option) => option.label.trim())
+    .filter(Boolean)
+    .slice(0, 4)
+  const customInputPlaceholderText =
+    isServicesSelection && suggestionExamples.length > 0
+      ? `Ex: ${suggestionExamples.join(', ')}`
+      : customInputPlaceholder
   const canConfirm =
     selectedOptions.size > 0 ||
     customItemsCount > 0 ||
@@ -304,6 +313,23 @@ export function ChatMessage({
         {/* Checkboxes para seleção múltipla (dias da semana, serviços, etc) */}
         {!isUser && selectableOptions && selectableOptions.length > 0 && (
           <div className="mt-4 space-y-2">
+            {isServicesSelection && (
+              <div className="mb-3 rounded-lg border border-border bg-background/50 p-3">
+                <p className="text-xs text-muted-foreground mb-2">
+                  Escreva seus servicos do seu jeito, separados por virgula.
+                </p>
+                <input
+                  type="text"
+                  value={customInputValue}
+                  onChange={(e) => setCustomInputValue(e.target.value)}
+                  placeholder={customInputPlaceholderText}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-background placeholder:text-muted-foreground"
+                />
+              </div>
+            )}
+            {isServicesSelection && (
+              <p className="text-xs text-muted-foreground mb-1">Sugestoes da IA (opcional):</p>
+            )}
             {selectableOptions.map((option) => (
               <label
                 key={option.id}
@@ -318,12 +344,12 @@ export function ChatMessage({
                 <span className="text-sm flex-1">{option.label}</span>
               </label>
             ))}
-            {allowCustomInput && (
+            {allowCustomInput && !isServicesSelection && (
               <input
                 type="text"
                 value={customInputValue}
                 onChange={(e) => setCustomInputValue(e.target.value)}
-                placeholder={customInputPlaceholder}
+                placeholder={customInputPlaceholderText}
                 className="w-full mt-2 px-3 py-2 text-sm rounded-lg border border-border bg-background placeholder:text-muted-foreground"
               />
             )}
