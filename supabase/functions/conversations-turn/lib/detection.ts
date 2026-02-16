@@ -21,7 +21,7 @@ export function isGreeting(text: string): boolean {
 
 export function isWhoAreYou(text: string): boolean {
   const msg = normalizeText(text)
-  return /(com quem estou falando|quem fala|quem e voce|quem é voce|voce e quem|quem voce e|quem e vc|quem eh vc)/.test(msg)
+  return /(com quem estou falando|quem estou falando|quem fala|quem e voce|quem é voce|voce e quem|quem voce e|quem e vc|quem eh vc)/.test(msg)
 }
 
 export function getGreetingByTime(date = new Date()): string {

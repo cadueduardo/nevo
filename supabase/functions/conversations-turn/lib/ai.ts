@@ -44,6 +44,21 @@ function buildConfigSummary(config: SimulatorConfig): string {
   if (staff.length > 0) {
     parts.push(`Colaboradores: ${staff.map((s) => s.name).join(", ")}`)
   }
+  const audienceMode = config.target_audience?.mode || "all"
+  const audienceLabels: Record<string, string> = {
+    all: "todos os publicos",
+    women_only: "somente mulheres",
+    men_only: "somente homens",
+    kids_only: "somente publico infantil",
+    custom: config.target_audience?.note?.trim() || "publico personalizado",
+  }
+  parts.push(`Publico-alvo: ${audienceLabels[audienceMode] || audienceLabels.all}`)
+
+  const style = config.interaction_style || "numbered_options"
+  const styleLabel =
+    style === "conversational" ? "conversa natural" : style === "hybrid" ? "hibrido (natural + opcoes)" : "opcoes numeradas"
+  parts.push(`Estilo de interacao: ${styleLabel}`)
+
   return parts.join("\n")
 }
 
@@ -80,6 +95,8 @@ ${finalizedHint}DADOS DO NEGÓCIO (use quando relevante para responder):
 ${configSummary}
 
 REGRAS:
+- Ao cumprimentar (oi, ola, bom dia), apresente-se como assistente da empresa e cite o nome do negocio quando disponivel.
+- Se o cliente perguntar identidade (ex: "quem estou falando?" ou "quem e voce?"), responda claramente que voce e a assistente virtual da empresa.
 - Responda de forma natural e humana, como se estivesse numa conversa real.
 - CONSULTE OS DADOS ACIMA: use apenas as informações que estão no config. Nunca invente serviços, áreas ou ofertas.
 - CRÍTICO: O negócio atende SOMENTE as áreas/serviços listados. Se o cliente pedir algo FORA dessas áreas, responda com empatia mas diga claramente que não atuamos, explique quais áreas atendemos e pergunte se precisa de ajuda em alguma delas. NUNCA ofereça agendar para área que não está na lista.

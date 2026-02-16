@@ -117,6 +117,7 @@ import {
 import type {
   ConversationTurnRequest,
   ConversationTurnResponse,
+  FlowOrchestratorOutput,
   SimulatorConfig,
   SimulatorState,
   SimulatorResult,
@@ -1560,11 +1561,15 @@ function applyConversationRules(rules: ConversationRule[], input: RuleInput): Si
 
 const earlyConversationRules: ConversationRule[] = [
   ({ config, text, nextState }) => {
-    if (!shouldBlockByTargetAudience(config, text, nextState.slots?.attendee_name)) return null
+    if (!shouldBlockByTargetAudience(config, text)) return null
     return buildResult(
       buildTargetAudienceRestrictionMessage(config),
       {
         ...nextState,
+        slots: {
+          ...nextState.slots,
+          attendee_name: undefined,
+        },
         step: "qualification",
       },
       ["Quero agendar"]
@@ -2073,6 +2078,13 @@ async function processSimulatorMessage(
   }
 
   const isFirst = isFirstMessage(state)
+  const minOrchestratorConfidence = 0.5
+  let orchestratorCached: FlowOrchestratorOutput | null | undefined = undefined
+  const getOrchestrator = async (): Promise<FlowOrchestratorOutput | null> => {
+    if (orchestratorCached !== undefined) return orchestratorCached
+    orchestratorCached = await interpretFlowWithAI(text, history, nextState, config)
+    return orchestratorCached
+  }
 
   const earlyRuleResult = applyConversationRules(earlyConversationRules, { text, config, nextState })
   if (earlyRuleResult) return earlyRuleResult
@@ -2118,15 +2130,18 @@ async function processSimulatorMessage(
   if (isFirst && !nextState.mode && !nextState.step) {
     const greeting = getGreetingMessage(config)
 
+    if (isGreeting(text)) {
+      return buildResult(greeting, { ...nextState, step: "qualification" }, ["Quero agendar"])
+    }
+
     // Perguntas informativas (endereço, horários) — resposta direta do cadastro
     const firstInfoAnswer = tryAnswerInformationalQuestion(config, text)
     if (firstInfoAnswer) {
       return buildResult(`${greeting}\n\n${firstInfoAnswer}`, { ...nextState, step: "qualification" }, ["Quero agendar"])
     }
 
-    const orchestrator = await interpretFlowWithAI(text, history, nextState, config)
-    const minConfidence = 0.5
-    const hasConfidentOrchestrator = orchestrator && (orchestrator.confidence ?? 0) >= minConfidence
+    const orchestrator = await getOrchestrator()
+    const hasConfidentOrchestrator = orchestrator && (orchestrator.confidence ?? 0) >= minOrchestratorConfidence
 
     if (hasConfidentOrchestrator) {
       const handled = await handleFirstMessageOrchestratorAction(orchestrator, {
@@ -2187,8 +2202,8 @@ async function processSimulatorMessage(
       }
     }
 
-    const orchestrator = await interpretFlowWithAI(text, history, nextState, config)
-    if (orchestrator && orchestrator.confidence >= 0.5) {
+    const orchestrator = await getOrchestrator()
+    if (orchestrator && orchestrator.confidence >= minOrchestratorConfidence) {
       const handled = await handleQualificationRejectedOrchestratorAction(orchestrator, {
         text,
         config,
@@ -2331,8 +2346,8 @@ async function processSimulatorMessage(
       }
     }
 
-    const orchestrator = await interpretFlowWithAI(text, history, nextState, config)
-    if (orchestrator && orchestrator.confidence >= 0.5) {
+    const orchestrator = await getOrchestrator()
+    if (orchestrator && orchestrator.confidence >= minOrchestratorConfidence) {
       const handled = await handleQualificationOrchestratorAction(orchestrator, {
         text,
         config,

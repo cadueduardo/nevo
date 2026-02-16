@@ -30,10 +30,6 @@ function inferRequestedAudienceFromText(text: string): RequestedAudience {
   return null
 }
 
-function inferRequestedAudience(text: string, attendeeName?: string): RequestedAudience {
-  return inferRequestedAudienceFromText(text) || inferRequestedAudienceFromText(attendeeName || "")
-}
-
 function expectedByMode(mode: AudienceMode): RequestedAudience {
   if (mode === "women_only" || mode === "men_only" || mode === "kids_only") return mode
   return null
@@ -54,14 +50,13 @@ export function buildTargetAudienceRestrictionMessage(config: SimulatorConfig): 
 
 export function shouldBlockByTargetAudience(
   config: SimulatorConfig,
-  text: string,
-  attendeeName?: string
+  text: string
 ): boolean {
   const mode = (config.target_audience?.mode || "all") as AudienceMode
   const expected = expectedByMode(mode)
   if (!expected) return false
 
-  const requested = inferRequestedAudience(text, attendeeName)
+  const requested = inferRequestedAudienceFromText(text)
   if (!requested) return false
 
   return requested !== expected
