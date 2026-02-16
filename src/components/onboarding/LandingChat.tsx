@@ -25,7 +25,9 @@ function parseSummaryEditableItemsFromText(text: string) {
   const lines = (text || '').split('\n').map((l) => l.trim())
   const items: Array<{ id: string; label: string; value: string; type: any }> = []
 
-  const bulletLines = lines.filter((l) => l.startsWith('•') || l.startsWith('-'))
+  const bulletLines = lines
+    .map((l) => l.replace(/^[\u2022\-*]\s*/, ''))
+    .filter(Boolean)
   const getValue = (prefix: string) => {
     const line = bulletLines.find((l) => l.toLowerCase().startsWith(prefix.toLowerCase()))
     if (!line) return null
@@ -34,25 +36,25 @@ function parseSummaryEditableItemsFromText(text: string) {
     return parts.slice(1).join(':').trim()
   }
 
-  const businessName = getValue('• Negócio') || getValue('- Negócio')
+  const businessName = getValue('Negócio')
   if (businessName) items.push({ id: 'business_name', label: 'Nome do negócio', value: businessName, type: 'business_name' })
 
-  const businessType = getValue('• Tipo') || getValue('- Tipo')
+  const businessType = getValue('Tipo')
   if (businessType) items.push({ id: 'business_type', label: 'Tipo de negócio', value: businessType, type: 'business_type' })
 
-  const services = getValue('• Serviços') || getValue('- Serviços')
+  const services = getValue('Serviços')
   if (services) {
     const parts = services.split(',').map((s) => s.trim()).filter(Boolean)
     parts.forEach((name, i) => items.push({ id: `service_${i}`, label: 'Serviço', value: name, type: 'service' }))
   }
 
-  const schedule = getValue('• Agenda') || getValue('- Agenda')
+  const schedule = getValue('Agenda')
   if (schedule) items.push({ id: 'schedule', label: 'Horário de funcionamento', value: schedule, type: 'schedule' })
 
-  const region = getValue('• Região') || getValue('- Região')
+  const region = getValue('Região')
   if (region) items.push({ id: 'service_area', label: 'Região', value: region, type: 'service_area' })
 
-  const tone = getValue('• Tom') || getValue('- Tom')
+  const tone = getValue('Tom')
   if (tone) items.push({ id: 'tone_of_voice', label: 'Tom', value: tone, type: 'tone_of_voice' })
 
   return items
@@ -75,6 +77,7 @@ export function LandingChat() {
   const [authChoicePending, setAuthChoicePending] = useState(false)
   const [authenticatedEmail, setAuthenticatedEmail] = useState<string | null>(null)
   const [configuredAgentRedirect, setConfiguredAgentRedirect] = useState<string | null>(null)
+  const [pendingDraftRedirect, setPendingDraftRedirect] = useState<string | null>(null)
   const [signupError, setSignupError] = useState<string | null>(null)
   const [focusTrigger, setFocusTrigger] = useState(0)
   const [simulatorFocusTrigger, setSimulatorFocusTrigger] = useState(0)
@@ -109,6 +112,35 @@ export function LandingChat() {
       subscription.unsubscribe()
     }
   }, [supabase])
+
+  // Resolve se existe agente em draft para exibir CTA de conclusao apenas quando houver pendencia real.
+  useEffect(() => {
+    let cancelled = false
+    if (!authenticatedEmail) {
+      setPendingDraftRedirect(null)
+      return
+    }
+
+    fetch('/api/app/agents')
+      .then(async (res) => {
+        if (!res.ok) return []
+        return (await res.json()) as Array<{ id: string; status: string }>
+      })
+      .then((agents) => {
+        if (cancelled) return
+        const draft = Array.isArray(agents) ? agents.find((a) => a.status === 'draft') : undefined
+        setPendingDraftRedirect(
+          draft ? `/app/agentes/${draft.id}?tab=canais&pending=whatsapp` : null
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setPendingDraftRedirect(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authenticatedEmail])
 
   // Restaurar sessão após F5: buscar do Supabase e re-hidratar estado
   useEffect(() => {
@@ -257,7 +289,7 @@ export function LandingChat() {
       setCurrentStep(response.next_step as OnboardingStep)
 
       // Se backend pedir signup: manter apenas a mensagem do backend (Criar conta, Tenho conta, Continuar depois).
-      // Não adicionar bloco duplicado — "Criar conta" abre o formulário direto (Google + email/senha).
+      // Não adicionar bloco duplicado - "Criar conta" abre o formulário direto (Google + email/senha).
       if (response.requires_action === 'signup') {
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
@@ -406,7 +438,7 @@ export function LandingChat() {
     setIsLoading(true)
     try {
       // Não adicionar email/senha como mensagem do usuário no chat.
-      // Orquestrar o fluxo de signup do backend “por trás”.
+      // Orquestrar o fluxo de signup do backend "por trás".
       const r1 = await sendOnboardingMessage(sessionId, payload.email, 'signup_email')
       maybeEnableSimulator(r1)
       const r1Data = r1.extracted_data
@@ -805,6 +837,14 @@ export function LandingChat() {
     </Button>
   ) : null
 
+  const configuredAgentPath =
+    configuredAgentRedirect && configuredAgentRedirect.startsWith('/app/agentes/')
+      ? configuredAgentRedirect
+      : null
+  const clientAreaHref = configuredAgentPath || pendingDraftRedirect || '/app'
+  const clientAreaLabel =
+    configuredAgentPath || pendingDraftRedirect ? 'Concluir configuração' : 'Área do cliente'
+
   return (
     <div className="h-screen w-full bg-background">
       <div className={cn('h-full', isSimulatorOpen ? 'lg:flex' : 'block')}>
@@ -836,8 +876,8 @@ export function LandingChat() {
                       userEmail={authenticatedEmail}
                       showWelcomeText={false}
                       showClientAreaButton
-                      clientAreaHref="/app"
-                      clientAreaLabel="Concluir configuração"
+                      clientAreaHref={clientAreaHref}
+                      clientAreaLabel={clientAreaLabel}
                     />
                   </div>
                 ) : (
@@ -884,3 +924,4 @@ export function LandingChat() {
     </div>
   )
 }
+
