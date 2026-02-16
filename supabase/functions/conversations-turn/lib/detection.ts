@@ -98,7 +98,10 @@ export function isVisitRequest(text: string): boolean {
 
 export function isAvailabilityQuestion(text: string): boolean {
   const msg = normalizeText(text)
-  return /(tem\s+horario|tem\s+horarios|horarios\s+livres|horarios\s+disponiveis|disponibilidade)/.test(msg)
+  return (
+    /(tem\s+horario|tem\s+horarios|horarios\s+livres|horarios\s+disponiveis|disponibilidade)/.test(msg) ||
+    /(tem\s+vaga|vaga\s+pra|vaga\s+para|tem\s+horario\s+pra|tem\s+disponibilidade\s+pra)/.test(msg)
+  )
 }
 
 export function isYes(text: string): boolean {

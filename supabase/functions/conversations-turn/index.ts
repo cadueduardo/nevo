@@ -74,8 +74,10 @@ import {
   buildPriceNotAvailableMessage,
   buildDayNotServedMessage,
   buildDateBlockedMessage,
+  buildAvailabilityForDateMessage,
   buildServicesListWithPrices,
   buildGenericFallback,
+  buildClarificationMessage,
   buildServiceOptions,
   buildServicePrompt,
   buildMultiBookingIntro,
@@ -1036,8 +1038,8 @@ async function resolveBooking(
       const usedWeekday = !hasExplicitDate(dateInput) && parseWeekdayDate(dateInput)
       const allowedDays = schedule?.days_of_week
 
-      // Dia da semana fora do expediente? Responder logo, sem pedir confirmação de data
-      if (usedWeekday && allowedDays && allowedDays.length > 0) {
+      // Dia da semana fora do expediente? Responder logo (hoje, amanhã, quarta, etc.)
+      if (allowedDays && allowedDays.length > 0) {
         const weekday = getWeekdayKey(date)
         if (!allowedDays.includes(weekday)) {
           const { message, action_options } = buildDayNotServedMessage(
@@ -1143,6 +1145,49 @@ async function resolveBooking(
 
   if (isAvailabilityQuestion(text)) {
     if (!nextState.slots.date) {
+      const dateFromMsg = parseDateOrWeekday(text)
+      if (dateFromMsg) {
+        const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
+        const allowedDays = schedule?.days_of_week
+        if (allowedDays && allowedDays.length > 0 && !allowedDays.includes(getWeekdayKey(dateFromMsg))) {
+          const { message, action_options } = buildDayNotServedMessage(
+            getWeekdayKey(dateFromMsg),
+            allowedDays,
+            schedule
+          )
+          return buildResult(message, nextState, action_options)
+        }
+        const serviceDuration = getServicesTotalDuration(
+          config,
+          nextState.slots.service || nextState.pending_default_service
+        )
+        const availability = getMockAvailability(
+          dateFromMsg,
+          schedule,
+          nextState.booked_slots,
+          nextState.slots.staff_name,
+          serviceDuration
+        )
+        const todayIso = getTodayIsoBusinessTz()
+        const tomorrowIso = addDaysToIsoDate(todayIso, 1)
+        const dateLabel =
+          dateFromMsg === todayIso
+            ? "hoje"
+            : dateFromMsg === tomorrowIso
+              ? "amanha"
+              : `em ${formatDatePt(dateFromMsg)}`
+        if (availability.available.length > 0) {
+          nextState.slots.date = dateFromMsg
+          nextState.last_time_options = availability.available.slice(0, 24)
+          nextState.last_time_options_date = dateFromMsg
+          nextState.last_time_options_staff = nextState.slots.staff_name
+          const msg = buildAvailabilityForDateMessage(dateLabel, availability.available.slice(0, 24), true)
+          return buildResult(msg, nextState, toNumberedOptions(availability.available.slice(0, 24)))
+        }
+        const msg = buildAvailabilityForDateMessage(dateLabel, [], false)
+        const dayOpts = allowedDays && allowedDays.length > 0 ? getOtherDayOptions(schedule) : ["Outro dia"]
+        return buildResult(msg, nextState, dayOpts)
+      }
       return buildResult("Pra eu ver os horarios, pra qual dia voce prefere?", nextState)
     }
     const schedule = getScheduleForStaff(config, nextState.slots.staff_name)
@@ -1501,12 +1546,12 @@ async function processSimulatorMessage(
       : null
   const text = singleOptionResolved || incomingText
 
-  // Trava mínima: mensagens muito curtas (ex: "O", "a") — resposta curta e direta, sem cumprimento formal.
+  // Trava mínima: mensagens muito curtas (ex: "O", "a") — mensagem clara respeitando o tom do negócio.
   const MIN_MSG_LENGTH = 2
   const isNumericOption =
     /^[1-9]\d*$/.test(text) && Array.isArray(state.last_action_options) && state.last_action_options.length > 0
   if (text.length > 0 && text.length < MIN_MSG_LENGTH && !isNumericOption) {
-    return buildResult("Oi! Não entendi, pode repetir? Como posso ajudar?", { ...state, step: "qualification" })
+    return buildResult(buildClarificationMessage(config), { ...state, step: "qualification" })
   }
   const nextState: SimulatorState = {
     ...state,
@@ -1642,21 +1687,21 @@ async function processSimulatorMessage(
 
       if (action === "ask_clarification") {
         const msg =
-          orchestrator!.clarification_question?.trim() || "Não entendi, pode repetir? Como posso ajudar?"
-        return buildResult(`Oi! ${msg}`, { ...nextState, step: "qualification" })
+          orchestrator!.clarification_question?.trim() || buildClarificationMessage(config)
+        return buildResult(msg, { ...nextState, step: "qualification" })
       }
 
       if (action === "no_match_fallback") {
         const aiAnswer = await answerWithContextualAI(config, text, history)
         if (aiAnswer) return buildResult(aiAnswer, { ...nextState, step: "qualification" })
-        return buildResult(`Oi! ${buildGenericFallback(config)}`, { ...nextState, step: "qualification" })
+        return buildResult(buildGenericFallback(config), { ...nextState, step: "qualification" })
       }
     }
 
-    // Baixa confiança ou IA indisponível — tratar como mensagem ambígua (resposta curta, sem cumprimento formal)
+    // Baixa confiança ou IA indisponível — tratar como mensagem ambígua (clara, respeitando o tom)
     const aiAnswer = await answerWithContextualAI(config, text, history)
     if (aiAnswer) return buildResult(aiAnswer, { ...nextState, step: "qualification" })
-    return buildResult(`Oi! ${buildGenericFallback(config)}`, { ...nextState, step: "qualification" })
+    return buildResult(buildClarificationMessage(config), { ...nextState, step: "qualification" })
   }
 
   if (!nextState.slots.service) {

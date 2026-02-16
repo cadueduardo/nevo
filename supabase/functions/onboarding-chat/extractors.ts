@@ -186,7 +186,7 @@ ready_to_start = true se ele parece pronto para iniciar (perguntou se pode fazer
 
 /**
  * Sugere exemplos de serviços com base no tipo de negócio via IA.
- * Usado quando não há correspondência nos mapeamentos estáticos.
+ * IA categoriza o ramo e retorna serviços equivalentes ao negócio — sem mapeamento estático.
  */
 export async function suggestServicesWithAI(businessType: string): Promise<string> {
   const openaiKey = Deno.env.get('OPENAI_API_KEY')
@@ -195,9 +195,11 @@ export async function suggestServicesWithAI(businessType: string): Promise<strin
   try {
     const prompt = `O negócio é: "${businessType}".
 
-Liste 4 a 6 serviços ou procedimentos comuns que esse tipo de negócio oferece. Separe por vírgula, em português, termos curtos (ex: banho, tosa, consulta).
+Pense no ramo de atividade e liste os serviços ou procedimentos típicos que esse negócio oferece. Seja específico ao ramo — ex.: editor de vídeo: edição, motion graphics, correção de cor; barbearia: corte, barba, sobrancelha.
 
-Retorne APENAS a lista, sem explicação, sem numeração. Exemplo: "banho, tosa, consulta veterinaria, vacinacao"`
+Liste de 4 a 8 serviços (mais se o ramo tiver muitas opções comuns). Separe por vírgula, em português, termos curtos.
+
+Retorne APENAS a lista, sem explicação, sem numeração. Exemplo: "edicao de video, motion graphics, correcao de cor, transcricao, legenda"`
 
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',

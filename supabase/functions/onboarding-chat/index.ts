@@ -19,7 +19,6 @@ import {
   generateSummary,
   buildServiceExamples,
   buildServiceSelectableOptions,
-  SERVICE_EXAMPLES_FALLBACK,
   BusinessModelData,
   FlowState,
 } from './flow-manager.ts'
@@ -3046,13 +3045,8 @@ serve(async (req) => {
 
     const updatedData = { ...collectedData, ...(response.extracted_data || {}) }
 
-    // Enriquecer selectable_options de serviços com IA quando o mapeamento estático não conhece o ramo
-    if (
-      response.next_step === 'services_list' &&
-      updatedData.business_type &&
-      buildServiceExamples(updatedData.business_type, updatedData.business_segment) ===
-        SERVICE_EXAMPLES_FALLBACK
-    ) {
+    // IA como fonte principal de exemplos de serviços — categorização por ramo de atividade, sem mapeamento estático
+    if (response.next_step === 'services_list' && updatedData.business_type) {
       const aiExamples = await suggestServicesWithAI(updatedData.business_type)
       response.selectable_options = buildServiceSelectableOptions(aiExamples)
     }

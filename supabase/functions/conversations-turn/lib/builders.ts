@@ -10,7 +10,7 @@ function formatDaysListForMessage(days: string[]): string {
   return `${labels.join(", ")} e ${last}`
 }
 
-const WEEKDAY_LABELS: Record<string, string> = {
+const WEEKDAY_LABELS_PLURAL: Record<string, string> = {
   monday: "segundas",
   tuesday: "terças",
   wednesday: "quartas",
@@ -20,19 +20,60 @@ const WEEKDAY_LABELS: Record<string, string> = {
   sunday: "domingos",
 }
 
-/** Mensagem empática quando o cliente escolhe dia sem expediente (ex: fim de semana). */
+const WEEKDAY_LABELS_SINGULAR: Record<string, string> = {
+  monday: "segunda",
+  tuesday: "terça",
+  wednesday: "quarta",
+  thursday: "quinta",
+  friday: "sexta",
+  saturday: "sábado",
+  sunday: "domingo",
+}
+
+const WEEKDAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+function formatDaysListComma(days: string[]): string {
+  return days.map((d) => WEEKDAY_LABELS_SINGULAR[d] || d).join(", ")
+}
+
+/** Retorna o próximo dia útil (primeiro em allowedDays após requestedWeekday na semana). */
+function getNextAvailableWeekday(requestedWeekday: string, allowedDays: string[]): string | null {
+  if (allowedDays.length === 0) return null
+  const reqIdx = WEEKDAY_ORDER.indexOf(requestedWeekday)
+  if (reqIdx < 0) return allowedDays[0]
+  for (let i = 1; i <= 7; i++) {
+    const nextIdx = (reqIdx + i) % 7
+    const nextDay = WEEKDAY_ORDER[nextIdx]
+    if (allowedDays.includes(nextDay)) return nextDay
+  }
+  return null
+}
+
+/** Mensagem quando o cliente escolhe dia sem expediente. Lista dias de atendimento e sugere ou pergunta qual prefere. */
 export function buildDayNotServedMessage(
   requestedWeekday: string,
   allowedDays: string[],
   _schedule?: SimulatorConfig["schedule"]
 ): { message: string; action_options: string[] } {
-  const daysLabel = formatDaysListForMessage(allowedDays)
-  const requestedLabel = WEEKDAY_LABELS[requestedWeekday] || "nesse dia"
+  const daysListComma = formatDaysListComma(allowedDays)
+  const requestedLabelPlural = WEEKDAY_LABELS_PLURAL[requestedWeekday] || "nesse dia"
   const isWeekend = requestedWeekday === "saturday" || requestedWeekday === "sunday"
+
   const reason = isWeekend
-    ? "Infelizmente nao atendemos nos finais de semana."
-    : `Lamento! Mas nao temos atendimento nas ${requestedLabel}.`
-  const message = `${reason} Quer agendar outro dia? Nossos dias sao ${daysLabel}.`
+    ? "Infelizmente, não temos expediente nos finais de semana."
+    : `Infelizmente, não atendemos às ${requestedLabelPlural}.`
+
+  const nextDay = getNextAvailableWeekday(requestedWeekday, allowedDays)
+  const nextDayLabel = nextDay ? WEEKDAY_LABELS_SINGULAR[nextDay] : null
+
+  const ctaVariants: string[] = []
+  if (nextDayLabel) {
+    ctaVariants.push(`Quer marcar para ${nextDayLabel} agora?`)
+  }
+  ctaVariants.push("Qual desses dias você prefere?")
+
+  const cta = pickVariant(requestedWeekday, ctaVariants)
+  const message = `${reason} Atendemos: ${daysListComma}. ${cta}`
   const options = allowedDays.length > 0 ? buildStaffDayOptions(allowedDays) : ["Outro dia"]
   return { message, action_options: options }
 }
@@ -40,6 +81,19 @@ export function buildDayNotServedMessage(
 /** Mensagem quando o cliente escolhe data bloqueada (feriado ou período de férias). */
 export function buildDateBlockedMessage(reason: string): string {
   return `${reason} Gostaria de agendar em outro dia?`
+}
+
+/** Mensagem natural para "tem vaga pra hoje?" quando há horários livres. Respeita buffer. */
+export function buildAvailabilityForDateMessage(
+  dateLabel: string,
+  slots: string[],
+  hasSlots: boolean
+): string {
+  if (!hasSlots || slots.length === 0) {
+    return `Infelizmente não tenho vaga para ${dateLabel}. Quer agendar para outro dia?`
+  }
+  const list = slots.slice(0, 8).join(", ")
+  return `Sim! Tenho estes horários livres ${dateLabel}: ${list}. Vamos agendar?`
 }
 
 export function getCordialPrefix(config: SimulatorConfig, isFirst: boolean): string {
