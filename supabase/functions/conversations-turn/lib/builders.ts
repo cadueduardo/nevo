@@ -107,10 +107,10 @@ export function buildClarificationMessage(config: SimulatorConfig): string {
   const tone = config.tone || "profissional"
   const biz = config.business_name ? ` com ${config.business_name}` : ""
   const byTone: Record<string, string> = {
-    formal: `Obrigado por entrar em contato${biz}. Não compreendi sua mensagem. Poderia repetir? Como podemos ajudá-lo?`,
-    profissional: `Olá, não entendi sua mensagem. Pode repetir? Como posso ajudar?`,
-    amigavel: "Oi! Não entendi, pode repetir? Como posso ajudar?",
-    engracado: "Opa, não pegou! Pode repetir? Como posso ajudar?",
+    formal: `Obrigado por entrar em contato${biz}. N?o compreendi sua mensagem. Poderia repetir? Se preferir, j? podemos agendar um hor?rio.`,
+    profissional: `Ol?! N?o entendi sua mensagem. Pode repetir? Se quiser, j? te ajudo a agendar um hor?rio.`,
+    amigavel: "Oi! N?o entendi direitinho. Pode repetir? Se preferir, j? te ajudo a agendar um hor?rio.",
+    engracado: "Opa, n?o peguei! Pode repetir? Se quiser, j? te ajudo a agendar um hor?rio.",
   }
   return byTone[tone] || byTone.profissional
 }
@@ -120,10 +120,10 @@ export function getGreetingMessage(config: SimulatorConfig): string {
   const tone = config.tone || "profissional"
   const biz = config.business_name || "nossa empresa"
   const byTone: Record<string, string> = {
-    amigavel: `Olá! Obrigado por entrar em contato, somos da ${biz}. Como posso ajudar?`,
-    formal: `Olá. Agradecemos o contato. Somos da ${biz}. Como podemos ajudá-lo?`,
-    profissional: `Olá, obrigado por entrar em contato. Somos da ${biz}. Como posso ajudar?`,
-    engracado: `Oi! Que bom te ver por aqui, somos da ${biz}. Em que posso ajudar?`,
+    amigavel: `Ol?! Obrigado por entrar em contato, somos da ${biz}. Se quiser, j? te ajudo a agendar um hor?rio.`,
+    formal: `Ol?. Agradecemos o contato. Somos da ${biz}. Se desejar, j? podemos agendar um hor?rio.`,
+    profissional: `Ol?, obrigado por entrar em contato. Somos da ${biz}. Se quiser, j? te ajudo a agendar um hor?rio.`,
+    engracado: `Oi! Que bom te ver por aqui, somos da ${biz}. Se quiser, j? te ajudo a agendar um hor?rio.`,
   }
   return byTone[tone] || byTone.profissional
 }

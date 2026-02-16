@@ -2200,7 +2200,10 @@ async function processSimulatorMessage(
         return buildResult(rejectionMessage, nextState)
       }
       // Sem contexto suficiente, pedir mais detalhes de forma natural
-      return buildResult("Claro! Pode me contar mais detalhes do que você precisa? Assim consigo te ajudar melhor.", nextState)
+      return buildResult(
+        `Claro! Somos da ${config.business_name || "nossa empresa"}. Pode me contar mais detalhes do que você precisa? Se quiser, já te ajudo a agendar um horário.`,
+        nextState
+      )
     } else {
       // Verificar se há contexto suficiente
       const hasContext = hasMatchContext(match)
@@ -2208,7 +2211,10 @@ async function processSimulatorMessage(
         const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, isFirst, hasContext)
         return buildResult(rejectionMessage, nextState)
       }
-      return buildResult("Claro! Pode me contar mais detalhes do que você precisa? Assim consigo te ajudar melhor.", nextState)
+      return buildResult(
+        `Claro! Somos da ${config.business_name || "nossa empresa"}. Pode me contar mais detalhes do que você precisa? Se quiser, já te ajudo a agendar um horário.`,
+        nextState
+      )
     }
   }
 
@@ -2237,10 +2243,13 @@ async function processSimulatorMessage(
         const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, isFirst, hasContext)
         return buildResult(rejectionMessage, { ...nextState, step: "qualification" })
       }
-      return buildResult("Claro! Pode me contar mais detalhes do que você precisa? Assim consigo te ajudar melhor.", {
-        ...nextState,
-        step: "qualification",
-      })
+      return buildResult(
+        `Claro! Somos da ${config.business_name || "nossa empresa"}. Pode me contar mais detalhes do que você precisa? Se quiser, já te ajudo a agendar um horário.`,
+        {
+          ...nextState,
+          step: "qualification",
+        }
+      )
     }
   }
 
