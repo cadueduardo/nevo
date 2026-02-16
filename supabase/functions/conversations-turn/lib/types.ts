@@ -58,6 +58,11 @@ export interface SimulatorConfig {
   allow_sequence_booking?: boolean
   /** Servicos que podem ser combinados em sequencia (quando allow_sequence_booking). */
   sequence_eligible_services?: string[]
+  target_audience?: {
+    mode?: "all" | "women_only" | "men_only" | "kids_only" | "custom"
+    note?: string
+  }
+  interaction_style?: "numbered_options" | "conversational" | "hybrid"
 }
 
 export interface SimulatorState {
@@ -164,6 +169,11 @@ export interface ConversationTurnRequest {
     closure_periods?: Array<{ start: string; end: string; reason?: string }>
     allow_sequence_booking?: boolean
     sequence_eligible_services?: string[]
+    target_audience?: {
+      mode?: "all" | "women_only" | "men_only" | "kids_only" | "custom"
+      note?: string
+    }
+    interaction_style?: "numbered_options" | "conversational" | "hybrid"
   }
 }
 

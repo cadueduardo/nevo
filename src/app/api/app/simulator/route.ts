@@ -84,6 +84,16 @@ export async function POST(req: NextRequest) {
       closure_periods: Array.isArray(bc.closure_periods) ? bc.closure_periods : [],
       allow_sequence_booking: Boolean(bc.allow_sequence_booking),
       sequence_eligible_services: Array.isArray(bc.sequence_eligible_services) ? bc.sequence_eligible_services : [],
+      target_audience:
+        typeof bc.target_audience === 'object' && bc.target_audience !== null
+          ? bc.target_audience
+          : undefined,
+      interaction_style:
+        bc.interaction_style === 'numbered_options' ||
+        bc.interaction_style === 'conversational' ||
+        bc.interaction_style === 'hybrid'
+          ? bc.interaction_style
+          : 'hybrid',
     }
 
     const sessionId = `app-${user.id}-${tenant.id}`

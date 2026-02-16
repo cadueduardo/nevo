@@ -257,6 +257,8 @@ export default function AgentDetailPage() {
     policies: (bc.policies as BasicConfigPayload['policies']) ?? undefined,
     tone_of_voice: (bc.tone_of_voice as string | undefined) ?? setting.tone ?? '',
     handoff_mode: (bc.handoff_mode as string | undefined) ?? setting.handoff_mode ?? '',
+    target_audience: (bc.target_audience as BasicConfigPayload['target_audience']) ?? undefined,
+    interaction_style: (bc.interaction_style as BasicConfigPayload['interaction_style']) ?? undefined,
     dynamic_variables: (bc.dynamic_variables as BasicConfigPayload['dynamic_variables']) ?? undefined,
     faq: (bc.faq as BasicConfigPayload['faq']) ?? undefined,
     allow_sequence_booking: (bc.allow_sequence_booking as boolean | undefined) ?? undefined,

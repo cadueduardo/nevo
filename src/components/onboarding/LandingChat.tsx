@@ -28,34 +28,46 @@ function parseSummaryEditableItemsFromText(text: string) {
   const bulletLines = lines
     .map((l) => l.replace(/^[\u2022\-*]\s*/, ''))
     .filter(Boolean)
-  const getValue = (prefix: string) => {
-    const line = bulletLines.find((l) => l.toLowerCase().startsWith(prefix.toLowerCase()))
+  const getValue = (prefixes: string[]) => {
+    const line = bulletLines.find((l) =>
+      prefixes.some((prefix) => l.toLowerCase().startsWith(prefix.toLowerCase()))
+    )
     if (!line) return null
     const parts = line.split(':')
     if (parts.length < 2) return null
     return parts.slice(1).join(':').trim()
   }
 
-  const businessName = getValue('Negócio')
-  if (businessName) items.push({ id: 'business_name', label: 'Nome do negócio', value: businessName, type: 'business_name' })
+  const businessName = getValue(['Neg?cio', 'Negocio'])
+  if (businessName) items.push({ id: 'business_name', label: 'Nome do neg?cio', value: businessName, type: 'business_name' })
 
-  const businessType = getValue('Tipo')
-  if (businessType) items.push({ id: 'business_type', label: 'Tipo de negócio', value: businessType, type: 'business_type' })
+  const businessType = getValue(['Tipo'])
+  if (businessType) items.push({ id: 'business_type', label: 'Tipo de neg?cio', value: businessType, type: 'business_type' })
 
-  const services = getValue('Serviços')
+  const services = getValue(['Servi?os', 'Servicos'])
   if (services) {
     const parts = services.split(',').map((s) => s.trim()).filter(Boolean)
-    parts.forEach((name, i) => items.push({ id: `service_${i}`, label: 'Serviço', value: name, type: 'service' }))
+    parts.forEach((name, i) => items.push({ id: `service_${i}`, label: 'Servi?o', value: name, type: 'service' }))
   }
 
-  const schedule = getValue('Agenda')
-  if (schedule) items.push({ id: 'schedule', label: 'Horário de funcionamento', value: schedule, type: 'schedule' })
+  const schedule = getValue(['Agenda'])
+  if (schedule) items.push({ id: 'schedule', label: 'Hor?rio de funcionamento', value: schedule, type: 'schedule' })
 
-  const region = getValue('Região')
-  if (region) items.push({ id: 'service_area', label: 'Região', value: region, type: 'service_area' })
+  const region = getValue(['Regi?o', 'Regiao'])
+  if (region) items.push({ id: 'service_area', label: 'Regi?o', value: region, type: 'service_area' })
 
-  const tone = getValue('Tom')
+  const tone = getValue(['Tom'])
   if (tone) items.push({ id: 'tone_of_voice', label: 'Tom', value: tone, type: 'tone_of_voice' })
+
+  const targetAudience = getValue(['P?blico-alvo', 'Publico-alvo', 'Publico alvo'])
+  if (targetAudience) {
+    items.push({ id: 'target_audience', label: 'P?blico-alvo', value: targetAudience, type: 'target_audience' })
+  }
+
+  const interactionStyle = getValue(['Estilo de respostas'])
+  if (interactionStyle) {
+    items.push({ id: 'interaction_style', label: 'Estilo de respostas', value: interactionStyle, type: 'interaction_style' })
+  }
 
   return items
 }

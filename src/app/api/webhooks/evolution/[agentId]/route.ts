@@ -105,6 +105,16 @@ export async function POST(
     closure_periods: Array.isArray(bc.closure_periods) ? bc.closure_periods : [],
     allow_sequence_booking: Boolean(bc.allow_sequence_booking),
     sequence_eligible_services: Array.isArray(bc.sequence_eligible_services) ? bc.sequence_eligible_services : [],
+    target_audience:
+      typeof bc.target_audience === 'object' && bc.target_audience !== null
+        ? bc.target_audience
+        : undefined,
+    interaction_style:
+      bc.interaction_style === 'numbered_options' ||
+      bc.interaction_style === 'conversational' ||
+      bc.interaction_style === 'hybrid'
+        ? bc.interaction_style
+        : 'hybrid',
   }
 
   const fromNormalized = from.startsWith('whatsapp:') ? from : `whatsapp:${from}`
@@ -181,9 +191,12 @@ export async function POST(
         replyText = lastMsg.content
         const opts = lastMsg.action_options
         if (Array.isArray(opts) && opts.length > 0) {
+          const hasNumbering = opts.some((opt) => /^\d+\s*-\s+/.test(opt))
           const optsLabel = opts.length === 1
             ? '\n\n_Opção:_\n'
-            : '\n\n_Opções (responda com número ou texto):_\n'
+            : hasNumbering
+              ? '\n\n_Opções (responda com número ou texto):_\n'
+              : '\n\n_Opções (responda com texto):_\n'
           const optsText = opts.join('\n')
           const withOpts = replyText + optsLabel + optsText
           if (withOpts.length <= 4096) replyText = withOpts

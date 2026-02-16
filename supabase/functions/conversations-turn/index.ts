@@ -2565,6 +2565,8 @@ serve(async (req) => {
       closure_periods: body.context?.closure_periods,
       allow_sequence_booking: body.context?.allow_sequence_booking ?? false,
       sequence_eligible_services: body.context?.sequence_eligible_services ?? [],
+      target_audience: body.context?.target_audience,
+      interaction_style: body.context?.interaction_style ?? "hybrid",
     }
 
     const tenant = (body as { tenant_id?: string }).tenant_id
@@ -2746,6 +2748,20 @@ serve(async (req) => {
         action_options: undefined,
       }
     }
+
+    // Estilo conversacional: nao prefixar opcoes com "1 -", "2 -", etc.
+    if (config.interaction_style === "conversational" && Array.isArray(result.action_options)) {
+      const denumberedOptions = result.action_options.map((opt) => String(opt || "").replace(/^\d+\s*-\s*/, "").trim())
+      result = {
+        ...result,
+        action_options: denumberedOptions,
+        state: {
+          ...result.state,
+          last_action_options: denumberedOptions,
+        },
+      }
+    }
+
     const rewritten = await rewriteWithTone(result.message, config.tone)
     const finalMessage = sessionExpiryWarning
       ? `${sessionExpiryWarning}\n\n${rewritten.message}`

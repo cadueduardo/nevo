@@ -20,6 +20,8 @@ import type {
   Policies,
   DynamicVariable,
   FAQ,
+  TargetAudience,
+  InteractionStyle,
 } from '@/types/business-model'
 import { fetchAddressByCep } from '@/lib/viacep'
 import { fetchFeriadosNacionais } from '@/lib/brasil-api'
@@ -73,6 +75,8 @@ export interface BasicConfigPayload {
   handoff_mode?: string
   dynamic_variables?: DynamicVariable[]
   faq?: FAQ[]
+  target_audience?: TargetAudience
+  interaction_style?: InteractionStyle
   allow_sequence_booking?: boolean
   staff?: Array<{ name: string; schedule?: Schedule }>
   holidays_attend?: string[]
@@ -139,6 +143,15 @@ export function AgentBasicEditor({
   const [fallbackMessage, setFallbackMessage] = React.useState(initialConfig.fallback_message ?? '')
   const [toneOfVoice, setToneOfVoice] = React.useState(initialConfig.tone_of_voice ?? '')
   const [handoffMode, setHandoffMode] = React.useState(initialConfig.handoff_mode ?? '')
+  const [targetAudienceMode, setTargetAudienceMode] = React.useState<TargetAudience['mode']>(
+    initialConfig.target_audience?.mode ?? 'all'
+  )
+  const [targetAudienceNote, setTargetAudienceNote] = React.useState(
+    initialConfig.target_audience?.note ?? ''
+  )
+  const [interactionStyle, setInteractionStyle] = React.useState<InteractionStyle>(
+    initialConfig.interaction_style ?? 'hybrid'
+  )
   const [dynamicVariables, setDynamicVariables] = React.useState<DynamicVariable[]>(
     Array.isArray(initialConfig.dynamic_variables) ? initialConfig.dynamic_variables : []
   )
@@ -194,6 +207,9 @@ export function AgentBasicEditor({
     setFallbackMessage(initialConfig.fallback_message ?? '')
     setToneOfVoice(initialConfig.tone_of_voice ?? '')
     setHandoffMode(initialConfig.handoff_mode ?? '')
+    setTargetAudienceMode(initialConfig.target_audience?.mode ?? 'all')
+    setTargetAudienceNote(initialConfig.target_audience?.note ?? '')
+    setInteractionStyle(initialConfig.interaction_style ?? 'hybrid')
     setDynamicVariables(Array.isArray(initialConfig.dynamic_variables) ? initialConfig.dynamic_variables : [])
     setFaq(Array.isArray(initialConfig.faq) ? initialConfig.faq : [])
     setAllowSequenceBooking(initialConfig.allow_sequence_booking ?? false)
@@ -225,6 +241,11 @@ export function AgentBasicEditor({
         : undefined,
     tone_of_voice: toneOfVoice || undefined,
     handoff_mode: handoffMode || undefined,
+    target_audience:
+      targetAudienceMode === 'custom'
+        ? { mode: 'custom', note: targetAudienceNote.trim() || undefined }
+        : { mode: targetAudienceMode },
+    interaction_style: interactionStyle || undefined,
     dynamic_variables: dynamicVariables.length > 0 ? dynamicVariables : undefined,
     faq: faq.length > 0 ? faq : undefined,
     allow_sequence_booking: allowSequenceBooking,
@@ -752,11 +773,11 @@ export function AgentBasicEditor({
         </CardContent>
       </Card>
 
-      {/* Tom e handoff - onboarding 22, 23 */}
+      {/* Tom, handoff, público e estilo - onboarding */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Tom e handoff</CardTitle>
-          <CardDescription>Tom de voz e quando passar para humano.</CardDescription>
+          <CardTitle className="text-lg">Tom, handoff e estilo</CardTitle>
+          <CardDescription>Tom de voz, transferência para humano, público-alvo e estilo de respostas.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
@@ -785,6 +806,47 @@ export function AgentBasicEditor({
                 <SelectItem value="always">Sempre humano</SelectItem>
                 <SelectItem value="conditional">Condicional</SelectItem>
                 <SelectItem value="never">Automático</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Público-alvo</label>
+            <Select
+              value={targetAudienceMode}
+              onValueChange={(v) => setTargetAudienceMode(v as TargetAudience['mode'])}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Selecione" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos os públicos</SelectItem>
+                <SelectItem value="women_only">Somente mulheres</SelectItem>
+                <SelectItem value="men_only">Somente homens</SelectItem>
+                <SelectItem value="kids_only">Infantil</SelectItem>
+                <SelectItem value="custom">Outro público específico</SelectItem>
+              </SelectContent>
+            </Select>
+            {targetAudienceMode === 'custom' && (
+              <Input
+                placeholder="Descreva o público (opcional)"
+                value={targetAudienceNote}
+                onChange={(e) => setTargetAudienceNote(e.target.value)}
+              />
+            )}
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Estilo de respostas</label>
+            <Select
+              value={interactionStyle}
+              onValueChange={(v) => setInteractionStyle(v as InteractionStyle)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Selecione" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="hybrid">Misto</SelectItem>
+                <SelectItem value="numbered_options">Opções numeradas</SelectItem>
+                <SelectItem value="conversational">Conversa natural</SelectItem>
               </SelectContent>
             </Select>
           </div>
