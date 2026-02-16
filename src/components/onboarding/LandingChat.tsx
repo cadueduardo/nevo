@@ -651,14 +651,17 @@ export function LandingChat() {
 
   const handleItemEditLocal = (id: string, value: string) => {
     setMessages((prev) => {
-      const lastIdx = prev.length - 1
-      if (lastIdx < 0) return prev
-      const last = prev[lastIdx]
-      if (!last?.editableItems) return prev
-      const updated = last.editableItems.map((it) =>
-        it.id === id ? { ...it, value } : it
-      )
-      return [...prev.slice(0, lastIdx), { ...last, editableItems: updated }]
+      const targetIdx = [...prev]
+        .map((msg, idx) => ({ msg, idx }))
+        .reverse()
+        .find(({ msg }) => Array.isArray(msg.editableItems) && msg.editableItems.some((it) => it.id === id))?.idx
+
+      if (targetIdx == null) return prev
+      const target = prev[targetIdx]
+      if (!target?.editableItems) return prev
+
+      const updated = target.editableItems.map((it) => (it.id === id ? { ...it, value } : it))
+      return [...prev.slice(0, targetIdx), { ...target, editableItems: updated }, ...prev.slice(targetIdx + 1)]
     })
   }
 

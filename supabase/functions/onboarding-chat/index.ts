@@ -3275,7 +3275,7 @@ serve(async (req) => {
     if (
       response.next_step === 'services_list' &&
       updatedData.business_type &&
-      (response.requires_action === 'services_list' || response.requires_action === 'services_edit')
+      response.requires_action === 'services_list'
     ) {
       const aiExamples = await suggestServicesWithAI(updatedData.business_type)
       response.selectable_options = buildServiceSelectableOptions(aiExamples)
