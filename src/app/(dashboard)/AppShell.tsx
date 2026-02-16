@@ -1,22 +1,19 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
-import { useRef, useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard,
   Calendar,
   MessageSquare,
   Settings,
-  LogOut,
-  ChevronDown,
   Users,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { createClient } from '@/lib/supabase/client'
 import { AgentSwitcher } from '@/features/agents/components/AgentSwitcher'
 import { useAgentContext } from '@/components/providers/AgentProvider'
 import { cn } from '@/lib/utils'
+import { AuthenticatedHeaderUserMenu } from '@/components/shared/AuthenticatedHeaderUserMenu'
 
 /** Ordem: Dashboard primeiro; Agentes = detalhe do agente ativo (Básico/Fluxo/Canais etc.). */
 function buildNavItems(activeAgentId: string | null) {
@@ -47,30 +44,9 @@ export function AppShell({
   children: React.ReactNode
 }) {
   const pathname = usePathname()
-  const router = useRouter()
   const { activeAgentId } = useAgentContext()
-  const [userMenuOpen, setUserMenuOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
 
   const navItems = buildNavItems(activeAgentId ?? null)
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setUserMenuOpen(false)
-      }
-    }
-    document.addEventListener('click', handleClickOutside)
-    return () => document.removeEventListener('click', handleClickOutside)
-  }, [])
-
-  const handleSignOut = async () => {
-    setUserMenuOpen(false)
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/login')
-    router.refresh()
-  }
 
   const title = getPageTitle(pathname)
 
@@ -148,47 +124,7 @@ export function AppShell({
           </nav>
           <div className="flex items-center gap-2 md:gap-3">
             <AgentSwitcher />
-            <span className="hidden text-sm text-muted-foreground sm:inline">
-              Bem-vindo, {userEmail}
-            </span>
-            <div className="relative" ref={menuRef}>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-1"
-                onClick={() => setUserMenuOpen((o) => !o)}
-                aria-expanded={userMenuOpen}
-                aria-haspopup="true"
-              >
-                <span className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium text-primary">
-                  {userEmail.slice(0, 1).toUpperCase()}
-                </span>
-                <ChevronDown className="h-4 w-4" />
-              </Button>
-              {userMenuOpen && (
-                <div
-                  className="absolute right-0 top-full mt-1 w-48 rounded-md border bg-popover py-1 text-popover-foreground shadow-md"
-                  role="menu"
-                >
-                  <Link
-                    href="/app/settings"
-                    className="block px-3 py-2 text-sm hover:bg-accent"
-                    onClick={() => setUserMenuOpen(false)}
-                  >
-                    Configurações
-                  </Link>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
-                    onClick={handleSignOut}
-                    role="menuitem"
-                  >
-                    <LogOut className="h-4 w-4" />
-                    Sair
-                  </button>
-                </div>
-              )}
-            </div>
+            <AuthenticatedHeaderUserMenu userEmail={userEmail} />
           </div>
         </header>
 

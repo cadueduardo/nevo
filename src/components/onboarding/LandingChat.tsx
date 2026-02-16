@@ -12,6 +12,7 @@ import { SimulatorPanel } from '@/features/simulator/components/SimulatorPanel'
 import { cn } from '@/lib/utils'
 import { sendSimulatorMessage, type SimulatorRequest } from '@/lib/simulator/api'
 import { createClient } from '@/lib/supabase/client'
+import { AuthenticatedHeaderUserMenu } from '@/components/shared/AuthenticatedHeaderUserMenu'
 import Link from 'next/link'
 
 const TYPING_PLACEHOLDERS = [
@@ -72,6 +73,7 @@ export function LandingChat() {
   const [isSimulatorLoading, setIsSimulatorLoading] = useState(false)
   const [simulatorConversationId, setSimulatorConversationId] = useState<string | null>(null)
   const [authChoicePending, setAuthChoicePending] = useState(false)
+  const [authenticatedEmail, setAuthenticatedEmail] = useState<string | null>(null)
   const [configuredAgentRedirect, setConfiguredAgentRedirect] = useState<string | null>(null)
   const [signupError, setSignupError] = useState<string | null>(null)
   const [focusTrigger, setFocusTrigger] = useState(0)
@@ -87,6 +89,26 @@ export function LandingChat() {
     const id = getOrCreateSessionId()
     setSessionId(id)
   }, [])
+
+  // Estado de autenticação para header dinâmico no onboarding.
+  useEffect(() => {
+    let mounted = true
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!mounted) return
+      setAuthenticatedEmail(user?.email ?? null)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthenticatedEmail(session?.user?.email ?? null)
+    })
+
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [supabase])
 
   // Restaurar sessão após F5: buscar do Supabase e re-hidratar estado
   useEffect(() => {
@@ -807,14 +829,27 @@ export function LandingChat() {
             header={
               <div className="px-4 py-3 flex items-center justify-between gap-3">
                 <h1 className="text-lg sm:text-xl font-semibold">Nevo</h1>
-                <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" asChild>
-                    <Link href="/login">Entrar</Link>
-                  </Button>
-                  <Button size="sm" asChild>
-                    <Link href="/signup">Cadastre-se gratuitamente</Link>
-                  </Button>
-                </div>
+                {authenticatedEmail ? (
+                  <div className="flex items-center gap-2">
+                    <span className="hidden sm:inline text-sm text-muted-foreground">Você está logado</span>
+                    <AuthenticatedHeaderUserMenu
+                      userEmail={authenticatedEmail}
+                      showWelcomeText={false}
+                      showClientAreaButton
+                      clientAreaHref="/app"
+                      clientAreaLabel="Concluir configuração"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="sm" asChild>
+                      <Link href="/login">Entrar</Link>
+                    </Button>
+                    <Button size="sm" asChild>
+                      <Link href="/signup">Cadastre-se gratuitamente</Link>
+                    </Button>
+                  </div>
+                )}
               </div>
             }
             footer={

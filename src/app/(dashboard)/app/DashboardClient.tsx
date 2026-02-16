@@ -73,6 +73,7 @@ function MetricCard({
 
 interface BootstrapData {
   tenant: { id: string; name: string; slug: string }
+  agent?: { id: string; name: string; business_type: string | null; status: string }
   tenant_setting: {
     tone: string | null
     handoff_mode: string | null
@@ -87,7 +88,7 @@ interface AppointmentRow {
 }
 
 export function DashboardClient() {
-  const { activeAgentId, error: agentsError } = useAgentContext()
+  const { activeAgentId, activeAgent, error: agentsError } = useAgentContext()
   const [bootstrap, setBootstrap] = React.useState<BootstrapData | null>(null)
   const [appointments, setAppointments] = React.useState<AppointmentRow[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -173,6 +174,7 @@ export function DashboardClient() {
   }
 
   const { tenant, tenant_setting } = bootstrap
+  const dashboardAgentName = activeAgent?.name?.trim() || bootstrap.agent?.name?.trim() || tenant.name
   const upcomingAppointments = appointments.length
   const nextAppointmentAt =
     appointments.length > 0 && appointments[0].start_at
@@ -196,7 +198,7 @@ export function DashboardClient() {
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div className="space-y-1">
             <h2 className="text-2xl font-semibold tracking-tight">
-              Painel do <span className="text-primary">{tenant.name}</span>
+              Painel do <span className="text-primary">{dashboardAgentName}</span>
             </h2>
             <p className="text-sm text-muted-foreground">
               Visão geral do seu negócio e dos próximos agendamentos.
