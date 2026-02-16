@@ -1501,16 +1501,12 @@ async function processSimulatorMessage(
       : null
   const text = singleOptionResolved || incomingText
 
-  // Trava mínima: mensagens muito curtas (ex: "O", "a") — pedir esclarecimento. Exceto resposta numérica a opções.
+  // Trava mínima: mensagens muito curtas (ex: "O", "a") — resposta curta e direta, sem cumprimento formal.
   const MIN_MSG_LENGTH = 2
   const isNumericOption =
     /^[1-9]\d*$/.test(text) && Array.isArray(state.last_action_options) && state.last_action_options.length > 0
   if (text.length > 0 && text.length < MIN_MSG_LENGTH && !isNumericOption) {
-    const greeting = getGreetingMessage(config)
-    return buildResult(
-      `${greeting}\n\nNão entendi, pode repetir? Como posso ajudar?`,
-      { ...state, step: "qualification" }
-    )
+    return buildResult("Oi! Não entendi, pode repetir? Como posso ajudar?", { ...state, step: "qualification" })
   }
   const nextState: SimulatorState = {
     ...state,
@@ -1647,23 +1643,20 @@ async function processSimulatorMessage(
       if (action === "ask_clarification") {
         const msg =
           orchestrator!.clarification_question?.trim() || "Não entendi, pode repetir? Como posso ajudar?"
-        return buildResult(`${greeting}\n\n${msg}`, { ...nextState, step: "qualification" })
+        return buildResult(`Oi! ${msg}`, { ...nextState, step: "qualification" })
       }
 
       if (action === "no_match_fallback") {
         const aiAnswer = await answerWithContextualAI(config, text, history)
-        if (aiAnswer) return buildResult(`${greeting}${aiAnswer}`, { ...nextState, step: "qualification" })
-        return buildResult(`${greeting}${buildGenericFallback(config)}`, { ...nextState, step: "qualification" })
+        if (aiAnswer) return buildResult(aiAnswer, { ...nextState, step: "qualification" })
+        return buildResult(`Oi! ${buildGenericFallback(config)}`, { ...nextState, step: "qualification" })
       }
     }
 
-    // Baixa confiança ou IA indisponível — tratar como mensagem ambígua
+    // Baixa confiança ou IA indisponível — tratar como mensagem ambígua (resposta curta, sem cumprimento formal)
     const aiAnswer = await answerWithContextualAI(config, text, history)
-    if (aiAnswer) return buildResult(`${greeting}${aiAnswer}`, { ...nextState, step: "qualification" })
-    return buildResult(
-      `${greeting}\n\n${buildGenericFallback(config)}`,
-      { ...nextState, step: "qualification" }
-    )
+    if (aiAnswer) return buildResult(aiAnswer, { ...nextState, step: "qualification" })
+    return buildResult(`Oi! ${buildGenericFallback(config)}`, { ...nextState, step: "qualification" })
   }
 
   if (!nextState.slots.service) {
