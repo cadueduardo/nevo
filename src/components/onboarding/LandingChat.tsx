@@ -78,6 +78,7 @@ export function LandingChat() {
   const [authenticatedEmail, setAuthenticatedEmail] = useState<string | null>(null)
   const [configuredAgentRedirect, setConfiguredAgentRedirect] = useState<string | null>(null)
   const [pendingDraftRedirect, setPendingDraftRedirect] = useState<string | null>(null)
+  const [isRestartDialogOpen, setIsRestartDialogOpen] = useState(false)
   const [signupError, setSignupError] = useState<string | null>(null)
   const [focusTrigger, setFocusTrigger] = useState(0)
   const [simulatorFocusTrigger, setSimulatorFocusTrigger] = useState(0)
@@ -430,6 +431,29 @@ export function LandingChat() {
       ...payload,
     }
     setMessages((prev) => [...prev, m])
+  }
+
+  const resetOnboarding = () => {
+    clearSessionId()
+    const freshSessionId = getOrCreateSessionId()
+    setSessionId(freshSessionId)
+    setMessages([])
+    setCurrentStep('welcome')
+    setOnboardingData({})
+    setIsLoading(false)
+    setAuthChoicePending(false)
+    setConfiguredAgentRedirect(null)
+    setSignupError(null)
+    setIsSimulatorAvailable(false)
+    setIsSimulatorOpen(false)
+    setSimulatorMessages([])
+    setIsSimulatorLoading(false)
+    setSimulatorConversationId(null)
+    setIsRestartDialogOpen(false)
+    lastSignupCredentialsRef.current = null
+    retriedCompletedSessionRef.current = false
+    migrationCompletedRef.current = false
+    setFocusTrigger((t) => t + 1)
   }
 
   const handleSignupSubmit = async (payload: { email: string; password: string }) => {
@@ -836,6 +860,8 @@ export function LandingChat() {
       Simular atendimento
     </Button>
   ) : null
+  const hasOnboardingProgress =
+    messages.length > 0 || currentStep !== 'welcome' || Object.keys(onboardingData).length > 0
 
   const configuredAgentPath =
     configuredAgentRedirect && configuredAgentRedirect.startsWith('/app/agentes/')
@@ -844,6 +870,21 @@ export function LandingChat() {
   const clientAreaHref = configuredAgentPath || pendingDraftRedirect || '/app'
   const clientAreaLabel =
     configuredAgentPath || pendingDraftRedirect ? 'Concluir configuração' : 'Área do cliente'
+
+  const composerFooter = (
+    <div className="flex flex-col items-center gap-2">
+      {simulatorButton}
+      {hasOnboardingProgress && (
+        <button
+          type="button"
+          onClick={() => setIsRestartDialogOpen(true)}
+          className="text-xs text-muted-foreground underline-offset-2 hover:underline hover:text-foreground transition-colors"
+        >
+          Recomeçar configuração
+        </button>
+      )}
+    </div>
+  )
 
   return (
     <div className="h-screen w-full bg-background">
@@ -865,7 +906,7 @@ export function LandingChat() {
             onClearSignupError={() => setSignupError(null)}
             onLoginSubmit={handleLoginSubmit}
             onLoginCancel={handleLoginCancel}
-            composerFooter={simulatorButton}
+            composerFooter={composerFooter}
             header={
               <div className="px-4 py-3 flex items-center justify-between gap-3">
                 <h1 className="text-lg sm:text-xl font-semibold">Nevo</h1>
@@ -918,6 +959,30 @@ export function LandingChat() {
               onClose={() => setIsSimulatorOpen(false)}
               focusTrigger={simulatorFocusTrigger}
             />
+          </div>
+        )}
+
+        {isRestartDialogOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-sm rounded-xl border bg-card p-4 shadow-lg">
+              <h2 className="text-base font-semibold">Recomeçar configuração?</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Isso vai apagar o progresso atual do onboarding nesta sessão.
+              </p>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsRestartDialogOpen(false)}
+                >
+                  Cancelar
+                </Button>
+                <Button type="button" size="sm" variant="destructive" onClick={resetOnboarding}>
+                  Recomeçar
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </div>
