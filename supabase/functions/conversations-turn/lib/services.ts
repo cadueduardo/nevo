@@ -165,17 +165,32 @@ export function findServicesFromText(
   eligibleForSequence: string[] = []
 ): string[] {
   const msg = normalizeText(text)
+  const msgTokens = tokenizeRelevant(text)
   const found: string[] = []
   const used = new Set<string>()
+  const eligibleSet = new Set((eligibleForSequence || []).map((e) => normalizeText(e)))
   for (const svc of services) {
     const name = svc.name || ""
     if (!name || used.has(normalizeText(name))) continue
     const nameNorm = normalizeText(name)
+    const allowed = eligibleSet.size === 0 || eligibleSet.has(nameNorm)
+    if (!allowed) continue
+
     if (msg.includes(nameNorm)) {
-      if (eligibleForSequence.length === 0 || eligibleForSequence.some((e) => normalizeText(e) === nameNorm)) {
-        found.push(name)
-        used.add(nameNorm)
-      }
+      found.push(name)
+      used.add(nameNorm)
+      continue
+    }
+
+    // Fallback semântico leve: "corte e barba" casa com "corte de cabelo" + "barba".
+    const svcTokens = tokenizeRelevant(name)
+    if (svcTokens.length === 0 || msgTokens.length === 0) continue
+    const overlap = svcTokens.filter((token) => msgTokens.includes(token)).length
+    const ratio = overlap / svcTokens.length
+    const minRatio = svcTokens.length === 1 ? 1 : 0.5
+    if (overlap > 0 && ratio >= minRatio) {
+      found.push(name)
+      used.add(nameNorm)
     }
   }
   return found

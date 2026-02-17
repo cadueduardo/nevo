@@ -1094,6 +1094,18 @@ async function resolveBooking(
     if (phone) nextState.slots.customer_phone = phone
   }
 
+  if (config.allow_sequence_booking) {
+    const eligibleForSequence =
+      (config.sequence_eligible_services?.length ?? 0) > 0
+        ? config.sequence_eligible_services || []
+        : (config.services || []).map((s) => s.name).filter(Boolean)
+    const mentionedMultiple = findServicesFromText(text, config.services || [], eligibleForSequence)
+    if (mentionedMultiple.length >= 2 && (!nextState.slots.date || !nextState.slots.time)) {
+      nextState.slots.service = mentionedMultiple.join(", ")
+      nextState.just_identified_service = true
+    }
+  }
+
   if (!nextState.slots.service) {
     if (isVisitRequest(text)) {
       nextState.slots.service = "Visita"
@@ -2892,11 +2904,10 @@ serve(async (req) => {
     const contact = await getOrCreateContact(supabaseAdmin, tenant.id, channel.id, sessionIdForContact, config.business_name)
     const conversation = await getOrCreateConversation(supabaseAdmin, tenant.id, channel.id, contact.id, agentId, body.conversation_id)
 
-    // Comando para encerrar/reiniciar a conversa (testes): zera o estado e responde que pode começar de novo
+        // Comando para encerrar/reiniciar: fecha a conversa atual e abre uma nova para limpar estado + historico.
     if (isEndTestCommand(body.message)) {
-      const resetState = createSimulatorState()
       const nowIso = new Date().toISOString()
-      const replyText = "Conversa encerrada. Quando quiser, é só mandar uma mensagem para começar de novo."
+      const replyText = "Conversa encerrada. Quando quiser, e so mandar uma mensagem para comecar de novo."
       await supabaseAdmin.from("conversation_messages").insert([
         { tenant_id: tenant.id, conversation_id: conversation.id, role: "user", content_text: body.message, metadata: { channel: channelType } },
         { tenant_id: tenant.id, conversation_id: conversation.id, role: "assistant", content_text: replyText, metadata: { channel: channelType } },
@@ -2904,13 +2915,31 @@ serve(async (req) => {
       await supabaseAdmin
         .from("conversation")
         .update({
-          state_json: { state: resetState, channel: channelType },
+          status: "closed",
+          state_json: { state: createSimulatorState(), channel: channelType },
           last_message_at: nowIso,
         })
         .eq("id", conversation.id)
         .eq("tenant_id", tenant.id)
+
+      const { data: freshConversation, error: freshConversationError } = await supabaseAdmin
+        .from("conversation")
+        .insert({
+          tenant_id: tenant.id,
+          agent_id: agentId,
+          channel_id: channel.id,
+          contact_id: contact.id,
+          status: "open",
+          context: {},
+          state_json: {},
+          last_message_at: nowIso,
+        })
+        .select()
+        .single()
+      if (freshConversationError) throw freshConversationError
+
       return json({
-        conversation_id: conversation.id,
+        conversation_id: freshConversation.id,
         messages: [{ role: "assistant", content: replyText, created_at: nowIso, action_options: undefined }],
       })
     }
