@@ -1099,8 +1099,12 @@ async function resolveBooking(
       nextState.slots.service = "Visita"
     } else if (config.services && config.services.length === 1) {
       nextState.slots.service = config.services[0].name
-    } else if (config.allow_sequence_booking && (config.sequence_eligible_services?.length ?? 0) > 0) {
-      const multiple = findServicesFromText(text, config.services || [], config.sequence_eligible_services || [])
+    } else if (config.allow_sequence_booking) {
+      const eligibleForSequence =
+        (config.sequence_eligible_services?.length ?? 0) > 0
+          ? config.sequence_eligible_services || []
+          : (config.services || []).map((s) => s.name).filter(Boolean)
+      const multiple = findServicesFromText(text, config.services || [], eligibleForSequence)
       if (multiple.length > 0) {
         nextState.slots.service = multiple.join(", ")
       } else {

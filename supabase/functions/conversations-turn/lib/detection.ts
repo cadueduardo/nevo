@@ -45,8 +45,12 @@ export function isFinalizedState(state: SimulatorState): boolean {
 /** Comando para encerrar/reiniciar a conversa (testes). Ex.: "encerrar", "encerrar teste", "reiniciar" */
 export function isEndTestCommand(text: string): boolean {
   const msg = normalizeText(text)
-  return /^(encerrar|encerrar teste|reiniciar teste|encerrar conversa|reiniciar conversa|resetar|reiniciar)$/.test(msg) ||
-    /^encerrar (a )?conversa$/.test(msg)
+  return (
+    /^(encerrar|encerrar teste|reiniciar teste|encerrar conversa|reiniciar conversa|resetar|reiniciar|encerrar sessao|encerrar sessao do whatsapp)$/.test(msg) ||
+    /^encerrar (a )?conversa$/.test(msg) ||
+    /^encerrar (a )?sessao$/.test(msg) ||
+    /^(finalizar|terminar) (atendimento|conversa|sessao)$/.test(msg)
+  )
 }
 
 export function isPriceQuestion(text: string): boolean {
