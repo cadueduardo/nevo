@@ -113,12 +113,34 @@ function normalizeForComparison(value: string): string {
     .trim()
 }
 
+function isGreetingOnlyMessage(message: string): boolean {
+  const normalized = normalizeForComparison(message)
+  if (!normalized) return true
+
+  const greetingPatterns = [
+    /^(oi|ola|alo|opa|hey|hi|hello)$/,
+    /^(bom dia|boa tarde|boa noite)$/,
+    /^(e ai|fala|blz|beleza|tudo bem|td bem)$/,
+  ]
+
+  return greetingPatterns.some((pattern) => pattern.test(normalized))
+}
+
 function sanitizeBusinessType(value: string): string {
   const cleaned = (value || '')
     .replace(/^[\s,.;:!?-]+|[\s,.;:!?-]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim()
   return cleaned.length > 80 ? cleaned.slice(0, 80).trim() : cleaned
+}
+
+function isValidBusinessTypeCandidate(value: string): boolean {
+  const normalized = normalizeForComparison(value)
+  if (!normalized) return false
+  if (isGreetingOnlyMessage(normalized)) return false
+  if (isGenericOnboardingIntent(normalized)) return false
+  if (/^(quero|preciso|gostaria|comecar|iniciar|cadastro|negocio)$/.test(normalized)) return false
+  return normalized.length >= 2
 }
 
 function isGenericOnboardingIntent(value: string): boolean {
@@ -133,7 +155,7 @@ function extractBusinessTypeDeterministic(message: string): string {
   const normalized = normalizeForComparison(message)
   if (!normalized) return ''
 
-  const withoutGreeting = normalized.replace(/^(oi|ola|bom dia|boa tarde|boa noite|e ai|fala)\s+/, '').trim()
+  const withoutGreeting = normalized.replace(/^(oi|ola|bom dia|boa tarde|boa noite|e ai|fala)(\s+|$)/, '').trim()
   const patterns = [
     /\b(?:sou|trabalho como|atuo como|trabalho com|atuo com)\s+(.+?)(?:\b(?:e|para|quero|gostaria|preciso|estou|to)\b|$)/,
     /\b(?:ramo|tipo de negocio|tipo do negocio|negocio)\s*(?:e|eh|:)?\s*(.+)$/,
@@ -143,23 +165,23 @@ function extractBusinessTypeDeterministic(message: string): string {
     const match = withoutGreeting.match(pattern)
     if (!match?.[1]) continue
     const candidate = sanitizeBusinessType(match[1])
-    if (candidate && !isGenericOnboardingIntent(candidate)) return candidate
+    if (isValidBusinessTypeCandidate(candidate)) return candidate
   }
 
   const fallback = sanitizeBusinessType(withoutGreeting)
-  if (!fallback || isGenericOnboardingIntent(fallback)) return ''
+  if (!isValidBusinessTypeCandidate(fallback)) return ''
   return fallback
 }
 
 function resolveBusinessTypeCandidate(aiBusinessType: string | undefined, message: string): string {
   const aiCandidate = sanitizeBusinessType(aiBusinessType || '')
-  if (aiCandidate && !isGenericOnboardingIntent(aiCandidate)) return aiCandidate
+  if (isValidBusinessTypeCandidate(aiCandidate)) return aiCandidate
   return extractBusinessTypeDeterministic(message)
 }
 
 function hasOnboardingSeedExtraction(extracted: Record<string, any> | null | undefined): boolean {
   if (!extracted) return false
-  if (typeof extracted.business_type === 'string' && extracted.business_type.trim()) return true
+  if (typeof extracted.business_type === 'string' && isValidBusinessTypeCandidate(extracted.business_type)) return true
   if (typeof extracted.business_name === 'string' && extracted.business_name.trim()) return true
   if (typeof extracted.context === 'string' && extracted.context.trim()) return true
   if (Array.isArray(extracted.services) && extracted.services.length > 0) return true
@@ -1439,6 +1461,14 @@ async function processMessage(
 
   const looksLikeBusinessTypeInput =
     (currentStep === 'business_type' || currentStep === 'collect_free_text') && looksLikeBusinessSeedInput(text)
+
+  if (currentStep === 'collect_free_text' && hasMinimalData(collectedData) && isGreetingOnlyMessage(text)) {
+    return {
+      assistant_message: 'Oi! Me conta qual é o seu ramo de atividade e o que você faz no seu negócio.',
+      next_step: 'collect_free_text',
+      extracted_data: {},
+    }
+  }
 
   if (currentStep === 'collect_free_text') {
     const extracted = await extractBusinessModelWithAI(text, collectedData)
