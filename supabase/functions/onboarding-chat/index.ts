@@ -1350,11 +1350,18 @@ async function processMessage(
     }
   }
 
+  const looksLikeBusinessTypeInput =
+    currentStep === 'business_type' &&
+    text.trim().length >= 2 &&
+    !/\?/.test(text) &&
+    !/\b(posso|como|o que|duvida|dúvida|ajuda|explica|entendi|nao entendi|não entendi)\b/i.test(text)
+
   // Dúvidas contínuas na fase introdutória: resposta fluida via IA + tutorial ou CTA
   const introSteps = ['welcome', 'business_type', 'collect_free_text'] as const
   if (
     introSteps.includes(currentStep as any) &&
     hasMinimalData(collectedData) &&
+    !looksLikeBusinessTypeInput &&
     (await classifyNeedsIntroTutorial(text))
   ) {
     const { response: fluidResponse, ready_to_start } = await answerDoubtWithAI(text, { lastWasTutorial: true })

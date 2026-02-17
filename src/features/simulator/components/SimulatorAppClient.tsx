@@ -88,10 +88,27 @@ export function SimulatorAppClient({ onClose, agentIdOverride }: SimulatorAppCli
     }
   }, [conversationId, effectiveAgentId])
 
-  const onReset = useCallback(() => {
+  const onReset = useCallback(async () => {
+    const currentConversationId = conversationId
     setMessages([])
     setConversationId(null)
-  }, [])
+
+    // Reinicia também o estado no backend para evitar reaproveitar contexto antigo.
+    if (!currentConversationId) return
+    try {
+      await fetch('/api/app/simulator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'reiniciar conversa',
+          conversation_id: currentConversationId,
+          agent_id: effectiveAgentId,
+        }),
+      })
+    } catch {
+      // Sem bloquear UX: se falhar, a UI já foi limpa localmente.
+    }
+  }, [conversationId, effectiveAgentId])
 
   return (
     <SimulatorPanel
