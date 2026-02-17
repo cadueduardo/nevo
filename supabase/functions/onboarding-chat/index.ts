@@ -71,7 +71,7 @@ function isLikelyBusinessInfoFirstMessage(message: string): boolean {
 
   // Cumprimentos curtos / mensagens vazias → não tratar como descrição do negócio
   if (text.length < 8) return false
-  const hasBusinessKeyword = /(manicure|barbearia|barbeiro|salão|salao|clínica|clinica|loja|restaurante|pizzaria|lanchonete|oficina|delivery)\b/.test(
+  const hasBusinessKeyword = /(manicure|barbearia|barbeiro|salão|salao|clínica|clinica|loja|restaurante|pizzaria|lanchonete|oficina|delivery|chef|personal chef)\b/.test(
     text
   )
   if (/^(oi|olá|ola|bom dia|boa tarde|boa noite|e aí|e ai|fala|hello)\b/.test(text) && text.length < 30) {
@@ -81,7 +81,7 @@ function isLikelyBusinessInfoFirstMessage(message: string): boolean {
   // Sinais de descrição de negócio / atendimento / horários / nome
   const patterns = [
     /\b(sou|tenho|trabalho|atuo|atendo|faço|faco|vendo|presto)\b/,
-    /\b(barbearia|barbeiro|salão|salao|clínica|clinica|loja|restaurante|pizzaria|lanchonete|oficina|delivery|manicure)\b/,
+    /\b(barbearia|barbeiro|salão|salao|clínica|clinica|loja|restaurante|pizzaria|lanchonete|oficina|delivery|manicure|chef|personal chef)\b/,
     /\b(chama|se chama|nome)\b/,
     /\b(seg|segunda|ter|terça|quarta|quinta|sexta|sáb|sábado|domingo)\b/,
     /\b(das|de)\s*\d{1,2}\b.*\b(as|às|até|ate)\b.*\d{1,2}\b/,
@@ -3251,17 +3251,25 @@ serve(async (req) => {
 
     let response: OnboardingResponse
     if (currentStep === 'welcome' && isNew) {
-      // IA first: detecta se usuário não sabe o que fazer → tutorial introdutório
-      const needsTutorial = await classifyNeedsIntroTutorial(body.message)
-      if (needsTutorial) {
+      // IA first no primeiro turno: se já houver contexto de ramo, avançar sem cair em tutorial.
+      const firstExtraction = await extractBusinessModelWithAI(body.message, collectedData)
+      const hasBusinessContext =
+        Boolean(firstExtraction?.business_type?.trim()) || isLikelyBusinessInfoFirstMessage(body.message)
+
+      if (hasBusinessContext) {
+        response = await processMessage(
+          body.message,
+          'collect_free_text',
+          { ...collectedData, ...firstExtraction },
+          session,
+          supabaseAdmin
+        )
+      } else if (await classifyNeedsIntroTutorial(body.message)) {
         response = {
           assistant_message: buildIntroTutorialMessage(),
           next_step: 'business_type',
           extracted_data: {},
         }
-      } else if (isLikelyBusinessInfoFirstMessage(body.message)) {
-        // Usuário já descreveu o negócio na 1ª mensagem — extrair e avançar
-        response = await processMessage(body.message, 'collect_free_text', collectedData, session, supabaseAdmin)
       } else {
         response = {
           assistant_message:
