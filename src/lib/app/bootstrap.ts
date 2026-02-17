@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 
 export interface AppBootstrapSetting {
   tone: string | null
@@ -49,15 +50,8 @@ export async function getAppBootstrap(): Promise<AppBootstrapResult | null> {
   } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data: tenantUser, error: tuError } = await supabase
-    .from('tenant_user')
-    .select('tenant_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  if (tuError || !tenantUser?.tenant_id) return null
-  const tenantId = tenantUser.tenant_id
+  const tenantId = await resolvePrimaryTenantId(supabase, user.id)
+  if (!tenantId) return null
 
   const [tenantResult, settingResult, flowResult] = await Promise.all([
     supabase.from('tenant').select('id, name, slug').eq('id', tenantId).single(),
@@ -106,15 +100,8 @@ export async function getAppBootstrapByAgent(
   } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data: tenantUser, error: tuError } = await supabase
-    .from('tenant_user')
-    .select('tenant_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  if (tuError || !tenantUser?.tenant_id) return null
-  const tenantId = tenantUser.tenant_id
+  const tenantId = await resolvePrimaryTenantId(supabase, user.id)
+  if (!tenantId) return null
 
   const { data: agent, error: agentError } = await supabase
     .from('agent')

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 
 /**
  * GET /api/app/agents/[id]/channel/whatsapp
@@ -17,16 +18,9 @@ export async function GET(
   if (!user) {
     return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
   }
-
-  const { data: tenantUser, error: tuError } = await supabase
-    .from('tenant_user')
-    .select('tenant_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  if (tuError || !tenantUser?.tenant_id) {
-    return NextResponse.json({ error: 'Tenant não encontrado' }, { status: 404 })
+  const tenantId = await resolvePrimaryTenantId(supabase, user.id)
+  if (!tenantId) {
+    return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
   }
 
   const agentId = (await params).id
@@ -34,7 +28,7 @@ export async function GET(
     .from('agent')
     .select('id')
     .eq('id', agentId)
-    .eq('tenant_id', tenantUser.tenant_id)
+    .eq('tenant_id', tenantId)
     .single()
 
   if (agentError || !agent) {
@@ -101,19 +95,18 @@ export async function PATCH(
   if (!user) {
     return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
   }
-
-  const { data: tenantUser, error: tuError } = await supabase
+  const tenantId = await resolvePrimaryTenantId(supabase, user.id)
+  if (!tenantId) {
+    return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
+  }
+  const { data: tenantUserRole } = await supabase
     .from('tenant_user')
-    .select('tenant_id, role')
+    .select('role')
     .eq('user_id', user.id)
-    .limit(1)
+    .eq('tenant_id', tenantId)
     .maybeSingle()
 
-  if (tuError || !tenantUser?.tenant_id) {
-    return NextResponse.json({ error: 'Tenant não encontrado' }, { status: 404 })
-  }
-
-  const isAdmin = tenantUser.role === 'owner' || tenantUser.role === 'admin'
+  const isAdmin = tenantUserRole?.role === 'owner' || tenantUserRole?.role === 'admin'
   if (!isAdmin) {
     return NextResponse.json(
       { error: 'Apenas administradores do tenant (owner/admin) podem salvar credenciais do canal.' },
@@ -126,7 +119,7 @@ export async function PATCH(
     .from('agent')
     .select('id')
     .eq('id', agentId)
-    .eq('tenant_id', tenantUser.tenant_id)
+    .eq('tenant_id', tenantId)
     .single()
 
   if (agentError || !agent) {

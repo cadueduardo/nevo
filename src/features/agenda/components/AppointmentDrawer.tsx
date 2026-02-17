@@ -43,7 +43,7 @@ export function AppointmentDrawer({
       <SheetContent className="mx-auto max-w-2xl">
         <SheetHeader>
           <SheetTitle className="text-lg">
-            {appt.service_names?.[0] ?? 'Agendamento'}
+            {appt.service_names?.length ? appt.service_names.join(', ') : 'Agendamento'}
           </SheetTitle>
           <div className="mt-2 flex flex-wrap gap-2">
             <Badge variant="secondary">{statusLabel(appt.status)}</Badge>

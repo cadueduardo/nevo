@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 
 /**
  * GET /api/app/appointments
@@ -15,16 +16,9 @@ export async function GET(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
     }
-
-    const { data: tenantUser, error: tuError } = await supabase
-      .from('tenant_user')
-      .select('tenant_id')
-      .eq('user_id', user.id)
-      .limit(1)
-      .maybeSingle()
-
-    if (tuError || !tenantUser?.tenant_id) {
-      return NextResponse.json({ error: 'Tenant não encontrado' }, { status: 404 })
+    const tenantId = await resolvePrimaryTenantId(supabase, user.id)
+    if (!tenantId) {
+      return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
     }
 
     const { searchParams } = new URL(req.url)
@@ -62,14 +56,14 @@ export async function GET(req: NextRequest) {
         .from('agent')
         .select('id')
         .eq('id', agentId)
-        .eq('tenant_id', tenantUser.tenant_id)
+        .eq('tenant_id', tenantId)
         .single()
       if (!agentRow) {
         return NextResponse.json({ error: 'Agente não encontrado' }, { status: 404 })
       }
       query = query.eq('agent_id', agentId)
     } else {
-      query = query.eq('tenant_id', tenantUser.tenant_id)
+      query = query.eq('tenant_id', tenantId)
     }
     const { data: rows, error } = await query
 

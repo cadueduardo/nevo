@@ -26,7 +26,7 @@ export function UpcomingList({
         ) : (
           items.slice(0, 8).map((a) => {
             const s = parseISO(a.start_at)
-            const title = a.service_names?.[0] ?? 'Agendamento'
+            const title = a.service_names?.length ? a.service_names.join(', ') : 'Agendamento'
             const sub = [
               formatTime(s),
               a.attendee_name ?? 'Cliente',

@@ -23,7 +23,7 @@ export function AppointmentCard({
 }) {
   const start = parseISO(appt.start_at)
   const end = parseISO(appt.end_at)
-  const title = appt.service_names?.[0] ?? 'Agendamento'
+  const title = appt.service_names?.length ? appt.service_names.join(', ') : 'Agendamento'
   const subtitleParts = [
     `${formatTime(start)}–${formatTime(end)}`,
     appt.attendee_name ?? 'Cliente',

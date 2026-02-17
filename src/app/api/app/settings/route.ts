@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 
 /**
  * PATCH /api/app/settings
@@ -15,19 +16,10 @@ export async function PATCH(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
     }
-
-    const { data: tenantUser, error: tuError } = await supabase
-      .from('tenant_user')
-      .select('tenant_id')
-      .eq('user_id', user.id)
-      .limit(1)
-      .maybeSingle()
-
-    if (tuError || !tenantUser?.tenant_id) {
-      return NextResponse.json({ error: 'Tenant não encontrado' }, { status: 404 })
-    }
-    const tenantId = tenantUser.tenant_id
-
+  const tenantId = await resolvePrimaryTenantId(supabase, user.id)
+  if (!tenantId) {
+    return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
+  }
     const body = await req.json().catch(() => ({}))
     if (typeof body !== 'object' || body === null) {
       return NextResponse.json({ error: 'Body inválido' }, { status: 400 })

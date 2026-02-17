@@ -60,6 +60,7 @@ import {
   getServiceDurationMinutes,
   getServicesTotalDuration,
   getServicesTotalPrice,
+  parseServiceNames,
   getStaffList,
   resolveStaffFromText,
   isAnyStaffRequest,
@@ -3015,14 +3016,15 @@ serve(async (req) => {
         // Horário é em hora local do negócio (Brasil). Usar -03:00 para que 15:30 local = 18:30 UTC
         // (evita bug onde 15:30 era armazenado como UTC e exibia 12:30 no calendário)
         const startAt = `${date}T${time}:00.000-03:00`
-        const duration = getServiceDurationMinutes(config, service) ?? 30
+        const duration = getServicesTotalDuration(config, service) ?? getServiceDurationMinutes(config, service) ?? 30
         const endAt = new Date(Date.parse(startAt) + duration * 60 * 1000).toISOString()
+        const serviceNames = parseServiceNames(service)
         const { error: insErr } = await supabaseAdmin.from("appointment").insert({
           tenant_id: tenantIdForAppointment,
           agent_id: agentId,
           attendee_name: (b as { attendee_name?: string }).attendee_name ?? null,
           staff_name: staffName,
-          service_names: service ? [service] : [],
+          service_names: serviceNames.length > 0 ? serviceNames : service ? [service] : [],
           start_at: startAt,
           end_at: endAt,
           status: "confirmed",

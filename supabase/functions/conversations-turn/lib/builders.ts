@@ -243,7 +243,21 @@ export function buildServicePrompt(
     parts.push(`Certo, qual servico voce quer agendar para ${context.attendee_name}?`)
   } else {
     const canSequence = config.allow_sequence_booking && (config.sequence_eligible_services?.length ?? 0) > 0
-    parts.push(canSequence ? "Qual servico voce quer agendar? (Pode escolher mais de um, ex: banho e tosa)" : "Qual servico voce quer agendar?")
+    if (canSequence) {
+      const sequenceExamples = (config.sequence_eligible_services || [])
+        .map((s) => s?.trim())
+        .filter(Boolean)
+        .slice(0, 2)
+      const fallbackExamples = (config.services || [])
+        .map((s) => s.name?.trim())
+        .filter(Boolean)
+        .slice(0, 2)
+      const examples = (sequenceExamples.length >= 2 ? sequenceExamples : fallbackExamples).join(" e ")
+      const suffix = examples ? ` (Pode escolher mais de um, ex: ${examples})` : " (Pode escolher mais de um)"
+      parts.push(`Qual servico voce quer agendar?${suffix}`)
+    } else {
+      parts.push("Qual servico voce quer agendar?")
+    }
   }
   return {
     message: parts.join(" "),

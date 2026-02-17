@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import type { Agent, AgentWhatsAppSummary } from '@/types/agent'
+import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 
 /** Fluxo vazio mínimo para agente criado "em branco". */
 const EMPTY_FLOW_DEFINITION = {
@@ -24,19 +25,10 @@ export async function GET() {
   if (!user) {
     return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
   }
-
-  const { data: tenantUser, error: tuError } = await supabase
-    .from('tenant_user')
-    .select('tenant_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  if (tuError || !tenantUser?.tenant_id) {
-    return NextResponse.json({ error: 'Tenant não encontrado' }, { status: 404 })
+  const tenantId = await resolvePrimaryTenantId(supabase, user.id)
+  if (!tenantId) {
+    return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
   }
-  const tenantId = tenantUser.tenant_id
-
   const { data: agents, error: agentsError } = await supabase
     .from('agent')
     .select('id, name, business_type, channel_primary, status, updated_at')
@@ -120,19 +112,10 @@ export async function POST(req: NextRequest) {
   if (!user) {
     return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
   }
-
-  const { data: tenantUser, error: tuError } = await supabase
-    .from('tenant_user')
-    .select('tenant_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  if (tuError || !tenantUser?.tenant_id) {
-    return NextResponse.json({ error: 'Tenant não encontrado' }, { status: 404 })
+  const tenantId = await resolvePrimaryTenantId(supabase, user.id)
+  if (!tenantId) {
+    return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
   }
-  const tenantId = tenantUser.tenant_id
-
   const body = await req.json().catch(() => ({}))
   const name = typeof body === 'object' && body !== null && typeof body.name === 'string'
     ? body.name.trim() || 'Novo agente'
