@@ -127,6 +127,37 @@ import type {
 // ---- funções movidas para lib/ ----
 // Removido dead code: isAdditionalBookingRequest, extractCountFromText
 
+function parseOptionalNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && !Number.isNaN(value)) return value
+  if (typeof value !== "string") return undefined
+  const normalized = value.replace(/[^\d,.-]/g, "").replace(",", ".").trim()
+  if (!normalized) return undefined
+  const parsed = Number(normalized)
+  return Number.isNaN(parsed) ? undefined : parsed
+}
+
+function normalizeIncomingServices(
+  raw: unknown
+): Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }> {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((svc) => {
+      const item = (svc || {}) as Record<string, unknown>
+      const name = String(item.name || item.service_name || "").trim()
+      if (!name) return null
+      const duration = parseOptionalNumber(item.duration_minutes ?? item.duration ?? item.estimated_duration_minutes)
+      const price = parseOptionalNumber(item.base_price ?? item.price ?? item.value)
+      const description = typeof item.description === "string" ? item.description : undefined
+      return {
+        name,
+        ...(duration != null ? { duration_minutes: duration } : {}),
+        ...(price != null ? { base_price: price } : {}),
+        ...(description ? { description } : {}),
+      }
+    })
+    .filter(Boolean) as Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
+}
+
 async function resolveBooking(
   config: SimulatorConfig,
   text: string,
@@ -2745,7 +2776,7 @@ serve(async (req) => {
       context_mode: body.context?.context_mode,
       establishment_address: body.context?.establishment_address,
       tone: body.context?.tone,
-      services: body.context?.services || [],
+      services: normalizeIncomingServices(body.context?.services),
       when_client_asks_price_no_value: body.context?.when_client_asks_price_no_value || "offer_handoff_or_booking",
       schedule: body.context?.schedule,
       staff: body.context?.staff || [],

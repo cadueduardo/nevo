@@ -51,16 +51,24 @@ export function isEndTestCommand(text: string): boolean {
 
 export function isPriceQuestion(text: string): boolean {
   const msg = normalizeText(text)
+  const compact = msg.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim()
   return (
-    /(quanto custa|preco|preço|valor|quanto fica|quanto e|quanto é|quais os precos|quais os preços|quanto sao|quanto são)/.test(msg) ||
+    /(quanto custa|preco|valor|quanto fica|quanto e|quais os precos|quanto sao)/.test(msg) ||
     /\bquanto\s+ta\b/.test(msg) ||
-    /\bquanto\s+tá\b/.test(msg) ||
+    /\bquanto\s+e\b/.test(msg) ||
+    /\bqto\s+ta\b/.test(compact) ||
+    /\bqto\s+e\b/.test(compact) ||
+    /\bqto\s+custa\b/.test(compact) ||
+    /\bqto\s+fica\b/.test(compact) ||
+    /\bqto\b.*\b(valor|preco)\b/.test(compact) ||
+    /\bqt\b.*\b(valor|preco|custa|fica)\b/.test(compact) ||
     /\bqual\s+o\s+valor\b/.test(msg) ||
     /\bvalor\s+do\b/.test(msg) ||
     /\bpreco\s+do\b/.test(msg) ||
-    /\bpreço\s+do\b/.test(msg)
+    /\bpreco\s+da\b/.test(msg)
   )
 }
+
 
 export function isListServicesQuestion(text: string): boolean {
   const msg = normalizeText(text)
