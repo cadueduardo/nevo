@@ -2126,13 +2126,16 @@ async function processSimulatorMessage(
     return buildResult("Se precisar de algo no futuro, fico à disposição.", nextState)
   }
 
+  // Primeira interacao: usar IA para responder com linguagem natural e contexto do negocio.
+  if (isFirst && isGreeting(text)) {
+    const aiGreeting = await answerWithContextualAI(config, text, history)
+    if (aiGreeting) return buildResult(aiGreeting, { ...nextState, step: "qualification" }, ["Quero agendar"])
+    return buildResult(getGreetingMessage(config), { ...nextState, step: "qualification" }, ["Quero agendar"])
+  }
+
   // PRIORIDADE: Se é primeira mensagem — IA interpreta intenção (sem decisões determinísticas)
   if (isFirst && !nextState.mode && !nextState.step) {
     const greeting = getGreetingMessage(config)
-
-    if (isGreeting(text)) {
-      return buildResult(greeting, { ...nextState, step: "qualification" }, ["Quero agendar"])
-    }
 
     // Perguntas informativas (endereço, horários) — resposta direta do cadastro
     const firstInfoAnswer = tryAnswerInformationalQuestion(config, text)
