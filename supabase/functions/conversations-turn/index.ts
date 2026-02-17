@@ -158,6 +158,64 @@ function normalizeIncomingServices(
     .filter(Boolean) as Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
 }
 
+function hasAnyConfiguredPrice(
+  services: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }> | undefined
+): boolean {
+  return Boolean(services?.some((svc) => typeof svc.base_price === "number" && !Number.isNaN(svc.base_price)))
+}
+
+async function loadServicesFromSettings(
+  supabaseAdmin: any,
+  tenantId: string,
+  agentId?: string
+): Promise<Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>> {
+  if (agentId) {
+    const { data: agentSetting } = await supabaseAdmin
+      .from("agent_setting")
+      .select("business_config")
+      .eq("agent_id", agentId)
+      .maybeSingle()
+    const agentServices = normalizeIncomingServices(agentSetting?.business_config?.services)
+    if (agentServices.length > 0) return agentServices
+  }
+
+  const { data: tenantSetting } = await supabaseAdmin
+    .from("tenant_setting")
+    .select("business_config")
+    .eq("tenant_id", tenantId)
+    .maybeSingle()
+  return normalizeIncomingServices(tenantSetting?.business_config?.services)
+}
+
+function mergeServicesPreferIncoming(
+  incoming: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>,
+  fallback: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
+): Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }> {
+  const byName = new Map<string, { name: string; duration_minutes?: number; base_price?: number; description?: string }>()
+
+  for (const svc of fallback) {
+    const key = normalizeText(svc.name || "")
+    if (!key) continue
+    byName.set(key, { ...svc })
+  }
+
+  for (const svc of incoming) {
+    const key = normalizeText(svc.name || "")
+    if (!key) continue
+    const base = byName.get(key) || { name: svc.name }
+    byName.set(key, {
+      ...base,
+      ...svc,
+      name: svc.name || base.name,
+      duration_minutes: svc.duration_minutes ?? base.duration_minutes,
+      base_price: svc.base_price ?? base.base_price,
+      description: svc.description ?? base.description,
+    })
+  }
+
+  return Array.from(byName.values()).filter((svc) => Boolean((svc.name || "").trim()))
+}
+
 async function resolveBooking(
   config: SimulatorConfig,
   text: string,
@@ -2812,6 +2870,13 @@ serve(async (req) => {
     }
     if (!agentId) {
       return json({ error: "tenant sem agente configurado; agent_id obrigatorio para conversation/channel" }, 400)
+    }
+
+    if (!config.services?.length || !hasAnyConfiguredPrice(config.services)) {
+      const servicesFromSettings = await loadServicesFromSettings(supabaseAdmin, tenant.id, agentId)
+      if (servicesFromSettings.length > 0) {
+        config.services = mergeServicesPreferIncoming(config.services || [], servicesFromSettings)
+      }
     }
 
     const channelType: ChannelType = (body as { channel?: string }).channel === "whatsapp" ? "whatsapp" : "web_simulator"
