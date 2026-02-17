@@ -89,6 +89,93 @@ function isLikelyBusinessInfoFirstMessage(message: string): boolean {
   return patterns.some((p) => p.test(text))
 }
 
+function looksLikeBusinessSeedInput(message: string): boolean {
+  const text = (message || '').toLowerCase().trim()
+  if (!text || text.length < 2) return false
+  if (/\?/.test(text)) return false
+  if (/\b(posso|como|duvida|dúvida|ajuda|explica|nao entendi|não entendi)\b/.test(text)) return false
+
+  const hasBusinessHint = /(chef|personal chef|barbearia|barbeiro|salao|salão|manicure|clinica|clínica|loja|restaurante|oficina|studio|estudio|estúdio)\b/.test(
+    text
+  )
+  const hasSelfDescription = /\b(sou|tenho|trabalho|atuo|atendo|faco|faço|vendo|presto)\b/.test(text)
+
+  return hasBusinessHint || hasSelfDescription || isLikelyBusinessInfoFirstMessage(text)
+}
+
+function normalizeForComparison(value: string): string {
+  return (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function sanitizeBusinessType(value: string): string {
+  const cleaned = (value || '')
+    .replace(/^[\s,.;:!?-]+|[\s,.;:!?-]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned.length > 80 ? cleaned.slice(0, 80).trim() : cleaned
+}
+
+function isGenericOnboardingIntent(value: string): boolean {
+  const normalized = normalizeForComparison(value)
+  if (!normalized) return true
+  return /(quero|gostaria|preciso|cadastrar|criar|montar)\s+(meu|minha)?\s*(negocio|empresa|conta|cadastro)/.test(
+    normalized
+  )
+}
+
+function extractBusinessTypeDeterministic(message: string): string {
+  const normalized = normalizeForComparison(message)
+  if (!normalized) return ''
+
+  const withoutGreeting = normalized.replace(/^(oi|ola|bom dia|boa tarde|boa noite|e ai|fala)\s+/, '').trim()
+  const patterns = [
+    /\b(?:sou|trabalho como|atuo como|trabalho com|atuo com)\s+(.+?)(?:\b(?:e|para|quero|gostaria|preciso|estou|to)\b|$)/,
+    /\b(?:ramo|tipo de negocio|tipo do negocio|negocio)\s*(?:e|eh|:)?\s*(.+)$/,
+  ]
+
+  for (const pattern of patterns) {
+    const match = withoutGreeting.match(pattern)
+    if (!match?.[1]) continue
+    const candidate = sanitizeBusinessType(match[1])
+    if (candidate && !isGenericOnboardingIntent(candidate)) return candidate
+  }
+
+  const fallback = sanitizeBusinessType(withoutGreeting)
+  if (!fallback || isGenericOnboardingIntent(fallback)) return ''
+  return fallback
+}
+
+function resolveBusinessTypeCandidate(aiBusinessType: string | undefined, message: string): string {
+  const aiCandidate = sanitizeBusinessType(aiBusinessType || '')
+  if (aiCandidate && !isGenericOnboardingIntent(aiCandidate)) return aiCandidate
+  return extractBusinessTypeDeterministic(message)
+}
+
+function hasOnboardingSeedExtraction(extracted: Record<string, any> | null | undefined): boolean {
+  if (!extracted) return false
+  if (typeof extracted.business_type === 'string' && extracted.business_type.trim()) return true
+  if (typeof extracted.business_name === 'string' && extracted.business_name.trim()) return true
+  if (typeof extracted.context === 'string' && extracted.context.trim()) return true
+  if (Array.isArray(extracted.services) && extracted.services.length > 0) return true
+  if (Array.isArray(extracted.staff) && extracted.staff.length > 0) return true
+  if (Array.isArray(extracted.dynamic_variables) && extracted.dynamic_variables.length > 0) return true
+  if (typeof extracted.tone_of_voice === 'string' && extracted.tone_of_voice.trim()) return true
+  if (typeof extracted.interaction_style === 'string' && extracted.interaction_style.trim()) return true
+  if (typeof extracted.handoff_mode === 'string' && extracted.handoff_mode.trim()) return true
+  if (typeof extracted.location_mode === 'string' && extracted.location_mode.trim()) return true
+  if (extracted.target_audience?.mode) return true
+  if (extracted.service_area?.region || extracted.service_area?.coverage) return true
+  if (extracted.schedule?.start_time || extracted.schedule?.end_time) return true
+  if (Array.isArray(extracted.schedule?.days_of_week) && extracted.schedule.days_of_week.length > 0) return true
+  return false
+}
+
 const ALL_DAYS = [
   { id: 'monday', label: 'Segunda-feira', value: 'monday' },
   { id: 'tuesday', label: 'Terça-feira', value: 'tuesday' },
@@ -1351,10 +1438,35 @@ async function processMessage(
   }
 
   const looksLikeBusinessTypeInput =
-    currentStep === 'business_type' &&
-    text.trim().length >= 2 &&
-    !/\?/.test(text) &&
-    !/\b(posso|como|o que|duvida|dúvida|ajuda|explica|entendi|nao entendi|não entendi)\b/i.test(text)
+    (currentStep === 'business_type' || currentStep === 'collect_free_text') && looksLikeBusinessSeedInput(text)
+
+  if (currentStep === 'collect_free_text') {
+    const extracted = await extractBusinessModelWithAI(text, collectedData)
+    const resolvedBusinessType = resolveBusinessTypeCandidate(extracted.business_type, text)
+    const merged = {
+      ...collectedData,
+      ...extracted,
+      ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
+    }
+    const hasSeedExtraction = hasOnboardingSeedExtraction(extracted) || Boolean(resolvedBusinessType)
+
+    if (hasSeedExtraction || merged.business_type) {
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('collect_free_text', merged))
+      return {
+        assistant_message: next.message,
+        next_step: next.step,
+        extracted_data: {
+          ...extracted,
+          ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
+        },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.step === 'schedule_days'
+          ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) }
+          : {}),
+      }
+    }
+  }
 
   // Dúvidas contínuas na fase introdutória: resposta fluida via IA + tutorial ou CTA
   const introSteps = ['welcome', 'business_type', 'collect_free_text'] as const
@@ -3253,18 +3365,23 @@ serve(async (req) => {
     if (currentStep === 'welcome' && isNew) {
       // IA first no primeiro turno: se já houver contexto de ramo, avançar sem cair em tutorial.
       const firstExtraction = await extractBusinessModelWithAI(body.message, collectedData)
-      const hasBusinessContext =
-        Boolean(firstExtraction?.business_type?.trim()) || isLikelyBusinessInfoFirstMessage(body.message)
+      const resolvedBusinessType = resolveBusinessTypeCandidate(firstExtraction?.business_type, body.message)
+      const hasInitialExtraction = hasOnboardingSeedExtraction(firstExtraction) || Boolean(resolvedBusinessType)
+      const hasBusinessContext = hasInitialExtraction || isLikelyBusinessInfoFirstMessage(body.message)
 
       if (hasBusinessContext) {
         response = await processMessage(
           body.message,
           'collect_free_text',
-          { ...collectedData, ...firstExtraction },
+          {
+            ...collectedData,
+            ...firstExtraction,
+            ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
+          },
           session,
           supabaseAdmin
         )
-      } else if (await classifyNeedsIntroTutorial(body.message)) {
+      } else if (!looksLikeBusinessSeedInput(body.message) && (await classifyNeedsIntroTutorial(body.message))) {
         response = {
           assistant_message: buildIntroTutorialMessage(),
           next_step: 'business_type',
