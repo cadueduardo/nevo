@@ -2659,13 +2659,21 @@ async function processSimulatorMessage(
 ): Promise<SimulatorResult> {
   const incomingText = input.trim()
   const numericServiceResolved = tryResolveNumericServiceSelection(incomingText, state)
-  const numericActionResolved =
-    /^[1-9]\d*$/.test(incomingText) &&
-    Array.isArray(state.last_action_options) &&
-    state.last_action_options.length > 0
-      ? resolveOptionByNumber(incomingText, state.last_action_options)
-      : null
+  let numericActionResolved: string | null = null
+  if (/^[1-9]\d*$/.test(incomingText) && Array.isArray(state.last_action_options) && state.last_action_options.length > 0) {
+    const idx = parseInt(incomingText, 10) - 1
+    if (idx >= 0 && idx < state.last_action_options.length) {
+      const raw = String(state.last_action_options[idx] || "").trim()
+      numericActionResolved = raw.replace(/^\d+\s*-\s*/, "").trim()
+    }
+  }
   const text = numericActionResolved || numericServiceResolved || incomingText
+  const textNorm = normalizeText(text)
+  const hasForcedBookingAction = normalizeText(String(numericActionResolved || "")) === "quero agendar"
+  const hasStrongBookingIntent =
+    hasForcedBookingAction ||
+    isExplicitBookingIntent(text) ||
+    /\b(quero|gostaria|preciso|pode|sim)\b.*\b(agendar|marcar)\b/.test(textNorm)
 
   // Trava mínima: mensagens muito curtas (ex: "O", "a") — mensagem clara respeitando o tom do negócio.
   const MIN_MSG_LENGTH = 2
@@ -2686,6 +2694,13 @@ async function processSimulatorMessage(
     if (orchestratorCached !== undefined) return orchestratorCached
     orchestratorCached = await interpretFlowWithAI(text, history, nextState, config)
     return orchestratorCached
+  }
+
+  // Bypass determinístico: opção numérica "Quero agendar" deve iniciar fluxo de booking sempre.
+  if (hasForcedBookingAction) {
+    nextState.mode = "booking"
+    nextState.step = undefined
+    return await resolveBooking(config, "quero agendar", nextState, history, senderDisplayName)
   }
 
   const earlyRuleResult = applyConversationRules(earlyConversationRules, { text, config, nextState })
@@ -2819,7 +2834,7 @@ async function processSimulatorMessage(
     }
 
     // Prioridade para opções numéricas resolvidas em texto de ação (ex.: "1" -> "Quero agendar")
-    if (isExplicitBookingIntent(text)) {
+    if (hasStrongBookingIntent) {
       nextState.mode = "booking"
       nextState.step = undefined
       const sequenceServices = getSequenceServicesFromText(config, text)
@@ -2909,7 +2924,7 @@ async function processSimulatorMessage(
       }
     }
 
-    if (isExplicitBookingIntent(text)) {
+    if (hasStrongBookingIntent) {
       nextState.mode = "booking"
       nextState.step = undefined
       const sequenceServices = getSequenceServicesFromText(config, text)
@@ -3003,7 +3018,7 @@ async function processSimulatorMessage(
     }
 
     // Prioridade para opções numéricas resolvidas em texto de ação (ex.: "1" -> "Quero agendar")
-    if (isExplicitBookingIntent(text)) {
+    if (hasStrongBookingIntent) {
       nextState.mode = "booking"
       nextState.step = undefined
       const sequenceServices = getSequenceServicesFromText(config, text)
@@ -3049,7 +3064,7 @@ async function processSimulatorMessage(
       if (handled) return handled
     }
 
-    if (isExplicitBookingIntent(text)) {
+    if (hasStrongBookingIntent) {
       nextState.mode = "booking"
       nextState.step = undefined
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
