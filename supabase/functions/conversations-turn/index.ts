@@ -187,6 +187,19 @@ async function loadServicesFromSettings(
   return normalizeIncomingServices(tenantSetting?.business_config?.services)
 }
 
+async function loadServicesFromOnboardingSession(
+  supabaseAdmin: any,
+  sessionId?: string
+): Promise<Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>> {
+  if (!sessionId) return []
+  const { data: onboardingSession } = await supabaseAdmin
+    .from("onboarding_sessions")
+    .select("collected_data")
+    .eq("session_id", sessionId)
+    .maybeSingle()
+  return normalizeIncomingServices(onboardingSession?.collected_data?.services)
+}
+
 function mergeServicesPreferIncoming(
   incoming: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>,
   fallback: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
@@ -2892,6 +2905,12 @@ serve(async (req) => {
       const servicesFromSettings = await loadServicesFromSettings(supabaseAdmin, tenant.id, agentId)
       if (servicesFromSettings.length > 0) {
         config.services = mergeServicesPreferIncoming(config.services || [], servicesFromSettings)
+      }
+    }
+    if (!config.services?.length || !hasAnyConfiguredPrice(config.services)) {
+      const servicesFromOnboarding = await loadServicesFromOnboardingSession(supabaseAdmin, body.session_id)
+      if (servicesFromOnboarding.length > 0) {
+        config.services = mergeServicesPreferIncoming(config.services || [], servicesFromOnboarding)
       }
     }
 

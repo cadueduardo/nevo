@@ -2233,7 +2233,10 @@ async function processMessage(
       return {
         assistant_message: `✅ Valores anotados.\n\n${next.message}`,
         next_step: next.step,
-        extracted_data: { services_pricing_configured: true },
+        extracted_data: {
+          services_pricing_configured: true,
+          services,
+        },
         requires_action: next.requires_action,
         action_options: next.action_options,
         ...(next.step === 'schedule_days' ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) } : 'selectable_options' in next ? { selectable_options: (next as { selectable_options?: unknown }).selectable_options } : {}),
