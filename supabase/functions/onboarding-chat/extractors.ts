@@ -329,11 +329,12 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
    - Extraia o nome completo mencionado
 
 4. SERVIÇOS (services):
-   - Seja INTELIGENTE: identifique serviços mencionados explicitamente OU inferidos pelo tipo de negócio
+   - Extraia APENAS serviços que o usuário oferece de fato no negócio (explícitos na mensagem)
    - Se mencionar "faço X e Y", extraia ambos como serviços separados
    - Se mencionar "vendo X", considere "Venda de X" como serviço
    - Se mencionar "presto serviço de X", extraia X como serviço
-   - INFIRA serviços comuns do tipo de negócio quando fizer sentido contextual
+   - NÃO inferir serviços só pelo tipo de negócio
+   - NÃO cadastrar como serviço frases sobre a plataforma/produto (ex.: "quero um assistente de agendamento", "quero um bot", "quero configurar")
    - Cada serviço: {"name": "Nome do Serviço", "base_price": número APENAS se valor em R$/reais (ex: "R$ 50", "custa 40 reais"), "duration_minutes": número APENAS se duração em min/minutos (ex: "40 min", "duração de 30 minutos"), "description": texto apenas se o usuário descrever}
    - CRÍTICO: "duração de X é 40 min" = duration_minutes: 40. "X custa 40" sem "min" = base_price: 40. Nunca confunda min com reais.
 
@@ -353,6 +354,7 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
    - "booking": se mencionar agendamento, marcação, horários
    - "quote": se mencionar orçamento, preço, valores
    - "both": se mencionar ambos
+   - Frases como "quero um assistente de agendamento" devem preencher context="booking" (e não services)
 
 8. COLABORADORES (staff):
    - Extraia apenas se o usuário mencionar colaboradores por nome
@@ -615,6 +617,15 @@ function extractBusinessModelFallback(
       days_of_week: [...new Set(daysOfWeek)], // Remove duplicatas
     }
   }
+
+  // Extrair contexto de uso (agendamento/orçamento)
+  const hasBookingIntent =
+    lower.includes('agendamento') || lower.includes('agendar') || lower.includes('marcação') || lower.includes('marcacao')
+  const hasQuoteIntent =
+    lower.includes('orçamento') || lower.includes('orcamento') || lower.includes('orcar') || lower.includes('cotacao') || lower.includes('cotação')
+  if (hasBookingIntent && hasQuoteIntent) result.context = 'both'
+  else if (hasBookingIntent) result.context = 'booking'
+  else if (hasQuoteIntent) result.context = 'quote'
 
   // NÃO inferir serviços no fallback - deixar a IA fazer isso
   // O fallback é apenas para casos extremos quando a IA não está disponível

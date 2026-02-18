@@ -1,6 +1,7 @@
 import { BusinessModelExtraction } from './extractors.ts'
 
 export interface BusinessModelData extends BusinessModelExtraction {
+  services_confirmed?: boolean
   faq?: Array<{ question: string; answer: string }>
   dynamic_variables?: Array<{ key: string; label: string; type: string; context?: string }>
   services_duration_configured?: boolean
@@ -239,7 +240,12 @@ export function determineNextStep(
 
   if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
-    (missing.includes('services') || !currentData.services || currentData.services.length === 0)
+    (
+      missing.includes('services') ||
+      !currentData.services ||
+      currentData.services.length === 0 ||
+      currentData.services_confirmed !== true
+    )
   ) {
     const serviceOpts = buildServiceSelectableOptions(serviceExamples)
     return {

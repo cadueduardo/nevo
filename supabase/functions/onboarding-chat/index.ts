@@ -65,6 +65,20 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const INTRO_DISCOVERY_OPTIONS = [
+  'Sim, já conheço, vamos iniciar',
+  'Não, pode me explicar o que você faz?',
+]
+
+const INTRO_TUTORIAL_CTA_OPTIONS = [
+  'Entendi, quero fazer meu assistente agora',
+  'Vou configurar depois',
+]
+
+function buildGreetingDiscoveryMessage(): string {
+  return 'Oi! Que bom ter você aqui.\n\nVocê já conhece o Nevo e quer começar a configurar seu assistente agora?'
+}
+
 function isLikelyBusinessInfoFirstMessage(message: string): boolean {
   const text = (message || '').toLowerCase().trim()
   if (!text) return false
@@ -759,6 +773,15 @@ function buildServiceItems(services: Array<{ name: string }> = []) {
   }))
 }
 
+function buildServicesReviewMessage(services: Array<{ name: string }> = []): string {
+  const names = services.map((s) => s?.name).filter(Boolean)
+  const listed = names.length > 0 ? names.join(', ') : 'nenhum serviço informado'
+  return (
+    `Certo, entendi que os serviços que você oferece são: ${listed}.\n\n` +
+    'Tem mais algum serviço além desses? Se quiser, selecione sugestões abaixo ou adicione mais serviços separados por vírgula.'
+  )
+}
+
 function buildServiceDurationItems(services: Array<{ name: string; duration_minutes?: number }> = [], defaultMinutes?: number) {
   return services.map((s, i) => {
     const minutes = s.duration_minutes ?? defaultMinutes
@@ -939,6 +962,7 @@ function applyInlineEdit(updated: Record<string, any>, id: string, value: string
     if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
       services[idx] = { ...(services[idx] || {}), name: value }
       updated.services = services
+      updated.services_confirmed = false
     }
   } else if (id === 'policies') {
     updated.policies = { note: value }
@@ -1003,12 +1027,123 @@ function isExplicitServicesList(message: string) {
 function parseContext(message: string): 'booking' | 'quote' | 'both' | null {
   const m = (message || '').toLowerCase()
   if (m.includes('ambos')) return 'both'
-  const booking = m.includes('agendamento') || m.includes('agendar')
-  const quote = m.includes('orçamento') || m.includes('orcamento') || m.includes('orcar')
+  const booking =
+    m.includes('agendamento') ||
+    m.includes('agendar') ||
+    m.includes('marcar horario') ||
+    m.includes('marcar horário') ||
+    m.includes('marcação') ||
+    m.includes('marcacao')
+  const quote =
+    m.includes('orçamento') ||
+    m.includes('orcamento') ||
+    m.includes('orcar') ||
+    m.includes('cotação') ||
+    m.includes('cotacao')
   if (booking && quote) return 'both'
   if (booking) return 'booking'
   if (quote) return 'quote'
   return null
+}
+
+function normalizeContextValue(value: unknown): 'booking' | 'quote' | 'both' | null {
+  if (value === 'booking' || value === 'quote' || value === 'both') return value
+  if (typeof value !== 'string') return null
+  return parseContext(value)
+}
+
+function combineContext(
+  base: 'booking' | 'quote' | 'both' | null,
+  incoming: 'booking' | 'quote' | 'both' | null
+): 'booking' | 'quote' | 'both' | null {
+  if (!base) return incoming
+  if (!incoming) return base
+  if (base === 'both' || incoming === 'both') return 'both'
+  return base === incoming ? base : 'both'
+}
+
+function parseIntroDiscoveryChoice(message: string): 'start' | 'tutorial' | null {
+  const m = normalizeForComparison(message)
+  if (!m) return null
+  if (/nao.*(explicar|o que voce faz|o que vc faz)/.test(m)) return 'tutorial'
+  if (/explicar|o que voce faz|como funciona/.test(m)) return 'tutorial'
+  if (/(sim|ja conheco|vamos iniciar|iniciar|comecar)/.test(m)) return 'start'
+  return null
+}
+
+function parsePostTutorialChoice(message: string): 'start' | 'later' | null {
+  const m = normalizeForComparison(message)
+  if (!m) return null
+  if (/configurar depois|depois|agora nao|outro dia/.test(m)) return 'later'
+  if (/(entendi|quero|vamos|iniciar|comecar).*(assistente|agora|configurar)/.test(m)) return 'start'
+  if (/sim/.test(m)) return 'start'
+  return null
+}
+
+function isPlatformAssistantIntentService(value: string): boolean {
+  const normalized = normalizeForComparison(value)
+  if (!normalized) return false
+
+  const hasAssistantTerm = /\b(assistente|bot|robo|robot|ia|sistema|plataforma)\b/.test(normalized)
+  const hasProductTerm = /\b(agendamento|agendar|orcamento|orcar|atendimento)\b/.test(normalized)
+  const hasConfigVerb = /\b(quero|preciso|gostaria|montar|criar|configurar|ter)\b/.test(normalized)
+
+  if (hasAssistantTerm && hasProductTerm) return true
+  if (hasAssistantTerm && hasConfigVerb) return true
+  if (/^(assistente|bot)\s+de\s+(agendamento|orcamento|atendimento)$/.test(normalized)) return true
+  return false
+}
+
+function sanitizeExtractedServices(
+  services: any[] | undefined,
+  message: string
+): { services: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>; contextHint: 'booking' | 'quote' | 'both' | null } {
+  if (!Array.isArray(services)) {
+    return { services: [], contextHint: parseContext(message) }
+  }
+
+  let contextHint: 'booking' | 'quote' | 'both' | null = parseContext(message)
+  const cleaned: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }> = []
+
+  for (const item of services) {
+    const name = typeof item?.name === 'string' ? item.name.trim() : ''
+    if (!name) continue
+
+    if (isPlatformAssistantIntentService(name)) {
+      contextHint = combineContext(contextHint, parseContext(name))
+      continue
+    }
+
+    cleaned.push({
+      ...item,
+      name,
+    })
+  }
+
+  const unique = cleaned.filter((s, i, self) => {
+    const key = normalizeForComparison(s.name)
+    return key && i === self.findIndex((x) => normalizeForComparison(x.name) === key)
+  })
+
+  return { services: unique, contextHint }
+}
+
+function sanitizeExtractionResult(
+  extractedRaw: Partial<BusinessModelExtraction> | null | undefined,
+  message: string
+): Partial<BusinessModelExtraction> {
+  const extracted = { ...(extractedRaw || {}) } as Partial<BusinessModelExtraction>
+  const aiContext = normalizeContextValue((extracted as any).context)
+  const { services, contextHint } = sanitizeExtractedServices(extracted.services as any, message)
+
+  if (services.length > 0) extracted.services = services
+  else delete (extracted as any).services
+
+  const mergedContext = combineContext(aiContext, contextHint)
+  if (mergedContext) extracted.context = mergedContext
+  else delete (extracted as any).context
+
+  return extracted
 }
 
 function parseDaysFromText(message: string): string[] {
@@ -1254,6 +1389,88 @@ async function processMessage(
   const text = (message || '').trim()
   const lower = text.toLowerCase()
 
+  if (currentStep === 'welcome_intro_choice') {
+    const choice = parseIntroDiscoveryChoice(text)
+    if (!choice) {
+      return {
+        assistant_message: buildGreetingDiscoveryMessage(),
+        next_step: 'welcome_intro_choice',
+        action_options: INTRO_DISCOVERY_OPTIONS,
+        requires_action: 'welcome_intro_choice',
+      }
+    }
+
+    if (choice === 'start') {
+      return {
+        assistant_message:
+          'Perfeito. Vamos começar a configuração.\n\nMe conta: qual é o seu ramo de atividade e o que você faz?',
+        next_step: 'collect_free_text',
+        extracted_data: {},
+      }
+    }
+
+    return {
+      assistant_message: `${buildIntroTutorialMessage()}\n\nQuando quiser, escolha uma opção abaixo:`,
+      next_step: 'welcome_tutorial_cta',
+      action_options: INTRO_TUTORIAL_CTA_OPTIONS,
+      requires_action: 'welcome_tutorial_cta',
+    }
+  }
+
+  if (currentStep === 'welcome_tutorial_cta') {
+    const choice = parsePostTutorialChoice(text)
+    if (!choice) {
+      return {
+        assistant_message: 'Quando quiser, escolha uma opção abaixo:',
+        next_step: 'welcome_tutorial_cta',
+        action_options: INTRO_TUTORIAL_CTA_OPTIONS,
+        requires_action: 'welcome_tutorial_cta',
+      }
+    }
+
+    if (choice === 'start') {
+      return {
+        assistant_message:
+          'Ótimo. Vamos configurar seu assistente agora.\n\nMe conta: qual é o seu ramo de atividade e o que você faz?',
+        next_step: 'collect_free_text',
+        extracted_data: {},
+      }
+    }
+
+    return {
+      assistant_message: 'Sem problema. Quando quiser retomar, é só me chamar que eu continuo de onde paramos.',
+      next_step: 'welcome_paused',
+      extracted_data: {},
+    }
+  }
+
+  if (currentStep === 'welcome_paused') {
+    const choice = parsePostTutorialChoice(text)
+    if (choice === 'start' || looksLikeBusinessSeedInput(text)) {
+      return {
+        assistant_message: 'Perfeito, vamos retomar.\n\nQual é o seu ramo de atividade e o que você faz?',
+        next_step: 'collect_free_text',
+        extracted_data: {},
+      }
+    }
+
+    return {
+      assistant_message:
+        'Tudo certo. Quando quiser começar, responda "quero iniciar" que seguimos para a configuração.',
+      next_step: 'welcome_paused',
+      extracted_data: {},
+    }
+  }
+
+  if (currentStep === 'welcome' && isGreetingOnlyMessage(text)) {
+    return {
+      assistant_message: buildGreetingDiscoveryMessage(),
+      next_step: 'welcome_intro_choice',
+      action_options: INTRO_DISCOVERY_OPTIONS,
+      requires_action: 'welcome_intro_choice',
+    }
+  }
+
   // Edição/remoção inline via comandos (enviado pelo frontend ao clicar nos ícones).
   const editCmd = parseEditCommand(text)
   const delCmd = parseDeleteCommand(text)
@@ -1322,6 +1539,7 @@ async function processMessage(
         if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
           services[idx] = { ...(services[idx] || {}), name: value }
           updated.services = services
+          updated.services_confirmed = false
         }
       } else if (id === 'policies') {
         updated.policies = { note: value }
@@ -1392,6 +1610,7 @@ async function processMessage(
         const services = Array.isArray(updated.services) ? [...updated.services] : []
         if (!Number.isNaN(idx) && idx >= 0 && idx < services.length) {
           updated.services = services.filter((_, i) => i !== idx)
+          updated.services_confirmed = false
         }
       }
     }
@@ -1464,18 +1683,23 @@ async function processMessage(
 
   if (currentStep === 'collect_free_text' && hasMinimalData(collectedData) && isGreetingOnlyMessage(text)) {
     return {
-      assistant_message: 'Oi! Me conta qual é o seu ramo de atividade e o que você faz no seu negócio.',
-      next_step: 'collect_free_text',
+      assistant_message: buildGreetingDiscoveryMessage(),
+      next_step: 'welcome_intro_choice',
+      action_options: INTRO_DISCOVERY_OPTIONS,
+      requires_action: 'welcome_intro_choice',
       extracted_data: {},
     }
   }
 
   if (currentStep === 'collect_free_text') {
-    const extracted = await extractBusinessModelWithAI(text, collectedData)
+    const extractedRaw = await extractBusinessModelWithAI(text, collectedData)
+    const extracted = sanitizeExtractionResult(extractedRaw, text)
+    const hasExtractedServices = Array.isArray(extracted.services) && extracted.services.length > 0
     const resolvedBusinessType = resolveBusinessTypeCandidate(extracted.business_type, text)
     const merged = {
       ...collectedData,
       ...extracted,
+      ...(hasExtractedServices ? { services_confirmed: false } : {}),
       ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
     }
     const hasSeedExtraction = hasOnboardingSeedExtraction(extracted) || Boolean(resolvedBusinessType)
@@ -1487,6 +1711,7 @@ async function processMessage(
         next_step: next.step,
         extracted_data: {
           ...extracted,
+          ...(hasExtractedServices ? { services_confirmed: false } : {}),
           ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
         },
         requires_action: next.requires_action,
@@ -1503,6 +1728,7 @@ async function processMessage(
   if (
     introSteps.includes(currentStep as any) &&
     hasMinimalData(collectedData) &&
+    !isGreetingOnlyMessage(text) &&
     !looksLikeBusinessTypeInput &&
     (await classifyNeedsIntroTutorial(text))
   ) {
@@ -1520,7 +1746,8 @@ async function processMessage(
 
   // Steps determinísticos primeiro (não depender de botão/ui_action)
   if (currentStep === 'business_type') {
-    const extracted = await extractBusinessModelWithAI(text, collectedData)
+    const extractedRaw = await extractBusinessModelWithAI(text, collectedData)
+    const extracted = sanitizeExtractionResult(extractedRaw, text)
     const businessType = extracted.business_type || text.trim()
     if (!businessType) {
       return {
@@ -1544,7 +1771,8 @@ async function processMessage(
   }
 
   if (currentStep === 'business_name') {
-    const extracted = await extractBusinessModelWithAI(text, collectedData)
+    const extractedRaw = await extractBusinessModelWithAI(text, collectedData)
+    const extracted = sanitizeExtractionResult(extractedRaw, text)
     const name = (extracted.business_name || text).trim()
     if (!name) {
       return {
@@ -1582,6 +1810,17 @@ async function processMessage(
 
     const merged = { ...collectedData, context: selected }
     const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('context', merged))
+
+    if (next.step === 'services_list' && Array.isArray(merged.services) && merged.services.length > 0) {
+      return {
+        assistant_message: buildServicesReviewMessage(merged.services),
+        next_step: 'services_list',
+        extracted_data: { context: selected, services_confirmed: false },
+        editable_items: buildServiceItems(merged.services),
+        action_options: ['Continuar'],
+        requires_action: 'services_edit',
+      }
+    }
 
     if (next.step === 'schedule_days') {
       return {
@@ -3075,14 +3314,14 @@ async function processMessage(
     const selectServicesMatch = text.match(/^select_services:(.+)$/i)
     if (selectServicesMatch) {
       const servicesText = selectServicesMatch[1].trim()
-      const services = parseServicesList(servicesText)
+      const services = sanitizeExtractedServices(parseServicesList(servicesText), text).services
       if (services.length > 0) {
-        const merged = { ...collectedData, services }
+        const merged = { ...collectedData, services, services_confirmed: false }
         const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_list', merged))
         return {
-          assistant_message: 'Perfeito. Revise os serviços abaixo e, se quiser, adicione mais separados por vírgula.',
+          assistant_message: buildServicesReviewMessage(services),
           next_step: 'services_list',
-          extracted_data: { services },
+          extracted_data: { services, services_confirmed: false },
           editable_items: buildServiceItems(services),
           action_options: ['Continuar'],
           requires_action: 'services_edit',
@@ -3101,10 +3340,13 @@ async function processMessage(
     let services = []
     if (isExplicitServicesList(text)) services = parseServicesList(text)
     else {
-      const extracted = await extractBusinessModelWithAI(text, merged)
+      const extractedRaw = await extractBusinessModelWithAI(text, merged)
+      const extracted = sanitizeExtractionResult(extractedRaw, text)
       services = extracted.services || []
       if (!services.length) services = extractServicesFromText(text)
     }
+
+    services = sanitizeExtractedServices(services, text).services
 
     const baseServices = shouldReplaceServices(text) ? [] : merged.services || []
     const unique = [...baseServices, ...services].filter((s, i, self) => {
@@ -3124,24 +3366,25 @@ async function processMessage(
       }
     }
 
-    const merged2 = { ...merged, services: unique }
+    const merged2 = { ...merged, services: unique, services_confirmed: false }
     if (wantsContinue) {
-      const next = determineNextStep(merged2 as BusinessModelData, '', makeFlowState('services_list', merged2))
+      const confirmed = { ...merged2, services_confirmed: true }
+      const next = determineNextStep(confirmed as BusinessModelData, '', makeFlowState('services_list', confirmed))
       return {
         assistant_message: next.message,
         next_step: next.step,
-        extracted_data: { services: unique },
+        extracted_data: { services: unique, services_confirmed: true },
         requires_action: next.requires_action,
         action_options: next.action_options,
         ...(next.step === 'schedule_days'
-          ? { selectable_options: buildDaysSelectableOptions(merged2.schedule?.days_of_week || []) }
+          ? { selectable_options: buildDaysSelectableOptions(confirmed.schedule?.days_of_week || []) }
           : {}),
       }
     }
     return {
-      assistant_message: 'Perfeito. Revise os serviços abaixo e, se quiser, adicione mais separados por vírgula.',
+      assistant_message: buildServicesReviewMessage(unique),
       next_step: 'services_list',
-      extracted_data: { services: unique },
+      extracted_data: { services: unique, services_confirmed: false },
       editable_items: buildServiceItems(unique),
       action_options: ['Continuar'],
       requires_action: 'services_edit',
@@ -3149,9 +3392,12 @@ async function processMessage(
   }
 
   if (currentStep === 'services_add') {
-    const services = isExplicitServicesList(text)
+    const services = sanitizeExtractedServices(
+      isExplicitServicesList(text)
       ? parseServicesList(text)
-      : extractServicesFromText(text)
+      : extractServicesFromText(text),
+      text
+    ).services
     if (!services.length && text.trim().length >= 2) {
       services.push({ name: text.trim() })
     }
@@ -3168,7 +3414,7 @@ async function processMessage(
     return {
       assistant_message: '✅ Serviço(s) adicionado(s). Você pode revisar a lista abaixo e continuar quando quiser.',
       next_step: 'services_list',
-      extracted_data: { services: mergedServices },
+      extracted_data: { services: mergedServices, services_confirmed: false },
       editable_items: buildServiceItems(mergedServices),
       action_options: ['Continuar'],
       requires_action: 'services_edit',
@@ -3176,11 +3422,22 @@ async function processMessage(
   }
 
   // Para os demais steps, usamos IA apenas para enriquecer/mesclar e seguimos o motor
-  const extracted = await extractBusinessModelWithAI(text, collectedData)
+  const extractedRaw = await extractBusinessModelWithAI(text, collectedData)
+  const extracted = sanitizeExtractionResult(extractedRaw, text)
   // Merge seguro: schedule é mesclado para não sobrescrever interval_minutes etc. quando a IA retorna objeto parcial
   const mergedData = { ...collectedData, ...extracted }
+  if (Array.isArray(extracted.services) && extracted.services.length > 0) {
+    ;(mergedData as any).services_confirmed = false
+  }
   if (extracted?.schedule && typeof extracted.schedule === 'object') {
     mergedData.schedule = { ...(collectedData.schedule || {}), ...extracted.schedule }
+  }
+  const contextFromMessage = parseContext(text)
+  if (contextFromMessage) {
+    ;(mergedData as any).context = combineContext(
+      normalizeContextValue((mergedData as any).context),
+      contextFromMessage
+    )
   }
   // Parse location_mode a partir de frases como "Ponto fixo", "Atende no local do cliente"
   const locLower = text.toLowerCase()
@@ -3193,12 +3450,14 @@ async function processMessage(
 
   const fallbackServices = extractServicesFromText(text)
   if (fallbackServices.length > 0) {
+    const sanitizedFallback = sanitizeExtractedServices(fallbackServices, text).services
     mergedData.services = shouldReplaceServices(text)
-      ? fallbackServices
-      : [...(mergedData.services || []), ...fallbackServices].filter((s, i, self) => {
+      ? sanitizedFallback
+      : [...(mergedData.services || []), ...sanitizedFallback].filter((s, i, self) => {
           const key = (s?.name || '').toLowerCase().trim()
           return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
         })
+    ;(mergedData as any).services_confirmed = false
   }
 
   // Handlers simples para alguns steps onde a IA não é necessária
@@ -3393,8 +3652,18 @@ serve(async (req) => {
 
     let response: OnboardingResponse
     if (currentStep === 'welcome' && isNew) {
+      if (isGreetingOnlyMessage(body.message)) {
+        response = {
+          assistant_message: buildGreetingDiscoveryMessage(),
+          next_step: 'welcome_intro_choice',
+          extracted_data: {},
+          action_options: INTRO_DISCOVERY_OPTIONS,
+          requires_action: 'welcome_intro_choice',
+        }
+      } else {
       // IA first no primeiro turno: se já houver contexto de ramo, avançar sem cair em tutorial.
-      const firstExtraction = await extractBusinessModelWithAI(body.message, collectedData)
+      const firstExtractionRaw = await extractBusinessModelWithAI(body.message, collectedData)
+      const firstExtraction = sanitizeExtractionResult(firstExtractionRaw, body.message)
       const resolvedBusinessType = resolveBusinessTypeCandidate(firstExtraction?.business_type, body.message)
       const hasInitialExtraction = hasOnboardingSeedExtraction(firstExtraction) || Boolean(resolvedBusinessType)
       const hasBusinessContext = hasInitialExtraction || isLikelyBusinessInfoFirstMessage(body.message)
@@ -3413,9 +3682,11 @@ serve(async (req) => {
         )
       } else if (!looksLikeBusinessSeedInput(body.message) && (await classifyNeedsIntroTutorial(body.message))) {
         response = {
-          assistant_message: buildIntroTutorialMessage(),
-          next_step: 'business_type',
+          assistant_message: `${buildIntroTutorialMessage()}\n\nQuando quiser, escolha uma opção abaixo:`,
+          next_step: 'welcome_tutorial_cta',
           extracted_data: {},
+          action_options: INTRO_TUTORIAL_CTA_OPTIONS,
+          requires_action: 'welcome_tutorial_cta',
         }
       } else {
         response = {
@@ -3424,6 +3695,7 @@ serve(async (req) => {
           next_step: 'collect_free_text',
           extracted_data: {},
         }
+      }
       }
     } else {
       response = await processMessage(body.message, currentStep, collectedData, session, supabaseAdmin)
@@ -3437,7 +3709,7 @@ serve(async (req) => {
     if (
       response.next_step === 'services_list' &&
       updatedData.business_type &&
-      response.requires_action === 'services_list'
+      (response.requires_action === 'services_list' || response.requires_action === 'services_edit')
     ) {
       const aiExamples = await suggestServicesWithAI(updatedData.business_type)
       response.selectable_options = buildServiceSelectableOptions(aiExamples)
