@@ -76,12 +76,15 @@ export function isPriceQuestion(text: string): boolean {
 
 export function isListServicesQuestion(text: string): boolean {
   const msg = normalizeText(text)
-  return /(quais servicos|quais serviços|o que voces fazem|o que vocês fazem|quais opcoes|quais opções|listar servicos|servicos oferecidos)/.test(msg)
+  return (
+    /(quais (os )?(outros )?servicos|o que voces fazem|servicos oferecidos|lista de servicos|listar servicos)/.test(msg) ||
+    /(que servicos voces atendem|quais atendimentos voces fazem|quais servicos atendem)/.test(msg)
+  )
 }
 
 export function isServiceDetailQuestion(text: string): boolean {
   const msg = normalizeText(text)
-  return /(o que inclui|o que e |o que é |me fala do servico|detalhe do |como e o |como é o )/.test(msg)
+  return /(o que inclui|o que e |me fala do servico|detalhe do |como e o |fale sobre o servico|me explica o servico)/.test(msg)
 }
 
 /** Resposta direta ao pedido "Qual o nome dele(a)?". Ex: "Cesar", "João", "Maria Silva". */

@@ -76,6 +76,29 @@ export interface SimulatorState {
   pending_additional_count?: number
   pending_attendee_name?: boolean
   pending_template_choice?: boolean
+  pending_cancel_selection?: boolean
+  pending_cancel_confirm?: boolean
+  pending_cancel_reason?: boolean
+  pending_cancel_reason_custom?: boolean
+  pending_cancel_reschedule?: boolean
+  cancel_target_id?: string
+  cancel_reason?: string
+  cancel_candidates?: Array<{
+    id: string
+    attendee_name?: string
+    staff_name?: string
+    service_names?: string[]
+    start_at?: string
+    status?: string
+  }>
+  cancel_target_snapshot?: {
+    id: string
+    attendee_name?: string
+    staff_name?: string
+    service_names?: string[]
+    start_at?: string
+    status?: string
+  }
   /** Segundo agendamento: após "mesmo dia e colaborador", esperando cliente escolher serviço. */
   pending_second_service_choice?: boolean
   pending_default_service?: string
