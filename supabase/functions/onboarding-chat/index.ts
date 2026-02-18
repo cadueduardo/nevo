@@ -940,6 +940,9 @@ function applyInlineEdit(updated: Record<string, any>, id: string, value: string
       ...(partial.end_time ? { end_time: partial.end_time } : {}),
       ...(partial.breaks && partial.breaks.length > 0 ? { breaks: partial.breaks } : {}),
     }
+    if (partial.breaks && partial.breaks.length > 0) {
+      updated.schedule_breaks_configured = true
+    }
   } else if (id.startsWith('service_duration_')) {
     const idx = parseInt(id.replace('service_duration_', ''), 10)
     const services = Array.isArray(updated.services) ? [...updated.services] : []
@@ -1507,6 +1510,9 @@ async function processMessage(
           ...(partial.breaks && partial.breaks.length > 0 ? { breaks: partial.breaks } : {}),
         }
         updated.schedule = nextSchedule
+        if (partial.breaks && partial.breaks.length > 0) {
+          updated.schedule_breaks_configured = true
+        }
       } else if (id.startsWith('service_duration_')) {
         const idx = parseInt(id.replace('service_duration_', ''), 10)
         const services = Array.isArray(updated.services) ? [...updated.services] : []
@@ -1885,6 +1891,8 @@ async function processMessage(
       ...(partial.end_time ? { end_time: partial.end_time } : {}),
       ...(partial.breaks && partial.breaks.length > 0 ? { breaks: partial.breaks } : {}),
     }
+    const hasBreaksInCurrentInput = Array.isArray(partial.breaks) && partial.breaks.length > 0
+    const breaksConfigured = hasBreaksInCurrentInput || Boolean(collectedData.schedule_breaks_configured)
 
     // Preencher start/end com single time quando fizer sentido (sem inferir).
     if (single) {
@@ -1955,6 +1963,9 @@ async function processMessage(
     }
 
     const merged = { ...collectedData, schedule: nextSchedule }
+    if (breaksConfigured) {
+      ;(merged as any).schedule_breaks_configured = true
+    }
     const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('schedule_time', merged))
     return {
       assistant_message:
@@ -1974,12 +1985,16 @@ async function processMessage(
     const existing = collectedData.schedule || {}
     const wantsNo = /(não|nao|sem pausa|sem intervalo|sem almoco|sem almoço|nao tenho|não tenho)/i.test(text)
     if (wantsNo) {
-      const merged = { ...collectedData, schedule: { ...existing, breaks: [] } }
+      const merged = {
+        ...collectedData,
+        schedule: { ...existing, breaks: [] },
+        schedule_breaks_configured: true,
+      }
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('schedule_breaks', merged))
       return {
         assistant_message: `Perfeito. Sem pausa.\n\n${next.message}`,
         next_step: next.step,
-        extracted_data: { schedule: { ...existing, breaks: [] } },
+        extracted_data: { schedule: { ...existing, breaks: [] }, schedule_breaks_configured: true },
         action_options: next.action_options,
         requires_action: next.requires_action,
       }
@@ -2008,14 +2023,18 @@ async function processMessage(
       }
     }
 
-    const merged = { ...collectedData, schedule: { ...existing, breaks } }
+    const merged = {
+      ...collectedData,
+      schedule: { ...existing, breaks },
+      schedule_breaks_configured: true,
+    }
     const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('schedule_breaks', merged))
     return {
       assistant_message:
         `✅ Pausa: ${breaks.map((b: any) => `${b.start} às ${b.end}`).join(', ')}.` +
         `\n\n${next.message}`,
       next_step: next.step,
-      extracted_data: { schedule: { ...existing, breaks } },
+      extracted_data: { schedule: { ...existing, breaks }, schedule_breaks_configured: true },
       action_options: next.action_options,
       requires_action: next.requires_action,
     }
@@ -3431,6 +3450,9 @@ async function processMessage(
   }
   if (extracted?.schedule && typeof extracted.schedule === 'object') {
     mergedData.schedule = { ...(collectedData.schedule || {}), ...extracted.schedule }
+    if (Array.isArray(extracted.schedule.breaks) && extracted.schedule.breaks.length > 0) {
+      ;(mergedData as any).schedule_breaks_configured = true
+    }
   }
   const contextFromMessage = parseContext(text)
   if (contextFromMessage) {

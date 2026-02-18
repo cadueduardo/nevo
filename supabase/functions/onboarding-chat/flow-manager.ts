@@ -2,6 +2,7 @@ import { BusinessModelExtraction } from './extractors.ts'
 
 export interface BusinessModelData extends BusinessModelExtraction {
   services_confirmed?: boolean
+  schedule_breaks_configured?: boolean
   faq?: Array<{ question: string; answer: string }>
   dynamic_variables?: Array<{ key: string; label: string; type: string; context?: string }>
   services_duration_configured?: boolean
@@ -304,6 +305,28 @@ export function determineNextStep(
         action_options: ['5 min', '10 min', '15 min', '20 min', '30 min'],
         requires_action: 'min_booking_lead',
       }
+    }
+  }
+
+  if (
+    (currentData.context === 'booking' || currentData.context === 'both') &&
+    currentData.schedule?.start_time &&
+    currentData.schedule?.end_time &&
+    !currentData.schedule_breaks_configured
+  ) {
+    return {
+      step: 'schedule_breaks',
+      message:
+        `✅ Perfeito. Horário: ${currentData.schedule.start_time} às ${currentData.schedule.end_time}.` +
+        '\n\nVocê tem alguma pausa no dia? Pode escolher nos botões ou informar de outra forma.',
+      action_options: [
+        '12:00 às 13:00',
+        '12:00 às 14:00',
+        '11:30 às 12:30',
+        'Não tenho pausa',
+        'Outra pausa',
+      ],
+      requires_action: 'schedule_breaks',
     }
   }
 
