@@ -1997,6 +1997,9 @@ async function processMessage(
         extracted_data: { schedule: { ...existing, breaks: [] }, schedule_breaks_configured: true },
         action_options: next.action_options,
         requires_action: next.requires_action,
+        ...(next.step === 'services_duration'
+          ? { editable_items: buildServiceDurationItems(merged.services || [], merged.schedule?.interval_minutes) }
+          : {}),
       }
     }
 
@@ -2037,6 +2040,9 @@ async function processMessage(
       extracted_data: { schedule: { ...existing, breaks }, schedule_breaks_configured: true },
       action_options: next.action_options,
       requires_action: next.requires_action,
+      ...(next.step === 'services_duration'
+        ? { editable_items: buildServiceDurationItems(merged.services || [], merged.schedule?.interval_minutes) }
+        : {}),
     }
   }
 
@@ -2145,12 +2151,21 @@ async function processMessage(
       }))
       const merged = { ...collectedData, services: normalizedServices, services_duration_configured: true }
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_duration', merged))
+      const pricingEntered = next.step === 'services_pricing'
       return {
-        assistant_message: `✅ Durações anotadas.\n\n${next.message}`,
+        assistant_message:
+          pricingEntered
+            ? '✅ Durações anotadas.\n\nPara cada serviço, informe o valor em R$ (ou deixe em branco). Você pode editar nos itens abaixo e depois clicar em Continuar.'
+            : `✅ Durações anotadas.\n\n${next.message}`,
         next_step: next.step,
-        extracted_data: { services: normalizedServices, services_duration_configured: true },
+        extracted_data: {
+          services: normalizedServices,
+          services_duration_configured: true,
+          ...(pricingEntered ? { services_pricing_entered: true } : {}),
+        },
         requires_action: next.requires_action,
-        action_options: next.action_options,
+        action_options: pricingEntered ? ['Continuar', 'Pular por enquanto'] : next.action_options,
+        ...(pricingEntered ? { editable_items: buildServicePriceItems(normalizedServices) } : {}),
         ...(next.step === 'schedule_days'
           ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) }
           : {}),
@@ -2187,7 +2202,7 @@ async function processMessage(
     const wantsContinue = /(continuar|seguir|pronto|ok|salvar)/i.test(text)
     const wantsInform = /(informar valores|informar|sim|quero)/i.test(text)
 
-    if (wantsSkip && !collectedData.services_pricing_entered) {
+    if (wantsSkip) {
       const merged = { ...collectedData, services_pricing_configured: true }
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_pricing', merged))
       return {
@@ -3614,6 +3629,17 @@ async function processMessage(
   }
   if (next.step === 'services_list' && next.selectable_options) {
     resp.selectable_options = next.selectable_options
+  }
+  if (next.step === 'services_pricing' && !resp.editable_items) {
+    resp.assistant_message =
+      'Para cada serviço, informe o valor em R$ (ou deixe em branco). Você pode editar nos itens abaixo e depois clicar em Continuar.'
+    resp.editable_items = buildServicePriceItems(mergedData.services || [])
+    resp.action_options = ['Continuar', 'Pular por enquanto']
+    resp.requires_action = 'services_pricing'
+    resp.extracted_data = {
+      ...(resp.extracted_data || {}),
+      services_pricing_entered: true,
+    }
   }
 
   // Se caiu em summary, padronizar payload
