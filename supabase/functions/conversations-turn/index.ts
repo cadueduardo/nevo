@@ -229,6 +229,39 @@ function mergeServicesPreferIncoming(
   return Array.from(byName.values()).filter((svc) => Boolean((svc.name || "").trim()))
 }
 
+function tryHandlePriceQuestionAnytime(
+  config: SimulatorConfig,
+  text: string,
+  state: SimulatorState
+): SimulatorResult | null {
+  if (!isPriceQuestion(text)) return null
+
+  const cordial = getCordialPrefix(config, false)
+  const serviceName = findServiceFromText(text, config.services || [])
+  const svc = getServiceWithPrice(config.services || [], serviceName)
+
+  if (serviceName && svc && svc.base_price != null) {
+    return buildResult(
+      cordial + `O ${svc.name} esta R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+      state,
+      ["Quero agendar", "So queria saber"]
+    )
+  }
+
+  if (serviceName && svc) {
+    const noPrice = buildPriceNotAvailableMessage(config, serviceName)
+    return buildResult(cordial + noPrice.message, state, noPrice.action_options)
+  }
+
+  const withPrice = (config.services || []).filter((s) => s.base_price != null)
+  if (withPrice.length > 0) {
+    return buildResult(cordial + " " + buildServicesListWithPrices(config), state)
+  }
+
+  const noPrice = buildPriceNotAvailableMessage(config, serviceName || undefined)
+  return buildResult(cordial + noPrice.message, state, noPrice.action_options)
+}
+
 async function resolveBooking(
   config: SimulatorConfig,
   text: string,
@@ -2207,6 +2240,9 @@ async function processSimulatorMessage(
 
   const earlyRuleResult = applyConversationRules(earlyConversationRules, { text, config, nextState })
   if (earlyRuleResult) return earlyRuleResult
+
+  const anytimePriceResult = tryHandlePriceQuestionAnytime(config, text, nextState)
+  if (anytimePriceResult) return anytimePriceResult
 
   // Conversa finalizada: responder só o que foi perguntado (endereço, horários etc.) sem pedir confirmação de novo
   if (isFinalizedState(nextState)) {
