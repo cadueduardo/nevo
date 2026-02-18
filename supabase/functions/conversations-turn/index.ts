@@ -255,11 +255,25 @@ function tryHandlePriceQuestionAnytime(
 
   const withPrice = (config.services || []).filter((s) => s.base_price != null)
   if (withPrice.length > 0) {
-    return buildResult(cordial + " " + buildServicesListWithPrices(config), state)
+    return buildServicesListResult(config, state, cordial)
   }
 
   const noPrice = buildPriceNotAvailableMessage(config, serviceName || undefined)
   return buildResult(cordial + noPrice.message, state, noPrice.action_options)
+}
+
+function buildServicesListResult(
+  config: SimulatorConfig,
+  state: SimulatorState,
+  prefix?: string
+): SimulatorResult {
+  const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+  const fullMessage = prefix ? `${prefix} ${buildServicesListWithPrices(config)}` : buildServicesListWithPrices(config)
+  return buildResult(
+    fullMessage,
+    { ...state, last_service_options: serviceOptions },
+    serviceOptions.length > 0 ? serviceOptions : undefined
+  )
 }
 
 function tryHandleServicesQuestionAnytime(
@@ -268,8 +282,7 @@ function tryHandleServicesQuestionAnytime(
   state: SimulatorState
 ): SimulatorResult | null {
   if (isListServicesQuestion(text)) {
-    const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-    return buildResult(buildServicesListWithPrices(config), { ...state, last_service_options: serviceOptions })
+    return buildServicesListResult(config, state)
   }
 
   if (!isServiceDetailQuestion(text)) return null
@@ -1391,7 +1404,7 @@ async function resolveBooking(
     if (withPrice.length > 0) {
       const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
       nextState.last_service_options = serviceOptions
-      return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
+      return buildServicesListResult(config, nextState, cordial)
     }
     const noPrice = buildPriceNotAvailableMessage(config, serviceName || undefined)
     return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
@@ -2212,7 +2225,7 @@ async function handleQualificationRejectedOrchestratorAction(
         }
         const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
         nextState.last_service_options = serviceOptions
-        return buildResult(getCordialPrefix(config, false) + " " + buildServicesListWithPrices(config), nextState)
+        return buildServicesListResult(config, nextState, getCordialPrefix(config, false))
       }
       return null
     },
@@ -2334,7 +2347,7 @@ async function handleQualificationOrchestratorAction(
         }
         const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
         nextState.last_service_options = serviceOptions
-        return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
+        return buildServicesListResult(config, nextState, cordial)
       }
       return null
     },
@@ -2422,7 +2435,7 @@ async function handleFirstMessageOrchestratorAction(
       const withPrice = (config.services || []).filter((s) => s.base_price != null)
       if (withPrice.length > 0) {
         nextState.last_service_options = (config.services || []).map((s) => s.name).filter(Boolean)
-        return buildResult(priceIntro + " " + buildServicesListWithPrices(config), nextState)
+        return buildServicesListResult(config, nextState, priceIntro)
       }
       const noPrice = buildPriceNotAvailableMessage(config)
       return buildResult(priceIntro + " " + noPrice.message, nextState, noPrice.action_options)
@@ -2430,7 +2443,11 @@ async function handleFirstMessageOrchestratorAction(
     list_services: async () => {
       const listMsg = buildServicesListWithPrices(config)
       const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-      return buildResult(`${greeting}\n\n${listMsg}`, { ...nextState, step: "qualification", last_service_options: serviceOptions })
+      return buildResult(
+        `${greeting}\n\n${listMsg}`,
+        { ...nextState, step: "qualification", last_service_options: serviceOptions },
+        serviceOptions
+      )
     },
     start_booking: async () => {
       nextState.mode = "booking"
@@ -2546,16 +2563,14 @@ async function handleBookingModeMessage(context: SimulatorHandlerContext): Promi
     if (withPrice.length > 0) {
       const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
       nextState.last_service_options = serviceOptions
-      return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
+      return buildServicesListResult(config, nextState, cordial)
     }
     const noPrice = buildPriceNotAvailableMessage(config)
     return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
   }
 
   if (isListServicesQuestion(text)) {
-    const listMsg = buildServicesListWithPrices(config)
-    const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-    return buildResult(cordial + listMsg, { ...nextState, last_service_options: serviceOptions })
+    return buildServicesListResult(config, nextState, cordial)
   }
 
   if (isServiceDetailQuestion(text)) {
@@ -2804,7 +2819,7 @@ async function processSimulatorMessage(
         }
         const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
         nextState.last_service_options = serviceOptions
-        return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
+        return buildServicesListResult(config, nextState, cordial)
       }
     }
 
@@ -2932,9 +2947,7 @@ async function processSimulatorMessage(
     }
 
     if (isListServicesQuestion(text)) {
-      const listMsg = buildServicesListWithPrices(config)
-      const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-      return buildResult(cordial + listMsg, { ...nextState, last_service_options: serviceOptions })
+      return buildServicesListResult(config, nextState, cordial)
     }
 
     if (isPriceQuestion(text)) {
@@ -2988,7 +3001,7 @@ async function processSimulatorMessage(
         }
         const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
         nextState.last_service_options = serviceOptions
-        return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
+        return buildServicesListResult(config, nextState, cordial)
       }
       const aiAnswer = await answerWithContextualAI(config, text, history)
       if (aiAnswer && /R\$\s*\d/.test(aiAnswer)) return buildResult(aiAnswer, nextState, ["Quero agendar", "Só queria saber"])
