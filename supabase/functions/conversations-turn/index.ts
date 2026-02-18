@@ -2659,13 +2659,13 @@ async function processSimulatorMessage(
 ): Promise<SimulatorResult> {
   const incomingText = input.trim()
   const numericServiceResolved = tryResolveNumericServiceSelection(incomingText, state)
-  const singleOptionResolved =
+  const numericActionResolved =
     /^[1-9]\d*$/.test(incomingText) &&
     Array.isArray(state.last_action_options) &&
-    state.last_action_options.length === 1
+    state.last_action_options.length > 0
       ? resolveOptionByNumber(incomingText, state.last_action_options)
       : null
-  const text = numericServiceResolved || singleOptionResolved || incomingText
+  const text = numericActionResolved || numericServiceResolved || incomingText
 
   // Trava mínima: mensagens muito curtas (ex: "O", "a") — mensagem clara respeitando o tom do negócio.
   const MIN_MSG_LENGTH = 2
