@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import {
   json,
@@ -1809,9 +1809,9 @@ async function handleQualificationRejectedOrchestratorAction(
           nextState.slots.attendee_name = interpreted.for_whom
         }
         return buildResult(
-          cordial + `O ${svc.name} estÃ¡ R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+          cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
-          ["Quero agendar", "SÃ³ queria saber"]
+          ["Quero agendar", "Só queria saber"]
         )
       }
       const withPrice = (config.services || []).filter((s) => s.base_price != null)
@@ -1934,9 +1934,9 @@ async function handleQualificationOrchestratorAction(
           nextState.slots.attendee_name = interpreted.for_whom
         }
         return buildResult(
-          cordial + `O ${svc.name} estÃ¡ R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+          cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
-          ["Quero agendar", "SÃ³ queria saber"]
+          ["Quero agendar", "Só queria saber"]
         )
       }
       const withPrice = (config.services || []).filter((s) => s.base_price != null)
@@ -2030,9 +2030,9 @@ async function handleFirstMessageOrchestratorAction(
         nextState.slots.service = svc.name
         nextState.just_identified_service = true
         return buildResult(
-          priceIntro + " " + `O ${svc.name} estÃ¡ R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+          priceIntro + " " + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
-          ["Quero agendar", "SÃ³ queria saber"]
+          ["Quero agendar", "Só queria saber"]
         )
       }
       if (serviceName && svc) {
@@ -2146,9 +2146,9 @@ async function handleBookingModeMessage(context: SimulatorHandlerContext): Promi
       nextState.slots.service = svc.name
       nextState.just_identified_service = true
       return buildResult(
-        cordial + `O ${svc.name} estÃ¡ R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+        cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
         nextState,
-        ["Quero agendar", "SÃ³ queria saber"]
+        ["Quero agendar", "Só queria saber"]
       )
     }
     if (serviceName && svc) {
@@ -2390,9 +2390,9 @@ async function processSimulatorMessage(
           nextState.expected_additional_count = nextState.pending_additional_count
         }
         return buildResult(
-          cordial + `O ${svc.name} est?? R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+          cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
-          ["Quero agendar", "S?? queria saber"]
+          ["Quero agendar", "Só queria saber"]
         )
       }
       if (!serviceName && (config.services || []).length > 0) {
@@ -2428,7 +2428,7 @@ async function processSimulatorMessage(
         nextState.pending_attendee_name = true
         nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
         nextState.expected_additional_count = nextState.pending_additional_count
-        return buildResult(`${buildMultiBookingIntro()} De quem ser?? o primeiro agendamento?`, nextState)
+        return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
       }
       if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
       const serviceFromText = findServiceFromText(text, config.services || [])
@@ -2457,7 +2457,7 @@ async function processSimulatorMessage(
   }
 
   if (nextState.step === "qualification") {
-    // Detec??o contextual em TODO momento: perguntas informativas (endere?o, hor?rios) ou transi??o para agendamento
+    // Detecção contextual em TODO momento: perguntas informativas (endereço, horários) ou transi??o para agendamento
     const infoAnswer = tryAnswerInformationalQuestion(config, text)
     if (infoAnswer) {
       return buildResult(infoAnswer, nextState)
@@ -2526,7 +2526,7 @@ async function processSimulatorMessage(
         nextState.pending_attendee_name = true
         nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
         nextState.expected_additional_count = nextState.pending_additional_count
-        return buildResult(`${buildMultiBookingIntro()} De quem ser? o primeiro agendamento?`, nextState)
+        return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
       }
       if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
       const serviceFromText = findServiceFromText(text, config.services || [])
@@ -2566,14 +2566,14 @@ async function processSimulatorMessage(
           nextState.slots.attendee_name = interpreted.for_whom
         }
         return buildResult(
-          cordial + `O ${svc.name} est? R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
+          cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
-          ["Quero agendar", "S? queria saber"]
+          ["Quero agendar", "Só queria saber"]
         )
       }
       if (serviceName && svc) {
         const aiAnswer = await answerWithContextualAI(config, text, history)
-        if (aiAnswer && /R\$\s*\d/.test(aiAnswer)) return buildResult(aiAnswer, nextState, ["Quero agendar", "S? queria saber"])
+        if (aiAnswer && /R\$\s*\d/.test(aiAnswer)) return buildResult(aiAnswer, nextState, ["Quero agendar", "Só queria saber"])
         const noPrice = buildPriceNotAvailableMessage(config, serviceName)
         return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
       }
@@ -2602,7 +2602,7 @@ async function processSimulatorMessage(
         return buildResult(cordial + " " + buildServicesListWithPrices(config), nextState)
       }
       const aiAnswer = await answerWithContextualAI(config, text, history)
-      if (aiAnswer && /R\$\s*\d/.test(aiAnswer)) return buildResult(aiAnswer, nextState, ["Quero agendar", "S? queria saber"])
+      if (aiAnswer && /R\$\s*\d/.test(aiAnswer)) return buildResult(aiAnswer, nextState, ["Quero agendar", "Só queria saber"])
       const noPrice = buildPriceNotAvailableMessage(config)
       return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
     }
@@ -2630,7 +2630,7 @@ async function processSimulatorMessage(
     }
   }
 
-  // Se ?? primeira mensagem, SEMPRE verificar contexto primeiro (mesmo que comece com "oi")
+  // Se é primeira mensagem, SEMPRE verificar contexto primeiro (mesmo que comece com "oi")
   // Isso garante que mensagens como "oi, prenderam meu filho" sejam processadas corretamente
 
   if (
@@ -3235,3 +3235,4 @@ serve(async (req) => {
     return json({ error: error?.message || error?.toString() || "Erro desconhecido" }, 500)
   }
 })
+
