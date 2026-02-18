@@ -2818,6 +2818,38 @@ async function processSimulatorMessage(
       }
     }
 
+    // Prioridade para opções numéricas resolvidas em texto de ação (ex.: "1" -> "Quero agendar")
+    if (isExplicitBookingIntent(text)) {
+      nextState.mode = "booking"
+      nextState.step = undefined
+      const sequenceServices = getSequenceServicesFromText(config, text)
+      if (sequenceServices.length >= 2) {
+        nextState.slots.service = sequenceServices.join(", ")
+        nextState.just_identified_service = true
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+      }
+      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+      if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
+        nextState.pending_additional_booking = true
+        nextState.pending_attendee_name = true
+        nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
+        nextState.expected_additional_count = nextState.pending_additional_count
+        return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
+      }
+      if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
+      const serviceFromText = findServiceFromText(text, config.services || [])
+      if (serviceFromText) {
+        nextState.slots.service = serviceFromText
+        nextState.just_identified_service = true
+        return resolveBooking(config, text, nextState, history, senderDisplayName)
+      }
+      const prompt = buildServicePrompt(config, text)
+      nextState.last_service_options = buildServiceOptions(config.services || [])
+      return buildResult(prompt.message, nextState, prompt.action_options)
+    }
+
     const orchestrator = await getOrchestrator()
     if (orchestrator && orchestrator.confidence >= minOrchestratorConfidence) {
       const handled = await handleQualificationRejectedOrchestratorAction(orchestrator, {
@@ -2968,6 +3000,40 @@ async function processSimulatorMessage(
         const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, isFirst, true)
         return buildResult(rejectionMessage, nextState)
       }
+    }
+
+    // Prioridade para opções numéricas resolvidas em texto de ação (ex.: "1" -> "Quero agendar")
+    if (isExplicitBookingIntent(text)) {
+      nextState.mode = "booking"
+      nextState.step = undefined
+      const sequenceServices = getSequenceServicesFromText(config, text)
+      if (sequenceServices.length >= 2) {
+        nextState.slots.service = sequenceServices.join(", ")
+        nextState.just_identified_service = true
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+      }
+      const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
+      if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
+        nextState.pending_additional_booking = true
+        nextState.pending_attendee_name = true
+        nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
+        nextState.expected_additional_count = nextState.pending_additional_count
+        return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
+      }
+      if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
+      const serviceFromText = findServiceFromText(text, config.services || [])
+      if (serviceFromText) {
+        nextState.slots.service = serviceFromText
+        nextState.just_identified_service = true
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+      }
+      const prompt = buildServicePrompt(config, text)
+      nextState.last_service_options = buildServiceOptions(config.services || [])
+      return buildResult(prompt.message, nextState, prompt.action_options)
     }
 
     const orchestrator = await getOrchestrator()
