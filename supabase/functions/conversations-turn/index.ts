@@ -276,6 +276,35 @@ function buildServicesListResult(
   )
 }
 
+function getSequenceServicesFromText(config: SimulatorConfig, text: string): string[] {
+  if (!config.allow_sequence_booking) return []
+  const eligibleForSequence =
+    (config.sequence_eligible_services?.length ?? 0) > 0
+      ? config.sequence_eligible_services || []
+      : (config.services || []).map((s) => s.name).filter(Boolean)
+  return findServicesFromText(text, config.services || [], eligibleForSequence)
+}
+
+function tryResolveNumericServiceSelection(incomingText: string, state: SimulatorState): string | null {
+  if (!/^[1-9]\d*$/.test(incomingText)) return null
+  const serviceOptions = (state.last_service_options || []).map((s) => String(s || "").trim()).filter(Boolean)
+  if (serviceOptions.length === 0) return null
+
+  if (Array.isArray(state.last_action_options) && state.last_action_options.length > 0) {
+    const byAction = resolveOptionByNumber(incomingText, state.last_action_options)
+    if (byAction) {
+      const exact = serviceOptions.find((s) => normalizeText(s) === normalizeText(byAction))
+      if (exact) return exact
+      return null
+    }
+  }
+
+  if (state.step === "qualification" || (!state.slots?.service && state.step !== "booking")) {
+    return resolveOptionByNumber(incomingText, serviceOptions)
+  }
+  return null
+}
+
 function tryHandleServicesQuestionAnytime(
   config: SimulatorConfig,
   text: string,
@@ -2232,11 +2261,19 @@ async function handleQualificationRejectedOrchestratorAction(
     list_services: async () => {
       const listMsg = buildListServicesMessage(config, { intro: "after_generic" })
       const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-      return buildResult(listMsg, { ...nextState, step: "qualification", last_service_options: serviceOptions })
+      return buildResult(listMsg, { ...nextState, step: "qualification", last_service_options: serviceOptions }, serviceOptions)
     },
     start_booking: async () => {
       nextState.mode = "booking"
       nextState.step = undefined
+      const sequenceServices = getSequenceServicesFromText(config, text)
+      if (sequenceServices.length >= 2) {
+        nextState.slots.service = sequenceServices.join(", ")
+        nextState.just_identified_service = true
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+      }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple") {
         nextState.pending_additional_booking = true
@@ -2361,11 +2398,19 @@ async function handleQualificationOrchestratorAction(
       }
       const listMsg = buildListServicesMessage(config, { intro: "after_generic" })
       const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
-      return buildResult(listMsg, { ...nextState, last_service_options: serviceOptions })
+      return buildResult(listMsg, { ...nextState, last_service_options: serviceOptions }, serviceOptions)
     },
     start_booking: async () => {
       nextState.mode = "booking"
       nextState.step = undefined
+      const sequenceServices = getSequenceServicesFromText(config, text)
+      if (sequenceServices.length >= 2) {
+        nextState.slots.service = sequenceServices.join(", ")
+        nextState.just_identified_service = true
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+      }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple") {
         nextState.pending_additional_booking = true
@@ -2452,6 +2497,14 @@ async function handleFirstMessageOrchestratorAction(
     start_booking: async () => {
       nextState.mode = "booking"
       nextState.step = undefined
+      const sequenceServices = getSequenceServicesFromText(config, text)
+      if (sequenceServices.length >= 2) {
+        nextState.slots.service = sequenceServices.join(", ")
+        nextState.just_identified_service = true
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+      }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
         nextState.pending_additional_booking = true
@@ -2605,13 +2658,14 @@ async function processSimulatorMessage(
   runtime?: ConversationRuntimeContext
 ): Promise<SimulatorResult> {
   const incomingText = input.trim()
+  const numericServiceResolved = tryResolveNumericServiceSelection(incomingText, state)
   const singleOptionResolved =
     /^[1-9]\d*$/.test(incomingText) &&
     Array.isArray(state.last_action_options) &&
     state.last_action_options.length === 1
       ? resolveOptionByNumber(incomingText, state.last_action_options)
       : null
-  const text = singleOptionResolved || incomingText
+  const text = numericServiceResolved || singleOptionResolved || incomingText
 
   // Trava mínima: mensagens muito curtas (ex: "O", "a") — mensagem clara respeitando o tom do negócio.
   const MIN_MSG_LENGTH = 2
@@ -2826,6 +2880,14 @@ async function processSimulatorMessage(
     if (isExplicitBookingIntent(text)) {
       nextState.mode = "booking"
       nextState.step = undefined
+      const sequenceServices = getSequenceServicesFromText(config, text)
+      if (sequenceServices.length >= 2) {
+        nextState.slots.service = sequenceServices.join(", ")
+        nextState.just_identified_service = true
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        const intro = buildBookingConfirmationIntro(config)
+        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+      }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
         nextState.pending_additional_booking = true
