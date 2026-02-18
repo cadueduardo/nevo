@@ -86,6 +86,7 @@ export function LandingChat() {
   const [simulatorMessages, setSimulatorMessages] = useState<Message[]>([])
   const [isSimulatorLoading, setIsSimulatorLoading] = useState(false)
   const [simulatorConversationId, setSimulatorConversationId] = useState<string | null>(null)
+  const [simulatorSessionId, setSimulatorSessionId] = useState<string>('')
   const [authChoicePending, setAuthChoicePending] = useState(false)
   const [authenticatedEmail, setAuthenticatedEmail] = useState<string | null>(null)
   const [configuredAgentRedirect, setConfiguredAgentRedirect] = useState<string | null>(null)
@@ -104,6 +105,7 @@ export function LandingChat() {
   useEffect(() => {
     const id = getOrCreateSessionId()
     setSessionId(id)
+    setSimulatorSessionId(`${id}:sim:${Date.now()}`)
   }, [])
 
   // Estado de autenticação para header dinâmico no onboarding.
@@ -463,6 +465,7 @@ export function LandingChat() {
     setSimulatorMessages([])
     setIsSimulatorLoading(false)
     setSimulatorConversationId(null)
+    setSimulatorSessionId(`${freshSessionId}:sim:${Date.now()}`)
     setIsRestartDialogOpen(false)
     lastSignupCredentialsRef.current = null
     retriedCompletedSessionRef.current = false
@@ -794,7 +797,7 @@ export function LandingChat() {
 
   const simulatorRequestBase: Omit<SimulatorRequest, 'message'> = useMemo(
     () => ({
-      session_id: sessionId,
+      session_id: simulatorSessionId || sessionId,
       conversation_id: simulatorConversationId || undefined,
       channel: 'web_simulator',
       context: {
@@ -826,7 +829,7 @@ export function LandingChat() {
         sequence_eligible_services: onboardingData.sequence_eligible_services,
       },
     }),
-    [onboardingData, sessionId, simulatorConversationId]
+    [onboardingData, sessionId, simulatorSessionId, simulatorConversationId]
   )
 
   const handleSimulatorSend = async (content: string) => {
@@ -875,6 +878,9 @@ export function LandingChat() {
     setSimulatorMessages([])
     setIsSimulatorLoading(false)
     setSimulatorConversationId(null)
+    if (sessionId) {
+      setSimulatorSessionId(`${sessionId}:sim:${Date.now()}`)
+    }
   }
 
   const simulatorButton = isSimulatorAvailable ? (
@@ -1011,4 +1017,3 @@ export function LandingChat() {
     </div>
   )
 }
-
