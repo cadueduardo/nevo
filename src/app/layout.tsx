@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { ThemeProvider } from '@/components/providers/ThemeProvider'
+import { SentryProvider } from '@/components/providers/SentryProvider'
 import '@/styles/globals.css'
 
 export const metadata: Metadata = {
@@ -15,7 +16,9 @@ export default function RootLayout({
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <SentryProvider>
+          <ThemeProvider>{children}</ThemeProvider>
+        </SentryProvider>
       </body>
     </html>
   )
