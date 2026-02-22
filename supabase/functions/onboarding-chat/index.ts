@@ -350,6 +350,81 @@ function isShowSummaryOrEditRequest(text: string): boolean {
   )
 }
 
+/** Classifica intenção global: comandos que podem ser usados em qualquer etapa do onboarding. */
+function classifyGlobalIntent(text: string): 'help' | 'summary' | 'restart' | 'repeat' | 'what_can_i_do' | null {
+  const t = (text || '').toLowerCase().trim()
+  if (!t) return null
+  // Ajuda / tutorial
+  if (
+    /\b(preciso\s+de\s+ajuda|preciso\s+ajuda|como\s+funciona|me\s+explica|n[aã]o\s+entendi|o\s+que\s+(e|eh)\s+isso|me\s+orienta|t[oô]\s+perdido|por\s+onde\s+come[cç]o)\b/i.test(t) ||
+    /^(ajuda|help)\s*\.?$/i.test(t) ||
+    /\b(pode\s+explicar|explica\s+pra\s+mim)\b/i.test(t)
+  )
+    return 'help'
+  // Ver resumo (só visualização; edição cai em isShowSummaryOrEditRequest)
+  if (
+    /\b(ver\s+resumo|mostrar\s+resumo|o\s+que\s+j[aá]\s+cadastrei|o\s+que\s+configurei|resumo\s+do\s+que\s+preenchi)\b/i.test(t) ||
+    /^resumo\s*\.?$/i.test(t)
+  )
+    return 'summary'
+  // Recomeçar
+  if (
+    /\b(recome[cç]ar|come[cç]ar\s+de\s+novo|zerar|recome[cç]ar\s+configura[çc][ãa]o|apagar\s+tudo\s+e\s+come[cç]ar)\b/i.test(t) ||
+    /^(recome[cç]ar|zerar)\s*\.?$/i.test(t)
+  )
+    return 'restart'
+  // Repetir / reformular
+  if (
+    /\b(n[aã]o\s+entendi\s+a\s+pergunta|pode\s+repetir|repetir\s+por\s+favor|reformula|explica\s+de\s+outro\s+jeito|repete)\b/i.test(t) ||
+    /^(repetir|reformula)\s*\.?$/i.test(t)
+  )
+    return 'repeat'
+  // O que posso fazer aqui
+  if (
+    /\b(o\s+que\s+(eu\s+)?fa[cç]o\s+agora|quais\s+op[cç][oõ]es\s+tenho|o\s+que\s+posso\s+responder|o\s+que\s+posso\s+fazer\s+aqui)\b/i.test(t) ||
+    /^(e\s+agora\?|o\s+que\s+fa[cç]o\?)\s*\.?$/i.test(t)
+  )
+    return 'what_can_i_do'
+  return null
+}
+
+/** Dica contextual curta por etapa (para resposta global de ajuda / "o que faço agora"). */
+function getStepContextualHint(step: string): string {
+  const hints: Record<string, string> = {
+    welcome: 'Você está no início. Pode me contar o tipo do seu negócio ou pedir para eu explicar o passo a passo.',
+    welcome_intro_choice: 'Escolha uma das opções abaixo para continuar.',
+    welcome_tutorial_cta: 'Quando estiver pronto, escolha uma das opções abaixo.',
+    collect_free_text: 'Aqui você pode descrever seu negócio com suas palavras (ramo, nome, o que faz).',
+    business_type: 'Informe o ramo ou tipo do seu negócio (ex.: barbearia, clínica, consultoria).',
+    business_name: 'Informe o nome do seu negócio ou empresa.',
+    context: 'Escolha se quer configurar agendamento, orçamento ou ambos.',
+    services_list: 'Selecione os serviços que você oferece ou digite outros no campo. Depois pode clicar em Continuar.',
+    services_edit: 'Revise a lista de serviços, adicione ou remova itens e clique em Continuar quando terminar.',
+    sequence_booking_offer: 'Escolha se o cliente pode agendar vários serviços na mesma visita ou só um por vez.',
+    sequence_services_select: 'Selecione quais serviços podem ser combinados em sequência (ex.: banho + tosa).',
+    schedule_days: 'Marque os dias da semana em que você atende.',
+    staff_mode: 'Informe se você atende sozinho ou tem colaboradores.',
+    summary: 'Revise o resumo e confirme se está correto ou se quer ajustar algo.',
+    summary_edit: 'Edite os campos que quiser e clique em Salvar ajustes para continuar.',
+    signup_request: 'Escolha criar conta, entrar na sua conta ou continuar depois.',
+  }
+  return hints[step] || 'Responda à pergunta acima ou use uma das opções disponíveis.'
+}
+
+/** Retorna conteúdo legível para exibição quando a mensagem do usuário é um comando de ação (select_*). */
+function userMessageDisplayContent(message: string): string {
+  const m = (message || '').trim()
+  const seqMatch = m.match(/^select_sequence_services:(.+)$/i)
+  if (seqMatch) return `Serviços em sequência: ${seqMatch[1].trim()}`
+  const svcMatch = m.match(/^select_services:(.+)$/i)
+  if (svcMatch) return `Serviços selecionados: ${svcMatch[1].trim()}`
+  const daysMatch = m.match(/^select_days:(.+)$/i)
+  if (daysMatch) return `Dias selecionados: ${daysMatch[1].trim()}`
+  const holMatch = m.match(/^select_holidays:(.*)$/i)
+  if (holMatch) return holMatch[1].trim() ? `Feriados selecionados: ${holMatch[1].trim()}` : 'Feriados selecionados'
+  return m
+}
+
 /** Usuário ainda no começo: falta business_type, business_name ou context. */
 function hasMinimalData(data: any): boolean {
   return !data?.business_type || !data?.business_name || !data?.context
@@ -1391,6 +1466,101 @@ async function processMessage(
 ): Promise<OnboardingResponse> {
   const text = (message || '').trim()
   const lower = text.toLowerCase()
+  const sessionId = session?.session_id
+
+  // ——— Handler global: confirmação de recomeçar ———
+  if (currentStep === 'restart_confirm') {
+    const confirmRestart = /^(sim|quero\s+recome[cç]ar|recome[cç]ar|confirmo|pode\s+apagar)/i.test(lower)
+    const cancelRestart = /^(n[aã]o|cancelar|deixa|continuar|n[aã]o\s+quero)/i.test(lower)
+    if (confirmRestart) {
+      await supabaseAdmin
+        .from('onboarding_sessions')
+        .update({
+          current_step_key: 'welcome',
+          collected_data: {},
+          updated_at: new Date().toISOString(),
+        })
+        .eq('session_id', sessionId)
+      return {
+        assistant_message: `${buildGreetingDiscoveryMessage()}\n\nEscolha uma opção abaixo:`,
+        next_step: 'welcome_intro_choice',
+        extracted_data: {},
+        action_options: INTRO_DISCOVERY_OPTIONS,
+        requires_action: 'welcome_intro_choice',
+      }
+    }
+    if (cancelRestart) {
+      const previousStep = (collectedData?.__restart_previous_step as string) || 'welcome'
+      return {
+        assistant_message: 'Ok, continuamos de onde paramos.',
+        next_step: previousStep,
+        extracted_data: { __restart_previous_step: undefined },
+      }
+    }
+  }
+
+  // ——— Handlers globais: ajuda, resumo, recomeçar, repetir, o que faço agora ———
+  const globalIntent = classifyGlobalIntent(text)
+  if (globalIntent === 'restart') {
+    return {
+      assistant_message:
+        'Recomeçar vai apagar o que você preencheu até aqui. Tem certeza?',
+      next_step: 'restart_confirm',
+      extracted_data: { __restart_previous_step: currentStep },
+      action_options: ['Sim, recomeçar', 'Não'],
+      requires_action: 'restart_confirm',
+    }
+  }
+  if (globalIntent === 'summary') {
+    const summaryText = generateSummary(collectedData)
+    return {
+      assistant_message: `Aqui está o resumo do que você já preencheu:\n\n${summaryText}\n\nPode continuar respondendo normalmente ou pedir para **editar** algo.`,
+      next_step: currentStep,
+    }
+  }
+  if (globalIntent === 'help' || globalIntent === 'what_can_i_do') {
+    const hint = getStepContextualHint(currentStep)
+    const intro = globalIntent === 'help'
+      ? `${hint}\n\n${buildIntroTutorialMessage()}`
+      : `Sem problemas! ${hint}`
+    const { data: lastMsg } = await supabaseAdmin
+      .from('onboarding_messages')
+      .select('content, metadata')
+      .eq('session_id', sessionId)
+      .eq('role', 'assistant')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const meta = (lastMsg?.metadata as Record<string, unknown>) || {}
+    return {
+      assistant_message: intro,
+      next_step: currentStep,
+      action_options: (meta.action_options as string[]) ?? undefined,
+      requires_action: (meta.requires_action as string) ?? undefined,
+      selectable_options: (meta.selectable_options as Array<{ id: string; label: string; value: string }>) ?? undefined,
+      editable_items: (meta.editable_items as Array<{ id: string; label: string; value: string; type: string }>) ?? undefined,
+    }
+  }
+  if (globalIntent === 'repeat') {
+    const { data: lastMsg } = await supabaseAdmin
+      .from('onboarding_messages')
+      .select('content, metadata')
+      .eq('session_id', sessionId)
+      .eq('role', 'assistant')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const content = lastMsg?.content ?? 'Não tenho a última pergunta aqui. Pode continuar respondendo ou pedir **ajuda** se quiser.'
+    const meta = (lastMsg?.metadata as Record<string, unknown>) || {}
+    return {
+      assistant_message: content,
+      next_step: currentStep,
+      action_options: (meta.action_options as string[]) ?? undefined,
+      requires_action: (meta.requires_action as string) ?? undefined,
+      selectable_options: (meta.selectable_options as Array<{ id: string; label: string; value: string }>) ?? undefined,
+      editable_items: (meta.editable_items as Array<{ id: string; label: string; value: string; type: string }>) ?? undefined,
+    }
+  }
 
   if (currentStep === 'welcome_intro_choice') {
     const choice = parseIntroDiscoveryChoice(text)
@@ -3351,15 +3521,20 @@ async function processMessage(
     const selectServicesMatch = text.match(/^select_services:(.+)$/i)
     if (selectServicesMatch) {
       const servicesText = selectServicesMatch[1].trim()
-      const services = sanitizeExtractedServices(parseServicesList(servicesText), text).services
-      if (services.length > 0) {
-        const merged = { ...collectedData, services, services_confirmed: false }
+      const newFromPayload = sanitizeExtractedServices(parseServicesList(servicesText), text).services
+      if (newFromPayload.length > 0) {
+        const baseServices = Array.isArray(collectedData.services) ? collectedData.services : []
+        const mergedServices = [...baseServices, ...newFromPayload].filter((s, i, self) => {
+          const key = (s?.name || '').toLowerCase().trim()
+          return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
+        })
+        const merged = { ...collectedData, services: mergedServices, services_confirmed: false }
         const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_list', merged))
         return {
-          assistant_message: buildServicesReviewMessage(services),
+          assistant_message: buildServicesReviewMessage(mergedServices),
           next_step: 'services_list',
-          extracted_data: { services, services_confirmed: false },
-          editable_items: buildServiceItems(services),
+          extracted_data: { services: mergedServices, services_confirmed: false },
+          editable_items: buildServiceItems(mergedServices),
           action_options: ['Continuar'],
           requires_action: 'services_edit',
         }
@@ -3465,6 +3640,12 @@ async function processMessage(
   const mergedData = { ...collectedData, ...extracted }
   if (Array.isArray(extracted.services) && extracted.services.length > 0) {
     ;(mergedData as any).services_confirmed = false
+    if (currentStep === 'summary_edit' || currentStep === 'summary') {
+      mergedData.services = [...(collectedData.services || []), ...extracted.services].filter((s, i, self) => {
+        const key = (s?.name || '').toLowerCase().trim()
+        return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
+      })
+    }
   }
   if (extracted?.schedule && typeof extracted.schedule === 'object') {
     mergedData.schedule = { ...(collectedData.schedule || {}), ...extracted.schedule }
@@ -3693,7 +3874,9 @@ serve(async (req) => {
 
     const currentStep = body.current_step || session.current_step_key || 'welcome'
     const isSignupStep = ['signup_email', 'signup_password', 'signup_confirm_password'].includes(currentStep)
-    const userMessageContent = isSignupStep ? '[dados de cadastro]' : body.message
+    const userMessageContent = isSignupStep
+      ? '[dados de cadastro]'
+      : userMessageDisplayContent(body.message)
 
     await supabaseAdmin.from('onboarding_messages').insert({
       session_id: body.session_id,
@@ -3712,26 +3895,8 @@ serve(async (req) => {
           requires_action: 'welcome_intro_choice',
         }
       } else {
-      // IA first no primeiro turno: se já houver contexto de ramo, avançar sem cair em tutorial.
-      const firstExtractionRaw = await extractBusinessModelWithAI(body.message, collectedData)
-      const firstExtraction = sanitizeExtractionResult(firstExtractionRaw, body.message)
-      const resolvedBusinessType = resolveBusinessTypeCandidate(firstExtraction?.business_type, body.message)
-      const hasInitialExtraction = hasOnboardingSeedExtraction(firstExtraction) || Boolean(resolvedBusinessType)
-      const hasBusinessContext = hasInitialExtraction || isLikelyBusinessInfoFirstMessage(body.message)
-
-      if (hasBusinessContext) {
-        response = await processMessage(
-          body.message,
-          'collect_free_text',
-          {
-            ...collectedData,
-            ...firstExtraction,
-            ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
-          },
-          session,
-          supabaseAdmin
-        )
-      } else if (!looksLikeBusinessSeedInput(body.message) && (await classifyNeedsIntroTutorial(body.message))) {
+      // Pedido de ajuda/tutorial na primeira mensagem tem prioridade sobre extração.
+      if (await classifyNeedsIntroTutorial(body.message)) {
         response = {
           assistant_message: `${buildIntroTutorialMessage()}\n\nQuando quiser, escolha uma opção abaixo:`,
           next_step: 'welcome_tutorial_cta',
@@ -3740,11 +3905,32 @@ serve(async (req) => {
           requires_action: 'welcome_tutorial_cta',
         }
       } else {
-        response = {
-          assistant_message:
-            'Oi! Eu sou o Nevo. Vou te fazer algumas perguntas rápidas pra entender seu negócio e montar um atendimento inteligente.\n\nMe conta: qual é o seu ramo de atividade e o que você faz?',
-          next_step: 'collect_free_text',
-          extracted_data: {},
+        // IA first no primeiro turno: se já houver contexto de ramo, avançar sem cair em tutorial.
+        const firstExtractionRaw = await extractBusinessModelWithAI(body.message, collectedData)
+        const firstExtraction = sanitizeExtractionResult(firstExtractionRaw, body.message)
+        const resolvedBusinessType = resolveBusinessTypeCandidate(firstExtraction?.business_type, body.message)
+        const hasInitialExtraction = hasOnboardingSeedExtraction(firstExtraction) || Boolean(resolvedBusinessType)
+        const hasBusinessContext = hasInitialExtraction || isLikelyBusinessInfoFirstMessage(body.message)
+
+        if (hasBusinessContext) {
+          response = await processMessage(
+            body.message,
+            'collect_free_text',
+            {
+              ...collectedData,
+              ...firstExtraction,
+              ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
+            },
+            session,
+            supabaseAdmin
+          )
+        } else {
+          response = {
+            assistant_message:
+              'Oi! Eu sou o Nevo. Vou te fazer algumas perguntas rápidas pra entender seu negócio e montar um atendimento inteligente.\n\nMe conta: qual é o seu ramo de atividade e o que você faz?',
+            next_step: 'collect_free_text',
+            extracted_data: {},
+          }
         }
       }
       }
@@ -3787,6 +3973,8 @@ serve(async (req) => {
         requires_action: response.requires_action,
         action_options: response.action_options,
         missing_fields: missingFields,
+        selectable_options: response.selectable_options ?? undefined,
+        editable_items: response.editable_items ?? undefined,
       },
     })
 

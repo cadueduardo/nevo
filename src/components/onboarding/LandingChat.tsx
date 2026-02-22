@@ -21,6 +21,20 @@ const TYPING_PLACEHOLDERS = [
   'Ex: Sou personal chef e quero automatizar agendamentos e preços',
 ]
 
+/** Conteúdo legível para exibir quando a mensagem é um comando de ação (select_*). */
+function userMessageDisplayContent(message: string): string {
+  const m = (message || '').trim()
+  const seqMatch = m.match(/^select_sequence_services:(.+)$/i)
+  if (seqMatch) return `Serviços em sequência: ${seqMatch[1].trim()}`
+  const svcMatch = m.match(/^select_services:(.+)$/i)
+  if (svcMatch) return `Serviços selecionados: ${svcMatch[1].trim()}`
+  const daysMatch = m.match(/^select_days:(.+)$/i)
+  if (daysMatch) return `Dias selecionados: ${daysMatch[1].trim()}`
+  const holMatch = m.match(/^select_holidays:(.*)$/i)
+  if (holMatch) return holMatch[1].trim() ? `Feriados selecionados: ${holMatch[1].trim()}` : 'Feriados selecionados'
+  return m
+}
+
 function parseSummaryEditableItemsFromText(text: string) {
   const lines = (text || '').split('\n').map((l) => l.trim())
   const items: Array<{ id: string; label: string; value: string; type: any }> = []
@@ -223,7 +237,7 @@ export function LandingChat() {
       const userMessage: Message = {
         id: Date.now().toString(),
         role: 'user',
-        content,
+        content: userMessageDisplayContent(content),
         timestamp: new Date(),
       }
       setMessages((prev) => [...prev, userMessage])
