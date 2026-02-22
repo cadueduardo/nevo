@@ -2738,17 +2738,17 @@ async function processSimulatorMessage(
         return buildResult(myBookingAnswer, nextState)
       }
     }
-    // Depois: outras perguntas informativas (endereço, horários, serviços) — resposta direta, sem pedir confirmação
+    // Primeiro: IA responde com contexto (horário para amanhã, endereço, etc.) — consierge
+    const aiAnswer = await answerWithContextualAI(config, text, history, true)
+    if (aiAnswer?.trim()) {
+      nextState.final_thanks_sent = true
+      return buildResult(aiAnswer, nextState)
+    }
+    // Fallback só se IA indisponível: resposta determinística do cadastro
     const infoAnswer = tryAnswerInformationalQuestion(config, text)
     if (infoAnswer) {
       nextState.final_thanks_sent = true
       return buildResult(infoAnswer, nextState)
-    }
-    // Depois: IA para outras mensagens (finalized = não pedir dados/confirmação de novo)
-    const aiAnswer = await answerWithContextualAI(config, text, history, true)
-    if (aiAnswer) {
-      nextState.final_thanks_sent = true
-      return buildResult(aiAnswer, nextState)
     }
     nextState.final_thanks_sent = true
     return buildResult("Se precisar de algo no futuro, fico à disposição.", nextState)
@@ -2761,11 +2761,16 @@ async function processSimulatorMessage(
     return buildResult(getGreetingMessage(config), { ...nextState, step: "qualification" }, ["Quero agendar"])
   }
 
-  // PRIORIDADE: Se é primeira mensagem — IA interpreta intenção (sem decisões determinísticas)
+  // PRIORIDADE: Se é primeira mensagem — IA interpreta intenção e responde com contexto (consierge)
   if (isFirst && !nextState.mode && !nextState.step) {
     const greeting = getGreetingMessage(config)
 
-    // Perguntas informativas (endereço, horários) — resposta direta do cadastro
+    // Primeiro: IA responde (horário para amanhã, endereço, serviços, etc.) usando config + histórico
+    const firstAiAnswer = await answerWithContextualAI(config, text, history)
+    if (firstAiAnswer?.trim()) {
+      return buildResult(`${greeting}\n\n${firstAiAnswer}`, { ...nextState, step: "qualification" }, ["Quero agendar"])
+    }
+    // Fallback só se IA indisponível
     const firstInfoAnswer = tryAnswerInformationalQuestion(config, text)
     if (firstInfoAnswer) {
       return buildResult(`${greeting}\n\n${firstInfoAnswer}`, { ...nextState, step: "qualification" }, ["Quero agendar"])
@@ -2997,7 +3002,12 @@ async function processSimulatorMessage(
   }
 
   if (nextState.step === "qualification") {
-    // Detecção contextual em TODO momento: perguntas informativas (endereço, horários) ou transi??o para agendamento
+    // Primeiro: IA responde com contexto (horário para amanhã, endereço, etc.) — consierge
+    const qualAiAnswer = await answerWithContextualAI(config, text, history)
+    if (qualAiAnswer?.trim()) {
+      return buildResult(qualAiAnswer, nextState)
+    }
+    // Fallback só se IA indisponível
     const infoAnswer = tryAnswerInformationalQuestion(config, text)
     if (infoAnswer) {
       return buildResult(infoAnswer, nextState)

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { normalizeText } from "./utils.ts"
+import { normalizeText, getTodayIsoBusinessTz, addDaysToIsoDate, getWeekdayKey } from "./utils.ts"
 import type { SimulatorState, SimulatorConfig, FlowOrchestratorOutput } from "./types.ts"
 
 const DAY_NAMES: Record<string, string> = {
@@ -98,8 +98,14 @@ export async function answerWithContextualAI(
         ? `\nESTILO DE INTERAÇÃO: O dono escolheu MISTO (natural + opções quando fizer sentido). Equilibre conversa natural com clareza; pode sugerir opções em alguns momentos.\n\n`
         : `\nESTILO DE INTERAÇÃO: O dono escolheu OPÇÕES NUMERADAS. As respostas podem ser exibidas como botões numerados para o cliente responder de forma ágil.\n\n`
 
+  const todayIso = getTodayIsoBusinessTz()
+  const tomorrowIso = addDaysToIsoDate(todayIso, 1)
+  const dateContext = `Contexto de data (para responder "hoje", "amanhã", etc.): hoje é ${todayIso} (${DAY_NAMES[getWeekdayKey(todayIso)] || "?"}). Amanhã é ${tomorrowIso} (${DAY_NAMES[getWeekdayKey(tomorrowIso)] || "?"}).`
+
   const systemPrompt = `Você é a assistente virtual do negócio. O cliente está falando com você pelo chat.
-${finalizedHint}${styleHint}DADOS DO NEGÓCIO (use quando relevante para responder):
+${finalizedHint}${styleHint}${dateContext}
+
+DADOS DO NEGÓCIO (use quando relevante para responder):
 ${configSummary}
 
 REGRAS:
@@ -109,6 +115,7 @@ REGRAS:
 - CONSULTE OS DADOS ACIMA: use apenas as informações que estão no config. Nunca invente serviços, áreas ou ofertas.
 - CRÍTICO: O negócio atende SOMENTE as áreas/serviços listados. Se o cliente pedir algo FORA dessas áreas, responda com empatia mas diga claramente que não atuamos, explique quais áreas atendemos e pergunte se precisa de ajuda em alguma delas. NUNCA ofereça agendar para área que não está na lista.
 - PREÇOS: Se um serviço tem valor em "R$ X" nos dados, o cliente está perguntando o preço e você DEVE informar esse valor. NUNCA diga "não tenho os valores" se o preço está nos dados. Use o nome exato do serviço do config ao informar.
+- HORÁRIO PARA UM DIA ESPECÍFICO: Se o cliente perguntar se tem horário/disponibilidade para um dia (ex.: "tem horário para amanhã?", "atendem amanhã?", "tem vaga hoje?"), use os dados de "Horário" e dias de atendimento acima. Responda no contexto: se esse dia está entre os dias que atendemos, diga que sim e repita o horário (ex.: "Sim, amanhã atendemos das 08:00 às 18:00. Quer agendar?"); se esse dia NÃO está (ex.: amanhã é sábado e só atendemos segunda a sexta), diga claramente e sugira outro dia. NUNCA responda só com o horário genérico sem considerar o dia que o cliente perguntou.
 - Seja objetiva e prestativa.
 - Se não tiver a informação que ele pediu, diga com naturalidade.
 - Mantenha o tom profissional mas cordial.
