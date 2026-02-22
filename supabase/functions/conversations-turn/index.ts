@@ -924,13 +924,45 @@ async function resolveBooking(
   ) {
     nextState.slots.date = slotsInterpretation.date
   }
+  // Horário extraído pela IA: só aceitar se estiver na grade real (disponível, não em pausa, intervalo correto)
   if (
     waitingFor === "time" &&
     slotsInterpretation?.time &&
     !nextState.slots.time &&
     !isDigitOnly
   ) {
-    nextState.slots.time = slotsInterpretation.time
+    const rawTime = slotsInterpretation.time
+    const normalizedTime = rawTime.includes(":")
+      ? rawTime.replace(/^(\d{1,2}):(\d{1,2})(?::\d{1,2})?$/, (_, h, m) =>
+          `${String(parseInt(h, 10)).padStart(2, "0")}:${String(parseInt(m, 10)).padStart(2, "0")}`
+        )
+      : `${String(parseInt(rawTime, 10)).padStart(2, "0")}:00`
+    const dateIsoForTime = nextState.slots.date || getTodayIsoBusinessTz()
+    const staffList = getStaffList(config)
+    const staffNameForTime = nextState.slots.staff_name || (staffList[0]?.name)
+    const scheduleForTime = getScheduleForStaff(config, staffNameForTime)
+    const availabilityForTime = getMockAvailability(
+      dateIsoForTime,
+      scheduleForTime,
+      nextState.booked_slots,
+      staffNameForTime,
+      getServicesTotalDuration(config, nextState.slots.service || nextState.pending_default_service)
+    )
+    if (availabilityForTime.available.includes(normalizedTime)) {
+      nextState.slots.time = normalizedTime
+    } else {
+      const within = isWithinSchedule(normalizedTime, scheduleForTime)
+      const options = availabilityForTime.available.slice(0, 24)
+      nextState.last_time_options = options
+      nextState.last_time_options_date = dateIsoForTime
+      nextState.last_time_options_staff = staffNameForTime
+      const msg = !within.ok
+        ? `${within.reason || "Esse horário não está disponível."} Temos: ${options.slice(0, 8).join(", ")}. Qual prefere?`
+        : "Esse horário não temos disponível (não bate com nossa grade). Temos: " +
+          options.slice(0, 8).join(", ") +
+          ". Qual prefere?"
+      return buildResult(msg, nextState, toNumberedOptions(options))
+    }
   }
   if (
     waitingFor === "attendee_name" &&
@@ -3002,12 +3034,8 @@ async function processSimulatorMessage(
   }
 
   if (nextState.step === "qualification") {
-    // Primeiro: IA responde com contexto (horário para amanhã, endereço, etc.) — consierge
-    const qualAiAnswer = await answerWithContextualAI(config, text, history)
-    if (qualAiAnswer?.trim()) {
-      return buildResult(qualAiAnswer, nextState)
-    }
-    // Fallback só se IA indisponível
+    // NÃO chamar a IA primeiro: priorizar entrada em booking e coleta de slots (nome, contato).
+    // A IA só é usada como fallback no final do bloco, para perguntas que não são agendamento.
     const infoAnswer = tryAnswerInformationalQuestion(config, text)
     if (infoAnswer) {
       return buildResult(infoAnswer, nextState)
@@ -3214,6 +3242,12 @@ async function processSimulatorMessage(
       if (aiAnswer && /R\$\s*\d/.test(aiAnswer)) return buildResult(aiAnswer, nextState, ["Quero agendar", "Só queria saber"])
       const noPrice = buildPriceNotAvailableMessage(config)
       return buildResult(cordial + noPrice.message, nextState, noPrice.action_options)
+    }
+
+    // Fallback: IA consierge só quando não entrou em booking nem em nenhum fluxo acima
+    const qualAiAnswer = await answerWithContextualAI(config, text, history)
+    if (qualAiAnswer?.trim()) {
+      return buildResult(qualAiAnswer, nextState)
     }
 
     const match = await classifyServiceMatch(text, config)

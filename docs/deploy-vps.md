@@ -19,6 +19,10 @@ cd /opt/nevo
 ./scripts/deploy-vps.sh
 ```
 
+Se der **Permission denied**, use uma das opções:
+- `chmod +x scripts/deploy-vps.sh` e depois `./scripts/deploy-vps.sh`
+- ou `bash scripts/deploy-vps.sh` (não exige permissão de execução no arquivo)
+
 (O script usa `/opt/nevo` como pasta padrão se for chamado de outro diretório.)
 
 (O script faz: `git pull`, `npm ci`, `npm run build` e o restart do app.)

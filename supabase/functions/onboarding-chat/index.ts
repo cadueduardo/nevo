@@ -357,6 +357,7 @@ function classifyGlobalIntent(text: string): 'help' | 'summary' | 'restart' | 'r
   // Ajuda / tutorial
   if (
     /\b(preciso\s+de\s+ajuda|preciso\s+ajuda|como\s+funciona|me\s+explica|n[aã]o\s+entendi|o\s+que\s+(e|eh)\s+isso|me\s+orienta|t[oô]\s+perdido|por\s+onde\s+come[cç]o)\b/i.test(t) ||
+    /\b(tenho\s+duvidas?|tenho\s+d[uú]vidas?)\b/i.test(t) ||
     /^(ajuda|help)\s*\.?$/i.test(t) ||
     /\b(pode\s+explicar|explica\s+pra\s+mim)\b/i.test(t)
   )
