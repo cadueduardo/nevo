@@ -681,6 +681,12 @@ export function LandingChat() {
       const updated = target.editableItems.map((it) => (it.id === id ? { ...it, value } : it))
       return [...prev.slice(0, targetIdx), { ...target, editableItems: updated }, ...prev.slice(targetIdx + 1)]
     })
+    // Persistir no backend em background para não perder a edição ao adicionar outro item ou avançar
+    if (sessionId && currentStep && value.trim()) {
+      sendOnboardingMessage(sessionId, '__sync_edits__', currentStep, [{ id, value: value.trim() }]).catch(() => {
+        // Falha silenciosa; o estado local já foi atualizado
+      })
+    }
   }
 
   const handleActionClick = async (action: string) => {

@@ -3874,6 +3874,49 @@ serve(async (req) => {
 
     const currentStep = body.current_step || session.current_step_key || 'welcome'
     const isSignupStep = ['signup_email', 'signup_password', 'signup_confirm_password'].includes(currentStep)
+
+    // Sincronizar apenas edits inline (sem mensagem no chat): persiste no backend e retorna o mesmo step atualizado.
+    if (
+      body.message === '__sync_edits__' &&
+      Array.isArray(body.edits) &&
+      body.edits.length > 0
+    ) {
+      await supabaseAdmin.from('onboarding_sessions').update({
+        collected_data: collectedData,
+        current_step_key: currentStep,
+        updated_at: new Date().toISOString(),
+      }).eq('session_id', body.session_id)
+
+      let syncResponse: OnboardingResponse
+      if (currentStep === 'services_list') {
+        const services = Array.isArray(collectedData.services) ? collectedData.services : []
+        syncResponse = {
+          assistant_message: buildServicesReviewMessage(services),
+          next_step: 'services_list',
+          extracted_data: collectedData,
+          editable_items: buildServiceItems(services),
+          action_options: ['Continuar'],
+          requires_action: 'services_edit',
+        }
+      } else if (currentStep === 'summary_edit' || currentStep === 'summary') {
+        syncResponse = {
+          assistant_message: 'Edite os campos abaixo se quiser alterar algo.',
+          next_step: currentStep,
+          extracted_data: collectedData,
+          editable_items: buildEditableItems(collectedData),
+          action_options: currentStep === 'summary_edit' ? ['Salvar ajustes', 'Voltar'] : ['Está correto', 'Quero ajustar'],
+          requires_action: currentStep === 'summary_edit' ? 'edit_fields' : 'summary_confirmation',
+        }
+      } else {
+        syncResponse = {
+          assistant_message: 'Atualizado.',
+          next_step: currentStep,
+          extracted_data: collectedData,
+        }
+      }
+      return json(syncResponse)
+    }
+
     const userMessageContent = isSignupStep
       ? '[dados de cadastro]'
       : userMessageDisplayContent(body.message)
