@@ -188,11 +188,12 @@ export function LandingChat() {
       const hydrated: Message[] = stored.map((m, i) => {
         const isLastAssistant = m.role === 'assistant' && i === stored.length - 1
         const needsSignupCard = isLastAssistant && lastMeta?.requires_action === 'signup'
+        const displayContent = m.role === 'user' ? userMessageDisplayContent(m.content) : m.content
         return {
           id: `restore-${i}-${Date.now()}`,
           role: m.role,
           kind: needsSignupCard ? 'signup' : 'text',
-          content: m.content,
+          content: displayContent,
           timestamp: new Date(),
           actionOptions: isLastAssistant ? lastMeta?.action_options : undefined,
           requiresAction: isLastAssistant ? lastMeta?.requires_action ?? undefined : undefined,

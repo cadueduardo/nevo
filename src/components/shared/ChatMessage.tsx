@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import { cn } from '@/lib/utils'
 import { Pencil, X } from 'lucide-react'
 import type { EditableItem, SelectableOption } from './ChatShell'
@@ -112,12 +113,19 @@ export function ChatMessage({
   }
 
   const handleEditSave = (id: string) => {
-    if (editingValue.trim()) {
-      if (onItemEditLocal) {
-        onItemEditLocal(id, editingValue.trim())
-      } else if (onItemEdit) {
-        onItemEdit(id, editingValue.trim(), editableItems)
-      }
+    const valueToSave = editingValue.trim()
+    if (!valueToSave) {
+      setEditingId(null)
+      setEditingValue('')
+      return
+    }
+    if (onItemEditLocal) {
+      // Garantir que o pai commita o estado antes de sair do modo edição, para a linha atualizar na hora.
+      flushSync(() => {
+        onItemEditLocal(id, valueToSave)
+      })
+    } else if (onItemEdit) {
+      onItemEdit(id, valueToSave, editableItems)
     }
     setEditingId(null)
     setEditingValue('')
