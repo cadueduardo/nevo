@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import {
   json,
@@ -2833,10 +2833,23 @@ async function processSimulatorMessage(
       }
     }
 
-    // Prioridade para opções numéricas resolvidas em texto de ação (ex.: "1" -> "Quero agendar")
-    if (hasStrongBookingIntent) {
+    // Prioridade: regex (ágil) ou orquestrador (IA como consierge — qualquer redação)
+    let shouldEnterBooking = hasStrongBookingIntent
+    const orchForBooking = await getOrchestrator()
+    if (
+      !shouldEnterBooking &&
+      orchForBooking?.suggested_action === "start_booking" &&
+      (orchForBooking.confidence ?? 0) >= minOrchestratorConfidence
+    ) {
+      shouldEnterBooking = true
+    }
+    if (shouldEnterBooking) {
       nextState.mode = "booking"
       nextState.step = undefined
+      if (orchForBooking?.inferred_service && !nextState.slots.service) {
+        nextState.slots.service = orchForBooking.inferred_service
+        nextState.just_identified_service = true
+      }
       const sequenceServices = getSequenceServicesFromText(config, text)
       if (sequenceServices.length >= 2) {
         nextState.slots.service = sequenceServices.join(", ")
@@ -2854,7 +2867,7 @@ async function processSimulatorMessage(
         return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
       }
       if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
-      const serviceFromText = findServiceFromText(text, config.services || [])
+      const serviceFromText = nextState.slots.service || findServiceFromText(text, config.services || [])
       if (serviceFromText) {
         nextState.slots.service = serviceFromText
         nextState.just_identified_service = true
@@ -2924,9 +2937,23 @@ async function processSimulatorMessage(
       }
     }
 
-    if (hasStrongBookingIntent) {
+    // Regex ou orquestrador (IA como consierge — qualquer estilo)
+    let shouldEnterBooking2 = hasStrongBookingIntent
+    const orchForBooking2 = await getOrchestrator()
+    if (
+      !shouldEnterBooking2 &&
+      orchForBooking2?.suggested_action === "start_booking" &&
+      (orchForBooking2.confidence ?? 0) >= minOrchestratorConfidence
+    ) {
+      shouldEnterBooking2 = true
+    }
+    if (shouldEnterBooking2) {
       nextState.mode = "booking"
       nextState.step = undefined
+      if (orchForBooking2?.inferred_service && !nextState.slots.service) {
+        nextState.slots.service = orchForBooking2.inferred_service
+        nextState.just_identified_service = true
+      }
       const sequenceServices = getSequenceServicesFromText(config, text)
       if (sequenceServices.length >= 2) {
         nextState.slots.service = sequenceServices.join(", ")
@@ -2944,7 +2971,7 @@ async function processSimulatorMessage(
         return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
       }
       if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
-      const serviceFromText = findServiceFromText(text, config.services || [])
+      const serviceFromText = nextState.slots.service || findServiceFromText(text, config.services || [])
       if (serviceFromText) {
         nextState.slots.service = serviceFromText
         nextState.just_identified_service = true
@@ -3017,10 +3044,23 @@ async function processSimulatorMessage(
       }
     }
 
-    // Prioridade para opções numéricas resolvidas em texto de ação (ex.: "1" -> "Quero agendar")
-    if (hasStrongBookingIntent) {
+    // Regex ou orquestrador (IA como consierge — qualquer estilo)
+    let shouldEnterBookingQ = hasStrongBookingIntent
+    const orchForBookingQ = await getOrchestrator()
+    if (
+      !shouldEnterBookingQ &&
+      orchForBookingQ?.suggested_action === "start_booking" &&
+      (orchForBookingQ.confidence ?? 0) >= minOrchestratorConfidence
+    ) {
+      shouldEnterBookingQ = true
+    }
+    if (shouldEnterBookingQ) {
       nextState.mode = "booking"
       nextState.step = undefined
+      if (orchForBookingQ?.inferred_service && !nextState.slots.service) {
+        nextState.slots.service = orchForBookingQ.inferred_service
+        nextState.just_identified_service = true
+      }
       const sequenceServices = getSequenceServicesFromText(config, text)
       if (sequenceServices.length >= 2) {
         nextState.slots.service = sequenceServices.join(", ")
@@ -3038,7 +3078,7 @@ async function processSimulatorMessage(
         return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
       }
       if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
-      const serviceFromText = findServiceFromText(text, config.services || [])
+      const serviceFromText = nextState.slots.service || findServiceFromText(text, config.services || [])
       if (serviceFromText) {
         nextState.slots.service = serviceFromText
         nextState.just_identified_service = true
@@ -3064,9 +3104,23 @@ async function processSimulatorMessage(
       if (handled) return handled
     }
 
-    if (hasStrongBookingIntent) {
+    // Última chance: regex ou orquestrador (IA como consierge — qualquer estilo)
+    let shouldEnterBookingQ2 = hasStrongBookingIntent
+    const orchForBookingQ2 = await getOrchestrator()
+    if (
+      !shouldEnterBookingQ2 &&
+      orchForBookingQ2?.suggested_action === "start_booking" &&
+      (orchForBookingQ2.confidence ?? 0) >= minOrchestratorConfidence
+    ) {
+      shouldEnterBookingQ2 = true
+    }
+    if (shouldEnterBookingQ2) {
       nextState.mode = "booking"
       nextState.step = undefined
+      if (orchForBookingQ2?.inferred_service && !nextState.slots.service) {
+        nextState.slots.service = orchForBookingQ2.inferred_service
+        nextState.just_identified_service = true
+      }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
         nextState.pending_additional_booking = true
@@ -3076,7 +3130,7 @@ async function processSimulatorMessage(
         return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
       }
       if (interpreted?.for_whom) nextState.slots.attendee_name = interpreted.for_whom
-      const serviceFromText = findServiceFromText(text, config.services || [])
+      const serviceFromText = nextState.slots.service || findServiceFromText(text, config.services || [])
       if (serviceFromText) {
         nextState.slots.service = serviceFromText
         nextState.just_identified_service = true

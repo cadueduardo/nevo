@@ -90,8 +90,16 @@ export async function answerWithContextualAI(
     ? `\nCONTEXTO CRÍTICO: O agendamento do cliente JÁ FOI CONFIRMADO. Ele está apenas agradecendo ou se despedindo. NUNCA peça telefone, email ou qualquer dado de contato novamente. Responda com mensagem cordial e breve de encerramento.\n\n`
     : ""
 
+  const style = config.interaction_style || "numbered_options"
+  const styleHint =
+    style === "conversational"
+      ? `\nESTILO DE INTERAÇÃO: O dono do negócio escolheu CONVERSA NATURAL. O cliente responde em texto livre; não assuma que ele vai escolher por número. Responda de forma natural e humana, como um consierge; evite listar "1 - X, 2 - Y" a menos que seja realmente necessário.\n\n`
+      : style === "hybrid"
+        ? `\nESTILO DE INTERAÇÃO: O dono escolheu MISTO (natural + opções quando fizer sentido). Equilibre conversa natural com clareza; pode sugerir opções em alguns momentos.\n\n`
+        : `\nESTILO DE INTERAÇÃO: O dono escolheu OPÇÕES NUMERADAS. As respostas podem ser exibidas como botões numerados para o cliente responder de forma ágil.\n\n`
+
   const systemPrompt = `Você é a assistente virtual do negócio. O cliente está falando com você pelo chat.
-${finalizedHint}DADOS DO NEGÓCIO (use quando relevante para responder):
+${finalizedHint}${styleHint}DADOS DO NEGÓCIO (use quando relevante para responder):
 ${configSummary}
 
 REGRAS:
@@ -184,6 +192,14 @@ REGRAS:
 - MENSAGENS VAGAS OU INCOMPLETAS: Se a mensagem for muito curta, incompleta ou não transmitir intenção clara (ex: letra solta, "a", "o", "kk", fragmento), retorne suggested_action: "ask_clarification" com clarification_question amigável como "Não entendi, pode repetir? Como posso ajudar?" — NUNCA assuma serviço ou intenção em mensagens ambíguas.
 - Retorne APENAS JSON válido.`
 
+  const style = config.interaction_style || "numbered_options"
+  const styleNote =
+    style === "conversational"
+      ? " Estilo: CONVERSA NATURAL — priorize interpretar intenção em texto livre; retorne start_booking quando o cliente manifestar vontade de agendar/marcar em QUALQUER redação (não exija palavras como 'agendar' ou 'marcar')."
+      : style === "hybrid"
+        ? " Estilo: MISTO — interpre contexto; em dúvida, aceite formas naturais de pedir agendamento como start_booking."
+        : " Estilo: OPÇÕES NUMERADAS — cliente pode responder por número em alguns momentos."
+
   const userPrompt = `Mensagem atual do cliente: "${message}"
 
 Histórico recente:
@@ -192,6 +208,7 @@ ${historyText}
 Config do negócio:
 - Tipo: ${businessType}
 - Serviços oferecidos: ${servicesJson}
+-${styleNote}
 
 Retorne JSON com: intent, inferred_service (o que o cliente pediu ou nome exato da lista se houver match), inferred_attendees (single|multiple|other_person ou null), suggested_action, clarification_question (string ou null), confidence (0-1).`
 
@@ -314,6 +331,7 @@ REGRAS para service, date, time:
 - Horários: "às 14", "14h", "as 14" → time: "14:00"
 - "tem horário às 14?" ou "tem disponibilidade às 14?" → needs_availability_check: true, time: "14:00"
 - "quero agendar pra amanhã", "pra hoje ainda tem vaga?" → extraia a data (hoje/amanhã) em YYYY-MM-DD.
+${(config.interaction_style === "conversational" || config.interaction_style === "hybrid") ? " Estilo conversacional/híbrido: o cliente pode indicar serviço, data e horário de qualquer forma; use o histórico e a mensagem para extrair, mesmo que seja indireto ou coloquial." : ""}
 
 Retorne APENAS JSON: attendee_name (string ou null), relationship_only (boolean), relationship (string ou null), service (string da lista ou null), date (YYYY-MM-DD ou null), time (HH:MM ou null), needs_availability_check (boolean).`
 
