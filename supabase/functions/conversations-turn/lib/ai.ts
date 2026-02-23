@@ -26,6 +26,10 @@ function buildConfigSummary(config: SimulatorConfig): string {
     const days = sched.days_of_week.map((d) => DAY_NAMES[d] || d).join(", ")
     parts.push(`Horário: ${days}, das ${sched.start_time} às ${sched.end_time}`)
     if (sched.interval_minutes) parts.push(`Intervalo entre atendimentos: ${sched.interval_minutes} min`)
+    if (sched.breaks?.length) {
+      const breaksStr = sched.breaks.map((b) => `${b.start} às ${b.end}`).join("; ")
+      parts.push(`Pausa no expediente (nao atendemos nesses horarios): ${breaksStr}`)
+    }
   }
   const services = config.services || []
   if (services.length > 0) {
@@ -432,14 +436,17 @@ export async function generateAvailabilityResponseWithAI(
     is_available: boolean
     available_slots?: string[]
     service?: string
+    /** Motivo real (ex.: pausa, fora do expediente). Quando informado, a IA DEVE usar esse motivo e não inventar "intervalo entre atendimentos". */
+    unavailable_reason?: string
   },
   history: Array<{ role: string; content: string }> = []
 ): Promise<string> {
   const apiKey = Deno.env.get("OPENAI_API_KEY")
+  const fallbackUnavailable = `Infelizmente as ${context.requested_time} nao esta disponivel. Temos: ${(context.available_slots || []).slice(0, 6).join(", ")}. Qual prefere?`
   if (!apiKey) {
     return context.is_available
       ? `Claro! Temos horario as ${context.requested_time}. Posso confirmar?`
-      : `Infelizmente as ${context.requested_time} nao esta disponivel. Temos: ${(context.available_slots || []).slice(0, 6).join(", ")}. Qual prefere?`
+      : fallbackUnavailable
   }
 
   const historyText =
@@ -452,11 +459,16 @@ export async function generateAvailabilityResponseWithAI(
   const attendeePart = context.attendee_name ? ` para ${context.attendee_name}` : ""
   const servicePart = context.service ? ` (${context.service})` : ""
 
+  const reasonInstruction =
+    context.unavailable_reason?.trim()
+      ? `MOTIVO REAL (use exatamente isso, nao invente "intervalo entre atendimentos"): ${context.unavailable_reason}. Sugira apenas horarios da lista Horarios livres.`
+      : "Informe que aquele horario nao esta livre e sugira alternativas da lista available_slots."
+
   const systemPrompt = `Voce gera mensagens curtas e naturais para atendimento via chat.
 O cliente perguntou se ha horario disponivel. Voce ja consultou a agenda.
 
 Se is_available=true: confirme que temos o horario e pergunte se pode confirmar o agendamento. Seja cordial.
-Se is_available=false: informe que aquele horario nao esta livre e sugira alternativas da lista available_slots. Convide a escolher.
+Se is_available=false: ${reasonInstruction} Convide a escolher.
 
 Mantenha 1-2 frases. Retorne apenas o texto, sem markdown.`
 
@@ -465,7 +477,8 @@ Mantenha 1-2 frases. Retorne apenas o texto, sem markdown.`
 - Horario solicitado: ${context.requested_time}
 - Data: ${context.date_iso}
 - Disponivel: ${context.is_available ? "sim" : "nao"}
-${!context.is_available && context.available_slots?.length ? `- Horarios livres: ${context.available_slots.slice(0, 10).join(", ")}` : ""}
+${!context.is_available && context.available_slots?.length ? `- Horarios livres (sugira apenas estes): ${context.available_slots.slice(0, 10).join(", ")}` : ""}
+${!context.is_available && context.unavailable_reason ? `- Motivo: ${context.unavailable_reason}` : ""}
 ${historyText ? `\nHistorico:\n${historyText}` : ""}
 
 Gere a resposta fluida:`

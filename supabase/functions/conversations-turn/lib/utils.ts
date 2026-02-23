@@ -226,15 +226,27 @@ export function isWithinSchedule(time: string, schedule?: SimulatorConfig["sched
   const t = toMinutes(time)
   const s = toMinutes(start)
   const e = toMinutes(end)
-  if (t < s || t >= e) {
-    return { ok: false, reason: `Nosso horario de atendimento e das ${start} as ${end}.` }
+  if (t < s) {
+    return {
+      ok: false,
+      reason: `O horário ${time} é antes do nosso expediente. Atendemos das ${start} às ${end}.`,
+    }
+  }
+  if (t >= e) {
+    return {
+      ok: false,
+      reason: `O horário ${time} é depois do nosso expediente. Atendemos das ${start} às ${end}.`,
+    }
   }
   const breaks = schedule?.breaks || []
   for (const b of breaks) {
     const bs = toMinutes(b.start)
     const be = toMinutes(b.end)
     if (t >= bs && t < be) {
-      return { ok: false, reason: `Nesse horario estamos em pausa. Atendemos das ${start} as ${end}.` }
+      return {
+        ok: false,
+        reason: `O horário ${time} cai na nossa pausa; não atendemos nesse horário. Nosso expediente é das ${start} às ${end}.`,
+      }
     }
   }
   return { ok: true }

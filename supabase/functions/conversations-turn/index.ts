@@ -334,6 +334,78 @@ function tryHandleServicesQuestionAnytime(
   return buildResult(parts.join(" "), state, ["Quero agendar", "Só queria saber"])
 }
 
+/** Responde perguntas sobre disponibilidade em um horário específico em qualquer momento da conversa (evita IA inventar "intervalo" em vez de pausa/expediente). */
+async function tryHandleAvailabilityQuestionAnytime(
+  config: SimulatorConfig,
+  text: string,
+  state: SimulatorState,
+  history: Array<{ role: string; content: string }>
+): Promise<SimulatorResult | null> {
+  if (/^[1-9]\d*$/.test(text.trim())) return null
+  const timeFromText = parseTime(text)
+  if (!timeFromText) return null
+  const hasAvailabilityIntent =
+    isAvailabilityQuestion(text) ||
+    /\b(agendar|marcar)\b.*\b(as|às|as)\s*\d|quero\s+as\s+\d/.test(normalizeText(text))
+  if (!hasAvailabilityIntent) return null
+
+  const dateIso =
+    parseDateOrWeekday(text) || state.slots?.date || addDaysToIsoDate(getTodayIsoBusinessTz(), 1)
+  const staffList = getStaffList(config)
+  const staffName = state.slots?.staff_name || staffList[0]?.name
+  const schedule = getScheduleForStaff(config, staffName)
+  const service =
+    state.slots?.service || findServiceFromText(text, config.services || []) || (config.services || [])[0]?.name
+  const duration = getServicesTotalDuration(config, service) ?? 30
+  const availability = getMockAvailability(
+    dateIso,
+    schedule,
+    state.booked_slots,
+    staffName,
+    duration
+  )
+  const normalizedTime = timeFromText.includes(":")
+    ? timeFromText.replace(/^(\d{1,2}):(\d{1,2})(?::\d{1,2})?$/, (_, h, m) =>
+        `${String(parseInt(h, 10)).padStart(2, "0")}:${String(parseInt(m, 10)).padStart(2, "0")}`
+      )
+    : `${timeFromText.padStart(2, "0")}:00`
+  const isAvailable = availability.available.includes(normalizedTime)
+  const within = !isAvailable ? isWithinSchedule(normalizedTime, schedule) : null
+  const unavailableReason = within && !within.ok ? within.reason : undefined
+
+  const fluidResponse = await generateAvailabilityResponseWithAI(
+    config,
+    {
+      requested_time: normalizedTime,
+      date_iso: dateIso,
+      is_available: isAvailable,
+      available_slots: availability.available.slice(0, 12),
+      service: service || undefined,
+      unavailable_reason: unavailableReason,
+    },
+    history
+  )
+
+  const nextState: SimulatorState = { ...state }
+  nextState.slots = { ...nextState.slots, date: dateIso }
+  if (staffName) nextState.slots.staff_name = staffName
+  if (service) nextState.slots.service = service
+  if (isAvailable) {
+    nextState.slots.time = normalizedTime
+    nextState.mode = "booking"
+    nextState.step = undefined
+  }
+
+  const options =
+    availability.available.length > 0
+      ? isAvailable
+        ? [`Sim, ${normalizedTime}`, "Outro horario", ...(getOtherStaffOptions(config, staffName).length > 0 ? ["Outro colaborador"] : [])]
+        : availability.available.slice(0, 8).map((t, i) => `${i + 1} - ${t}`)
+      : ["Quero agendar"]
+
+  return buildResult(fluidResponse, nextState, options)
+}
+
 type ConversationRuntimeContext = {
   supabaseAdmin: any
   tenantId: string
@@ -996,6 +1068,8 @@ async function resolveBooking(
       ? slotsInterpretation.time
       : `${String(parseInt(slotsInterpretation.time, 10)).padStart(2, "0")}:00`
     const isAvailable = availability.available.includes(requestedTime)
+    const within = !isAvailable ? isWithinSchedule(requestedTime, schedule) : null
+    const unavailableReason = within && !within.ok ? within.reason : undefined
 
     const fluidResponse = await generateAvailabilityResponseWithAI(config, {
       attendee_name: nextState.slots.attendee_name,
@@ -1004,6 +1078,7 @@ async function resolveBooking(
       is_available: isAvailable,
       available_slots: availability.available.slice(0, 12),
       service: nextState.slots.service,
+      unavailable_reason: unavailableReason,
     }, history)
 
     if (isAvailable) {
@@ -2760,6 +2835,14 @@ async function processSimulatorMessage(
   const anytimeServicesResult = tryHandleServicesQuestionAnytime(config, text, nextState)
   if (anytimeServicesResult) return anytimeServicesResult
 
+  const anytimeAvailabilityResult = await tryHandleAvailabilityQuestionAnytime(
+    config,
+    text,
+    nextState,
+    history
+  )
+  if (anytimeAvailabilityResult) return anytimeAvailabilityResult
+
   // Conversa finalizada: responder só o que foi perguntado (endereço, horários etc.) sem pedir confirmação de novo
   if (isFinalizedState(nextState)) {
     const msg = normalizeText(text)
@@ -2827,6 +2910,54 @@ async function processSimulatorMessage(
   // PRIORIDADE: Se é primeira mensagem — IA interpreta intenção e responde com contexto (consierge)
   if (isFirst && !nextState.mode && !nextState.step) {
     const greeting = getGreetingMessage(config)
+
+    // Primeira mensagem com horário específico: checar disponibilidade antes da IA para não inventar "intervalo" em vez de pausa/expediente
+    const timeFromFirstMsg = parseTime(text)
+    const dateFromFirstMsg = parseDateOrWeekday(text) || addDaysToIsoDate(getTodayIsoBusinessTz(), 1)
+    if (timeFromFirstMsg && dateFromFirstMsg) {
+      const staffList = getStaffList(config)
+      const staffNameFirst = staffList[0]?.name
+      const scheduleFirst = getScheduleForStaff(config, staffNameFirst)
+      const serviceFirst = findServiceFromText(text, config.services || []) || (config.services || [])[0]?.name
+      const durationFirst = getServicesTotalDuration(config, serviceFirst) ?? 30
+      const availabilityFirst = getMockAvailability(
+        dateFromFirstMsg,
+        scheduleFirst,
+        nextState.booked_slots,
+        staffNameFirst,
+        durationFirst
+      )
+      const normalizedFirstTime =
+        timeFromFirstMsg.includes(":") ? timeFromFirstMsg : `${timeFromFirstMsg.padStart(2, "0")}:00`
+      const isAvailableFirst = availabilityFirst.available.includes(normalizedFirstTime)
+      if (!isAvailableFirst) {
+        const withinFirst = isWithinSchedule(normalizedFirstTime, scheduleFirst)
+        const unavailableReasonFirst = withinFirst.ok ? undefined : withinFirst.reason
+        const fluidFirst = await generateAvailabilityResponseWithAI(
+          config,
+          {
+            requested_time: normalizedFirstTime,
+            date_iso: dateFromFirstMsg,
+            is_available: false,
+            available_slots: availabilityFirst.available.slice(0, 12),
+            service: serviceFirst || undefined,
+            unavailable_reason: unavailableReasonFirst,
+          },
+          history
+        )
+        const stateAfterFirst = { ...nextState, step: "qualification" as const }
+        if (serviceFirst) stateAfterFirst.slots = { ...stateAfterFirst.slots, service: serviceFirst }
+        stateAfterFirst.slots = { ...stateAfterFirst.slots, date: dateFromFirstMsg }
+        if (staffNameFirst) stateAfterFirst.slots = { ...stateAfterFirst.slots, staff_name: staffNameFirst }
+        return buildResult(
+          `${greeting}\n\n${fluidFirst}`,
+          stateAfterFirst,
+          availabilityFirst.available.length > 0
+            ? availabilityFirst.available.slice(0, 8).map((t, i) => `${i + 1} - ${t}`)
+            : ["Quero agendar"]
+        )
+      }
+    }
 
     // Primeiro: IA responde (horário para amanhã, endereço, serviços, etc.) usando config + histórico
     const firstAiAnswer = await answerWithContextualAI(config, text, history)
