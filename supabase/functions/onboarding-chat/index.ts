@@ -205,7 +205,7 @@ function hasOnboardingSeedExtraction(extracted: Record<string, any> | null | und
   if (typeof extracted.interaction_style === 'string' && extracted.interaction_style.trim()) return true
   if (typeof extracted.handoff_mode === 'string' && extracted.handoff_mode.trim()) return true
   if (typeof extracted.location_mode === 'string' && extracted.location_mode.trim()) return true
-  if (extracted.target_audience?.mode) return true
+  if (extracted.target_audience?.mode || (Array.isArray(extracted.target_audience?.modes) && extracted.target_audience.modes.length > 0)) return true
   if (extracted.service_area?.region || extracted.service_area?.coverage) return true
   if (extracted.schedule?.start_time || extracted.schedule?.end_time) return true
   if (Array.isArray(extracted.schedule?.days_of_week) && extracted.schedule.days_of_week.length > 0) return true
@@ -553,20 +553,7 @@ function buildAllEditableItems(data: any) {
     data.handoff_mode === 'always' ? 'Sempre humano' : data.handoff_mode === 'conditional' ? 'Condicional' : data.handoff_mode === 'never' ? 'Automático' : ''
   items.push({ id: 'handoff_mode', label: 'Passar para humano', value: handoffLabel, type: 'tone_of_voice' })
 
-  const targetAudienceLabel =
-    data.target_audience?.mode === 'women_only'
-      ? 'Somente mulheres'
-      : data.target_audience?.mode === 'men_only'
-        ? 'Somente homens'
-        : data.target_audience?.mode === 'kids_only'
-          ? 'Infantil'
-          : data.target_audience?.mode === 'custom'
-            ? data.target_audience?.note
-              ? `Personalizado (${data.target_audience.note})`
-              : 'Personalizado'
-            : data.target_audience?.mode === 'all'
-              ? 'Todos os públicos'
-              : ''
+  const targetAudienceLabel = buildTargetAudienceLabel(data.target_audience)
   items.push({ id: 'target_audience', label: 'Público-alvo', value: targetAudienceLabel, type: 'target_audience' })
 
   const interactionStyleLabel =
@@ -767,19 +754,7 @@ function buildEditableItems(data: any) {
   }
 
   if (data.target_audience) {
-    const targetAudienceLabel =
-      data.target_audience?.mode === 'women_only'
-        ? 'Somente mulheres'
-        : data.target_audience?.mode === 'men_only'
-          ? 'Somente homens'
-          : data.target_audience?.mode === 'kids_only'
-            ? 'Infantil'
-            : data.target_audience?.mode === 'custom'
-              ? data.target_audience?.note
-                ? `Personalizado (${data.target_audience.note})`
-                : 'Personalizado'
-              : 'Todos os públicos'
-    items.push({ id: 'target_audience', label: 'Público-alvo', value: targetAudienceLabel, type: 'target_audience' })
+    items.push({ id: 'target_audience', label: 'Público-alvo', value: buildTargetAudienceLabel(data.target_audience), type: 'target_audience' })
   }
 
   if (data.interaction_style) {
@@ -956,27 +931,44 @@ function parseTone(value: string): 'formal' | 'friendly' | 'professional' | 'fun
   return null
 }
 
-function parseTargetAudience(
-  value: string
-): { mode: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'; note?: string } | null {
+type TargetAudienceResult =
+  | { mode: 'all' }
+  | { mode: 'women_only' | 'men_only' | 'kids_only' }
+  | { mode: 'custom'; note?: string }
+  | { modes: ('women_only' | 'men_only' | 'kids_only' | 'custom')[]; note?: string }
+
+function buildTargetAudienceLabel(ta: { mode?: string; modes?: string[]; note?: string } | null | undefined): string {
+  if (!ta) return ''
+  const labels: Record<string, string> = {
+    all: 'Todos os públicos',
+    women_only: 'Somente mulheres',
+    men_only: 'Somente homens',
+    kids_only: 'Infantil',
+    custom: ta.note ? `Personalizado (${ta.note})` : 'Personalizado',
+  }
+  if (Array.isArray(ta.modes) && ta.modes.length > 0) {
+    return ta.modes.map((m) => labels[m] || m).filter(Boolean).join(' e ')
+  }
+  if (ta.mode) return labels[ta.mode] || ta.mode
+  return 'Todos os públicos'
+}
+
+function parseTargetAudience(value: string): TargetAudienceResult | null {
   const v = (value || '').toLowerCase().trim()
   if (!v) return null
   if (v.includes('todos') || v.includes('todas') || v.includes('geral')) return { mode: 'all' }
-  if (v.includes('somente mulheres') || v.includes('so mulheres') || v.includes('feminino')) {
-    return { mode: 'women_only' }
-  }
-  if (v.includes('somente homens') || v.includes('so homens') || v.includes('masculino')) {
-    return { mode: 'men_only' }
-  }
-  if (v.includes('infantil') || v.includes('crianca') || v.includes('crianÃ§a')) {
-    return { mode: 'kids_only' }
-  }
+  const modes: ('women_only' | 'men_only' | 'kids_only' | 'custom')[] = []
+  if (v.includes('somente mulheres') || v.includes('so mulheres') || v.includes('feminino')) modes.push('women_only')
+  if (v.includes('somente homens') || v.includes('so homens') || v.includes('masculino')) modes.push('men_only')
+  if (v.includes('infantil') || v.includes('crianca') || v.includes('crianÃ§a')) modes.push('kids_only')
   if (v.includes('outro') || v.includes('especifico') || v.includes('especÃ­fico')) {
-    const note = value
-      .replace(/^(outro[s]?|publico especifico|publico especifico:)\s*[:\-]?\s*/i, '')
-      .trim()
-    return note ? { mode: 'custom', note } : { mode: 'custom' }
+    const note = value.replace(/^(outro[s]?|publico especifico|publico especifico:)\s*[:\-]?\s*/i, '').trim()
+    modes.push('custom')
+    if (modes.length === 1) return { mode: 'custom', note: note || undefined }
+    return { modes, note: note || undefined }
   }
+  if (modes.length > 1) return { modes }
+  if (modes.length === 1) return { mode: modes[0] as 'women_only' | 'men_only' | 'kids_only' }
   return { mode: 'custom', note: value.trim() }
 }
 
@@ -3144,11 +3136,14 @@ async function processMessage(
         assistant_message:
           'Seu atendimento e focado em algum publico especifico?',
         next_step: 'target_audience',
-        action_options: ['Atendo todos os publicos', 'Somente mulheres', 'Somente homens', 'Infantil', 'Outro publico especifico'],
+        action_options: ['Atendo todos os publicos', 'Somente mulheres', 'Somente homens', 'Infantil', 'Homens e infantil', 'Outro publico especifico'],
         requires_action: 'target_audience',
       }
     }
-    if (audience.mode === 'custom' && !audience.note) {
+    const isCustomWithoutNote =
+      (audience.mode === 'custom' || (audience as { modes?: string[] }).modes?.includes('custom')) &&
+      !audience.note
+    if (isCustomWithoutNote) {
       return {
         assistant_message:
           'Perfeito. Qual publico especifico voce quer atender? (responda em texto livre)',

@@ -21,6 +21,7 @@ import type {
   DynamicVariable,
   FAQ,
   TargetAudience,
+  TargetAudienceMode,
   InteractionStyle,
 } from '@/types/business-model'
 import { fetchAddressByCep } from '@/lib/viacep'
@@ -143,9 +144,12 @@ export function AgentBasicEditor({
   const [fallbackMessage, setFallbackMessage] = React.useState(initialConfig.fallback_message ?? '')
   const [toneOfVoice, setToneOfVoice] = React.useState(initialConfig.tone_of_voice ?? '')
   const [handoffMode, setHandoffMode] = React.useState(initialConfig.handoff_mode ?? '')
-  const [targetAudienceMode, setTargetAudienceMode] = React.useState<TargetAudience['mode']>(
-    initialConfig.target_audience?.mode ?? 'all'
-  )
+  const [targetAudienceModes, setTargetAudienceModes] = React.useState<TargetAudienceMode[]>(() => {
+    const ta = initialConfig.target_audience
+    if (Array.isArray(ta?.modes) && ta.modes.length > 0) return ta.modes.filter((m) => m !== 'all')
+    if (ta?.mode && ta.mode !== 'all') return [ta.mode]
+    return []
+  })
   const [targetAudienceNote, setTargetAudienceNote] = React.useState(
     initialConfig.target_audience?.note ?? ''
   )
@@ -207,7 +211,14 @@ export function AgentBasicEditor({
     setFallbackMessage(initialConfig.fallback_message ?? '')
     setToneOfVoice(initialConfig.tone_of_voice ?? '')
     setHandoffMode(initialConfig.handoff_mode ?? '')
-    setTargetAudienceMode(initialConfig.target_audience?.mode ?? 'all')
+    const ta = initialConfig.target_audience
+    if (Array.isArray(ta?.modes) && ta.modes.length > 0) {
+      setTargetAudienceModes(ta.modes.filter((m) => m !== 'all'))
+    } else if (ta?.mode && ta.mode !== 'all') {
+      setTargetAudienceModes([ta.mode])
+    } else {
+      setTargetAudienceModes([])
+    }
     setTargetAudienceNote(initialConfig.target_audience?.note ?? '')
     setInteractionStyle(initialConfig.interaction_style ?? 'hybrid')
     setDynamicVariables(Array.isArray(initialConfig.dynamic_variables) ? initialConfig.dynamic_variables : [])
@@ -242,9 +253,11 @@ export function AgentBasicEditor({
     tone_of_voice: toneOfVoice || undefined,
     handoff_mode: handoffMode || undefined,
     target_audience:
-      targetAudienceMode === 'custom'
-        ? { mode: 'custom', note: targetAudienceNote.trim() || undefined }
-        : { mode: targetAudienceMode },
+      targetAudienceModes.length === 0
+        ? { mode: 'all' }
+        : targetAudienceModes.length === 1 && targetAudienceModes[0] === 'custom'
+          ? { mode: 'custom', note: targetAudienceNote.trim() || undefined }
+          : { modes: targetAudienceModes, note: targetAudienceModes.includes('custom') ? targetAudienceNote.trim() || undefined : undefined },
     interaction_style: interactionStyle || undefined,
     dynamic_variables: dynamicVariables.length > 0 ? dynamicVariables : undefined,
     faq: faq.length > 0 ? faq : undefined,
@@ -811,26 +824,42 @@ export function AgentBasicEditor({
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">Público-alvo</label>
-            <Select
-              value={targetAudienceMode}
-              onValueChange={(v) => setTargetAudienceMode(v as TargetAudience['mode'])}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos os públicos</SelectItem>
-                <SelectItem value="women_only">Somente mulheres</SelectItem>
-                <SelectItem value="men_only">Somente homens</SelectItem>
-                <SelectItem value="kids_only">Infantil</SelectItem>
-                <SelectItem value="custom">Outro público específico</SelectItem>
-              </SelectContent>
-            </Select>
-            {targetAudienceMode === 'custom' && (
+            <p className="text-xs text-muted-foreground">Pode escolher mais de um (ex.: masculino e infantil).</p>
+            <div className="flex flex-wrap gap-4">
+              {(
+                [
+                  { value: 'women_only' as const, label: 'Somente mulheres' },
+                  { value: 'men_only' as const, label: 'Somente homens' },
+                  { value: 'kids_only' as const, label: 'Infantil' },
+                  { value: 'custom' as const, label: 'Outro' },
+                ] as const
+              ).map(({ value, label }) => (
+                <label key={value} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={targetAudienceModes.includes(value)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setTargetAudienceModes((prev) => [...prev, value])
+                      } else {
+                        setTargetAudienceModes((prev) => prev.filter((m) => m !== value))
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <span className="text-sm">{label}</span>
+                </label>
+              ))}
+            </div>
+            {targetAudienceModes.length === 0 && (
+              <p className="text-xs text-muted-foreground">Nenhum marcado = todos os públicos.</p>
+            )}
+            {targetAudienceModes.includes('custom') && (
               <Input
-                placeholder="Descreva o público (opcional)"
+                placeholder="Descreva o outro público (opcional)"
                 value={targetAudienceNote}
                 onChange={(e) => setTargetAudienceNote(e.target.value)}
+                className="mt-2"
               />
             )}
           </div>

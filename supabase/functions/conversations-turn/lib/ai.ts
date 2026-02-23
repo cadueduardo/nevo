@@ -44,15 +44,20 @@ function buildConfigSummary(config: SimulatorConfig): string {
   if (staff.length > 0) {
     parts.push(`Colaboradores: ${staff.map((s) => s.name).join(", ")}`)
   }
-  const audienceMode = config.target_audience?.mode || "all"
+  const ta = config.target_audience
+  const modes = Array.isArray(ta?.modes) && ta.modes.length > 0 ? ta.modes : ta?.mode ? [ta.mode] : ["all"]
   const audienceLabels: Record<string, string> = {
     all: "todos os publicos",
     women_only: "somente mulheres",
     men_only: "somente homens",
     kids_only: "somente publico infantil",
-    custom: config.target_audience?.note?.trim() || "publico personalizado",
+    custom: ta?.note?.trim() || "publico personalizado",
   }
-  parts.push(`Publico-alvo: ${audienceLabels[audienceMode] || audienceLabels.all}`)
+  const audienceText =
+    modes.length === 0 || (modes.length === 1 && modes[0] === "all")
+      ? audienceLabels.all
+      : modes.map((m) => audienceLabels[m] || m).filter(Boolean).join(" e ")
+  parts.push(`Publico-alvo: ${audienceText}`)
 
   const style = config.interaction_style || "numbered_options"
   const styleLabel =
@@ -87,7 +92,7 @@ export async function answerWithContextualAI(
       : "(sem histórico)"
 
   const finalizedHint = finalizedContext
-    ? `\nCONTEXTO CRÍTICO: O agendamento do cliente JÁ FOI CONFIRMADO. Ele está apenas agradecendo ou se despedindo. NUNCA peça telefone, email ou qualquer dado de contato novamente. Responda com mensagem cordial e breve de encerramento.\n\n`
+    ? `\nCONTEXTO CRÍTICO: O agendamento do cliente JÁ FOI CONFIRMADO. Ele pode estar agradecendo, perguntando endereço/horário ou se despedindo. NUNCA peça telefone, email ou qualquer dado de contato novamente. NUNCA sugira "agendar um horário" ou "marcar consulta" — conecte à conversa que ele acabou de concluir (ex.: "Se precisar de algo mais, estou à disposição."). Responda só ao que foi perguntado, de forma cordial e breve.\n\n`
     : ""
 
   const style = config.interaction_style || "numbered_options"
@@ -527,10 +532,11 @@ export async function interpretAdditionalBookingsWithAI(
     `Mensagem atual: "${text}"\n` +
     `Contexto: ${context?.has_completed_booking ? "ja existe um agendamento finalizado" : "nao ha agendamento finalizado"}\n` +
     "REGRAS:\n" +
+    "- VARIOS SERVICOS para a MESMA pessoa (ex: 'corte e barba', 'corte de cabelo e barba', 'quero os dois') = UM so agendamento. Retorne has_additional FALSE e count 0.\n" +
     "- Um UNICO agendamento PARA outra pessoa (ex: 'quero agendar para meu marido', 'agendar para minha esposa', 'para o João') " +
     "e UM so agendamento. Retorne has_additional FALSE, count 0 e for_whom com a mencao (ex: 'meu marido', 'minha esposa', 'João').\n" +
-    "- Multiplos agendamentos: so quando o cliente quer MAIS DE UM horario/pessoa (ex: 'pra mim e pro meu filho', 'dois agendamentos', 'um pra mim e outro pro João'). " +
-    "Retorne has_additional true e count com a quantidade de adicionais.\n" +
+    "- Multiplos agendamentos: so quando o cliente quer MAIS DE UMA PESSOA/horario (ex: 'pra mim e pro meu filho', 'dois agendamentos', 'um pra mim e outro pro João', 'agendar para meu marido e meu filho'). " +
+    "Retorne has_additional true e count com a quantidade de PESSOAS adicionais.\n" +
     "- Se nao houver mencao a outra pessoa nem multiplos, retorne count 0, has_additional false e for_whom null."
 
   try {

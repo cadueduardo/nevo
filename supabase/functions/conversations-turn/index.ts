@@ -1055,7 +1055,15 @@ async function resolveBooking(
       nextState.slots.service = nextState.pending_default_service
   }
 
-  if (!nextState.pending_additional_count && !nextState.pending_additional_booking && interpretedHasAdditional) {
+  // Só entrar em multi-pessoas quando a mensagem indica VÁRIAS PESSOAS (ex.: "para meu marido e meu filho"), não quando são só VÁRIOS SERVIÇOS para a mesma pessoa (ex.: "corte e barba")
+  const isMultiServiceSinglePerson =
+    nextState.slots.service && String(nextState.slots.service).includes(",")
+  if (
+    !nextState.pending_additional_count &&
+    !nextState.pending_additional_booking &&
+    interpretedHasAdditional &&
+    !isMultiServiceSinglePerson
+  ) {
     nextState.pending_additional_booking = true
     nextState.pending_attendee_name = true
     nextState.pending_additional_count = interpretedCount && interpretedCount > 0 ? interpretedCount : 1
@@ -2303,8 +2311,9 @@ async function handleQualificationRejectedOrchestratorAction(
         nextState.slots.service = sequenceServices.join(", ")
         nextState.just_identified_service = true
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-        const intro = buildBookingConfirmationIntro(config)
-        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+        const isMultiBookingPrompt = /De quem sera(o)? o primeiro agendamento/i.test(result.message)
+        const message = isMultiBookingPrompt ? result.message : `${buildBookingConfirmationIntro(config)} ${result.message}`
+        return buildResult(message, result.state, result.action_options)
       }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple") {
@@ -2440,8 +2449,9 @@ async function handleQualificationOrchestratorAction(
         nextState.slots.service = sequenceServices.join(", ")
         nextState.just_identified_service = true
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-        const intro = buildBookingConfirmationIntro(config)
-        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+        const isMultiBookingPrompt = /De quem sera(o)? o primeiro agendamento/i.test(result.message)
+        const message = isMultiBookingPrompt ? result.message : `${buildBookingConfirmationIntro(config)} ${result.message}`
+        return buildResult(message, result.state, result.action_options)
       }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0) || orchestrator?.inferred_attendees === "multiple") {
@@ -2534,8 +2544,9 @@ async function handleFirstMessageOrchestratorAction(
         nextState.slots.service = sequenceServices.join(", ")
         nextState.just_identified_service = true
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-        const intro = buildBookingConfirmationIntro(config)
-        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+        const isMultiBookingPrompt = /De quem sera(o)? o primeiro agendamento/i.test(result.message)
+        const message = isMultiBookingPrompt ? result.message : `${buildBookingConfirmationIntro(config)} ${result.message}`
+        return buildResult(message, result.state, result.action_options)
       }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
@@ -2770,20 +2781,40 @@ async function processSimulatorMessage(
         return buildResult(myBookingAnswer, nextState)
       }
     }
-    // Primeiro: IA responde com contexto (horário para amanhã, endereço, etc.) — consierge
-    const aiAnswer = await answerWithContextualAI(config, text, history, true)
-    if (aiAnswer?.trim()) {
-      nextState.final_thanks_sent = true
-      return buildResult(aiAnswer, nextState)
-    }
-    // Fallback só se IA indisponível: resposta determinística do cadastro
+    // Prioridade: resposta informativa (endereço, horários, serviços) sem CTA de reagendar — conectar ao fluxo que o cliente acabou de confirmar
     const infoAnswer = tryAnswerInformationalQuestion(config, text)
     if (infoAnswer) {
       nextState.final_thanks_sent = true
       return buildResult(infoAnswer, nextState)
     }
+    // Fallback: IA (não deve sugerir novo agendamento aqui; cliente já confirmou)
+    const aiAnswer = await answerWithContextualAI(config, text, history, true)
+    if (aiAnswer?.trim()) {
+      nextState.final_thanks_sent = true
+      return buildResult(aiAnswer, nextState)
+    }
     nextState.final_thanks_sent = true
     return buildResult("Se precisar de algo no futuro, fico à disposição.", nextState)
+  }
+
+  // Regra global: rejeitar pedido de serviço/área que não atendemos (ex.: criminal), em qualquer momento da conversa
+  if (
+    config.lead_policy?.reject_unlisted_services &&
+    (config.services || []).length > 0 &&
+    !nextState.slots.service &&
+    !isGreeting(text)
+  ) {
+    const matchUnlisted = await classifyServiceMatch(text, config)
+    if (matchUnlisted.reject) {
+      const hasContext = hasMatchContext(matchUnlisted)
+      const rejectionMessage = await generateRejectionMessageWithAI(
+        matchUnlisted.inferred_area,
+        config,
+        isFirst,
+        hasContext
+      )
+      return buildResult(rejectionMessage, { ...nextState, step: "qualification_rejected" })
+    }
   }
 
   // Primeira interacao: usar IA para responder com linguagem natural e contexto do negocio.
@@ -2892,8 +2923,9 @@ async function processSimulatorMessage(
         nextState.slots.service = sequenceServices.join(", ")
         nextState.just_identified_service = true
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-        const intro = buildBookingConfirmationIntro(config)
-        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+        const isMultiBookingPrompt = /De quem sera(o)? o primeiro agendamento/i.test(result.message)
+        const message = isMultiBookingPrompt ? result.message : `${buildBookingConfirmationIntro(config)} ${result.message}`
+        return buildResult(message, result.state, result.action_options)
       }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
@@ -2996,8 +3028,9 @@ async function processSimulatorMessage(
         nextState.slots.service = sequenceServices.join(", ")
         nextState.just_identified_service = true
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-        const intro = buildBookingConfirmationIntro(config)
-        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+        const isMultiBookingPrompt = /De quem sera(o)? o primeiro agendamento/i.test(result.message)
+        const message = isMultiBookingPrompt ? result.message : `${buildBookingConfirmationIntro(config)} ${result.message}`
+        return buildResult(message, result.state, result.action_options)
       }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
@@ -3104,8 +3137,9 @@ async function processSimulatorMessage(
         nextState.slots.service = sequenceServices.join(", ")
         nextState.just_identified_service = true
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-        const intro = buildBookingConfirmationIntro(config)
-        return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
+        const isMultiBookingPrompt = /De quem sera(o)? o primeiro agendamento/i.test(result.message)
+        const message = isMultiBookingPrompt ? result.message : `${buildBookingConfirmationIntro(config)} ${result.message}`
+        return buildResult(message, result.state, result.action_options)
       }
       const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
       if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {

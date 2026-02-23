@@ -54,7 +54,8 @@ export interface BusinessModelExtraction {
   tone_of_voice?: 'formal' | 'friendly' | 'professional' | 'funny'
   handoff_mode?: 'always' | 'conditional' | 'never'
   target_audience?: {
-    mode: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'
+    mode?: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'
+    modes?: ('all' | 'women_only' | 'men_only' | 'kids_only' | 'custom')[]
     note?: string
   }
   interaction_style?: 'numbered_options' | 'conversational' | 'hybrid'

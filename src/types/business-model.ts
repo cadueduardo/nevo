@@ -73,8 +73,13 @@ export interface FAQ {
   category?: 'services' | 'pricing' | 'policies' | 'general'
 }
 
+export type TargetAudienceMode = 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'
+
 export interface TargetAudience {
-  mode: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'
+  /** @deprecated Prefer modes[]. Single mode (backward compat). */
+  mode?: TargetAudienceMode
+  /** Múltiplos tipos de público (ex.: masculino + infantil). Vazio ou ausente = todos. */
+  modes?: TargetAudienceMode[]
   note?: string
 }
 

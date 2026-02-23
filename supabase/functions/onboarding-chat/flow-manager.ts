@@ -736,16 +736,19 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
 
   if ((data as any).target_audience) {
     const ta = (data as any).target_audience
+    const labels: Record<string, string> = {
+      all: 'Todos os publicos',
+      women_only: 'Somente mulheres',
+      men_only: 'Somente homens',
+      kids_only: 'Infantil',
+      custom: ta?.note ? `Personalizado (${ta.note})` : 'Personalizado',
+    }
     const audienceLabel =
-      ta?.mode === 'women_only'
-        ? 'Somente mulheres'
-        : ta?.mode === 'men_only'
-          ? 'Somente homens'
-          : ta?.mode === 'kids_only'
-            ? 'Infantil'
-            : ta?.mode === 'custom'
-              ? `Personalizado${ta?.note ? ` (${ta.note})` : ''}`
-              : 'Todos os publicos'
+      Array.isArray(ta?.modes) && ta.modes.length > 0
+        ? ta.modes.map((m: string) => labels[m] || m).filter(Boolean).join(' e ')
+        : ta?.mode
+          ? labels[ta.mode] || ta.mode
+          : 'Todos os publicos'
     parts.push(`• Publico-alvo: ${audienceLabel}`)
   }
 

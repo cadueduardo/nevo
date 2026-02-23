@@ -60,6 +60,7 @@ export interface SimulatorConfig {
   sequence_eligible_services?: string[]
   target_audience?: {
     mode?: "all" | "women_only" | "men_only" | "kids_only" | "custom"
+    modes?: ("all" | "women_only" | "men_only" | "kids_only" | "custom")[]
     note?: string
   }
   interaction_style?: "numbered_options" | "conversational" | "hybrid"
