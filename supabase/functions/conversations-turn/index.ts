@@ -114,6 +114,7 @@ import {
   isDateBlocked,
   shouldBlockByTargetAudience,
   buildTargetAudienceRestrictionMessage,
+  handleInternalIntent,
 } from "./lib/index.ts"
 import type {
   ConversationTurnRequest,
@@ -3920,23 +3921,69 @@ serve(async (req) => {
 
     const senderDisplayName = (body as { sender_display_name?: string }).sender_display_name?.trim() || undefined
     let result: SimulatorResult
-    try {
-      result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
+
+    // Intents internas (modo internal, owner/admin): consulta/cancelamento de agenda.
+    const incomingMode = (body as { mode?: string }).mode
+    const incomingActorType = (body as { actor_type?: string }).actor_type
+    const isInternalActor =
+      incomingMode === "internal" &&
+      (incomingActorType === "owner" || incomingActorType === "admin")
+
+    if (isInternalActor) {
+      const internalResult = await handleInternalIntent({
         supabaseAdmin,
         tenantId: tenant.id,
         agentId,
-        contactId: contact.id,
-        contact,
-        senderDisplayName,
-        history,
-        config,
+        message: body.message,
+        config: { business_name: config.business_name },
       })
-    } catch (err) {
-      console.error("processSimulatorMessage error:", err)
-      result = {
-        message: "Desculpe, tive um problema ao processar. Pode repetir?",
-        state: stateWithFirstFlag,
-        action_options: undefined,
+      if (internalResult.handled) {
+        result = {
+          message: internalResult.message,
+          state: stateWithFirstFlag,
+          action_options: undefined,
+        }
+      } else {
+        // Não classificou como intent interna; segue fluxo normal.
+        try {
+          result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
+            supabaseAdmin,
+            tenantId: tenant.id,
+            agentId,
+            contactId: contact.id,
+            contact,
+            senderDisplayName,
+            history,
+            config,
+          })
+        } catch (err) {
+          console.error("processSimulatorMessage error:", err)
+          result = {
+            message: "Desculpe, tive um problema ao processar. Pode repetir?",
+            state: stateWithFirstFlag,
+            action_options: undefined,
+          }
+        }
+      }
+    } else {
+      try {
+        result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
+          supabaseAdmin,
+          tenantId: tenant.id,
+          agentId,
+          contactId: contact.id,
+          contact,
+          senderDisplayName,
+          history,
+          config,
+        })
+      } catch (err) {
+        console.error("processSimulatorMessage error:", err)
+        result = {
+          message: "Desculpe, tive um problema ao processar. Pode repetir?",
+          state: stateWithFirstFlag,
+          action_options: undefined,
+        }
       }
     }
 
@@ -3986,18 +4033,26 @@ serve(async (req) => {
     // Remover flag temporária do estado antes de salvar
     const { _isFirstMessage, ...stateToSave } = result.state as SimulatorState & { _isFirstMessage?: boolean }
     
+    const contextUpdate: Record<string, unknown> = {
+      ...(conversation.context || {}),
+      session_id: sessionIdForContact,
+      business_name: config.business_name,
+      business_type: config.business_type,
+      context_mode: config.context_mode,
+      tone: config.tone,
+    }
+    if (incomingMode === "internal" || incomingMode === "external") {
+      contextUpdate.mode = incomingMode
+    }
+    if (incomingActorType != null && typeof incomingActorType === "string") {
+      contextUpdate.actor_type = incomingActorType
+    }
+
     await supabaseAdmin
       .from("conversation")
       .update({
         state_json: { state: stateToSave, channel: channelType },
-        context: {
-          ...(conversation.context || {}),
-          session_id: sessionIdForContact,
-          business_name: config.business_name,
-          business_type: config.business_type,
-          context_mode: config.context_mode,
-          tone: config.tone,
-        },
+        context: contextUpdate,
         last_message_at: nowIso,
       })
       .eq("id", conversation.id)
