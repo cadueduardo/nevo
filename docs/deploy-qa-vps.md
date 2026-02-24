@@ -9,7 +9,7 @@ Produção e QA rodam **no mesmo VPS**, em **pastas e processos diferentes**.
 | Ambiente | Pasta        | Porta (ex.) | PM2 (ex.) | Domínio                  |
 |----------|--------------|-------------|-----------|---------------------------|
 | Produção | `/opt/nevo`  | 3000        | `nevo` ou id 0 | seu-dominio.com          |
-| QA       | `/opt/nevo-qa` | 3003      | `nevo-qa` | nevoqa.pratikapp.com.br  |
+| QA       | `/opt/nevo-qa` | 3010      | `nevo-qa` | nevoqa.pratikapp.com.br  |
 
 Cada pasta tem seu próprio código, `.env` e build. Não misture os `.env` (prod usa um projeto Supabase, QA usa outro).
 
@@ -119,7 +119,7 @@ O subdomínio **nevoqa.pratikapp.com.br** deve apontar para a porta **3001**.
 server {
     server_name nevoqa.pratikapp.com.br;
     location / {
-        proxy_pass http://127.0.0.1:3003;
+        proxy_pass http://127.0.0.1:3010;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
