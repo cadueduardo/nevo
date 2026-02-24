@@ -314,7 +314,8 @@ export function LandingChat() {
         requiresAction: response.requires_action,
         allowCustomInput:
           response.requires_action === 'services_list' ||
-          response.requires_action === 'services_edit',
+          response.requires_action === 'services_edit' ||
+          response.requires_action === 'quote_variables',
       }
 
       setMessages((prev) => [...prev, assistantMessage])

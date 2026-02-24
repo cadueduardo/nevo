@@ -25,6 +25,7 @@ export type OnboardingStep =
   | 'staff_schedule_interval'
   | 'staff_schedule_interval_custom'
   | 'service_area'
+  | 'quote_variables'
   | 'policies'
   | 'tone_of_voice'
   | 'handoff_mode'

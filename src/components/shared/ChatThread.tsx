@@ -175,6 +175,14 @@ export function ChatThread({
                   onActionClick?.(`select_sequence_services:${selectedValues.join(', ')}`)
                   return
                 }
+                if (message.requiresAction === 'quote_variables') {
+                  const parts = [...selectedValues]
+                  if (customInput?.trim()) {
+                    parts.push(...customInput.split(',').map((s) => s.trim()).filter(Boolean))
+                  }
+                  onActionClick?.(`select_quote_variables:${parts.join(', ')}`)
+                  return
+                }
                 const prefix = message.requiresAction === 'holidays_select' ? 'select_holidays' : 'select_days'
                 onActionClick?.(`${prefix}:${selectedValues.join(',')}`)
               }}

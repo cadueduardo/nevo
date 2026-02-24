@@ -19,6 +19,7 @@ import {
   generateSummary,
   buildServiceExamples,
   buildServiceSelectableOptions,
+  buildQuoteVariablesSelectableOptions,
   BusinessModelData,
   FlowState,
 } from './flow-manager.ts'
@@ -423,6 +424,8 @@ function userMessageDisplayContent(message: string): string {
   if (daysMatch) return `Dias selecionados: ${daysMatch[1].trim()}`
   const holMatch = m.match(/^select_holidays:(.*)$/i)
   if (holMatch) return holMatch[1].trim() ? `Feriados selecionados: ${holMatch[1].trim()}` : 'Feriados selecionados'
+  const qvMatch = m.match(/^select_quote_variables:(.+)$/i)
+  if (qvMatch) return `Variáveis de orçamento: ${qvMatch[1].trim()}`
   return m
 }
 
@@ -3679,15 +3682,58 @@ async function processMessage(
 
   // Handlers simples para alguns steps onde a IA não é necessária
   if (currentStep === 'quote_variables') {
+    const selectMatch = text.match(/^select_quote_variables:(.+)$/i)
+    const labels: Record<string, string> = {
+      medidas: 'Medidas (largura/altura)',
+      quantidade: 'Quantidade',
+      material: 'Tipo de material',
+      cor: 'Cor',
+      modelo: 'Modelo',
+      instalacao: 'Instalação (sim/não)',
+    }
+    if (selectMatch) {
+      const selected = selectMatch[1]
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+      const fromCustom = selected.filter((v) => !labels[v])
+      const fromPreset = selected.filter((v) => labels[v])
+      const dynamic = [
+        ...fromPreset.map((v) => ({ key: v, label: labels[v], type: 'text' as const, context: 'quote' as const })),
+        ...fromCustom.map((v) => ({ key: v, label: v.charAt(0).toUpperCase() + v.slice(1), type: 'text' as const, context: 'quote' as const })),
+      ]
+      if (dynamic.length === 0) {
+        return {
+          assistant_message:
+            'Selecione pelo menos uma opção nos checkboxes ou adicione outras variáveis no campo abaixo.',
+          next_step: 'quote_variables',
+          selectable_options: buildQuoteVariablesSelectableOptions(mergedData.dynamic_variables || []),
+          requires_action: 'quote_variables',
+        }
+      }
+      const merged2 = { ...mergedData, dynamic_variables: dynamic }
+      const next = determineNextStep(merged2 as BusinessModelData, '', makeFlowState('quote_variables', merged2))
+      return {
+        assistant_message: `✅ Anotei as variáveis: ${dynamic.map((d) => d.label).join(', ')}.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { dynamic_variables: dynamic },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+      }
+    }
+    // Fallback: texto livre (compatibilidade)
     const vars = extractQuoteVariables(text)
     if (!vars.length) {
       return {
         assistant_message:
-          'Pra eu conseguir qualificar um orçamento, quais informações você precisa que o cliente informe?\n\nEx.: medidas, quantidade, material, cor.',
+          'Selecione nos checkboxes quais informações você precisa que o cliente informe, ou digite (ex.: medidas, quantidade, material).',
         next_step: 'quote_variables',
+        selectable_options: buildQuoteVariablesSelectableOptions(mergedData.dynamic_variables || []),
+        requires_action: 'quote_variables',
       }
     }
-    const dynamic = vars.map((v) => ({ key: v, label: v.charAt(0).toUpperCase() + v.slice(1), type: 'text', context: 'quote' }))
+    const dynamic = vars.map((v) => ({ key: v, label: v.charAt(0).toUpperCase() + v.slice(1), type: 'text' as const, context: 'quote' as const }))
     const merged2 = { ...mergedData, dynamic_variables: dynamic }
     const next = determineNextStep(merged2 as BusinessModelData, '', makeFlowState('quote_variables', merged2))
     return { assistant_message: `✅ Anotei as variáveis.\n\n${next.message}`, next_step: next.step, extracted_data: { dynamic_variables: dynamic } }

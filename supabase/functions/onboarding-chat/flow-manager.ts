@@ -116,6 +116,26 @@ export function buildServiceSelectableOptions(examplesStr: string): Array<{ id: 
   })
 }
 
+/** Opções de variáveis para orçamento (checkboxes). */
+const QUOTE_VARIABLE_OPTIONS: Array<{ id: string; label: string; value: string }> = [
+  { id: 'qv_medidas', label: 'Medidas (largura/altura)', value: 'medidas' },
+  { id: 'qv_quantidade', label: 'Quantidade', value: 'quantidade' },
+  { id: 'qv_material', label: 'Tipo de material', value: 'material' },
+  { id: 'qv_cor', label: 'Cor', value: 'cor' },
+  { id: 'qv_modelo', label: 'Modelo', value: 'modelo' },
+  { id: 'qv_instalacao', label: 'Instalação (sim/não)', value: 'instalacao' },
+]
+
+export function buildQuoteVariablesSelectableOptions(
+  existing: Array<{ key: string; label?: string }> = []
+): Array<{ id: string; label: string; value: string; selected?: boolean }> {
+  const selectedKeys = new Set(existing.map((v) => (v.key || v.label || '').toLowerCase()))
+  return QUOTE_VARIABLE_OPTIONS.map((opt) => ({
+    ...opt,
+    selected: selectedKeys.has(opt.value.toLowerCase()),
+  }))
+}
+
 export function buildServiceExamples(businessType?: string, businessSegment?: BusinessModelData['business_segment']): string {
   if (businessSegment) {
     const examplesBySegment: Record<string, string> = {
@@ -422,10 +442,13 @@ export function determineNextStep(
     (currentData.context === 'quote' || currentData.context === 'both') &&
     (!currentData.dynamic_variables || currentData.dynamic_variables.length === 0)
   ) {
+    const quoteVarOpts = buildQuoteVariablesSelectableOptions(currentData.dynamic_variables || [])
     return {
       step: 'quote_variables',
       message:
-        'Ótimo. Pra eu conseguir **qualificar um orçamento** automaticamente, quais informações você precisa que o cliente informe?\n\nEx.: medidas (largura/altura), quantidade, tipo de material, cor, etc.',
+        'Ótimo. Pra eu conseguir **qualificar um orçamento** automaticamente, quais informações você precisa que o cliente informe?\n\nSelecione nos checkboxes abaixo e clique em **Confirmar seleção**:',
+      selectable_options: quoteVarOpts,
+      requires_action: 'quote_variables',
     }
   }
 
