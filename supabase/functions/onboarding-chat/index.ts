@@ -3775,7 +3775,7 @@ async function processMessage(
           'Perfeito! Já consigo montar a primeira versão do seu atendimento.\n\nPara salvar tudo e te mostrar o fluxo visual, preciso criar sua conta rapidinho.',
         next_step: 'signup_request',
         requires_action: 'signup',
-        action_options: ['Criar conta', 'Tenho conta', 'Simular atendimento', 'Continuar depois'],
+        action_options: ['Criar conta', 'Tenho conta', 'Simular atendimento', 'Conectar agora', 'Depois', 'Continuar depois'],
       }
     }
     return {

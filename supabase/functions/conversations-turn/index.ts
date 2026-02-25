@@ -3958,12 +3958,14 @@ serve(async (req) => {
         agentId,
         message: body.message,
         config: { business_name: config.business_name },
+        state: stateWithFirstFlag,
+        conversationId: conversation.id,
       })
       if (internalResult.handled) {
         result = {
           message: internalResult.message,
-          state: stateWithFirstFlag,
-          action_options: undefined,
+          state: internalResult.state ?? stateWithFirstFlag,
+          action_options: internalResult.action_options,
         }
       } else {
         // Não classificou como intent interna; segue fluxo normal.

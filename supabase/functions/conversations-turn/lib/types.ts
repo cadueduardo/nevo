@@ -124,6 +124,13 @@ export interface SimulatorState {
   /** Últimas opções exibidas no turno (fallback genérico para resolver respostas numéricas como "1 - Quero agendar"). */
   last_action_options?: string[]
   booked_slots?: Record<string, Record<string, string[]>>
+  /** Orçamento calculado aguardando confirmação para gerar PDF (FASE 4). */
+  quote_pending?: {
+    service_id: string
+    service_name: string
+    slots: Record<string, unknown>
+    result: { service_name: string; total: number; currency: string; breakdown?: { label: string; value: number }[] }
+  }
   slots: {
     staff_name?: string
     attendee_name?: string

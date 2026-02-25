@@ -101,6 +101,18 @@ Esses itens pertencem à **área logada** (/app). O objetivo é ativar funcionam
 
 ---
 
+## Onboarding e simulador (fluxo único)
+
+**Onboarding:** Um único fluxo linear. Não há "parte de configuração do dono" separada. Agenda e orçamento são configurados na mesma sequência conforme o `context` (agendamento / orçamento / ambos).
+
+**Configuração do dono (phone_number):** O número do dono para ativar modo internal **não** é coletado no onboarding. Fica `tenant_user.phone_number = NULL` até o dono vincular na **área logada** (/app) após o signup.
+
+**Simulador:** Após o onboarding, o usuário pode clicar "Simular atendimento" para testar. O simulador é um único chat que chama a mesma Edge Function do turn. Para que as intents internas (agenda, contatos) funcionem no simulador, o **payload deve incluir** `mode: "internal"` e `actor_type: "owner"` — pois quem está testando é o dono que acabou de configurar. Sem isso, o simulador roda como external (cliente) por padrão.
+
+*(Futuro: toggle "Testar como dono" / "Testar como cliente" para alternar entre internal e external.)*
+
+---
+
 # FASE 1 — BASE DE SEGURANÇA E CONTEXTO
 
 ## 1.1 — Atualizar tabela tenant_user
@@ -221,8 +233,9 @@ Salvar cancellation_reason.
 - [x] buscar contato por horário (query_contact_by_appointment_time)
 - [x] buscar contato por nome (query_contact_by_name)
 - [x] conversation.state_json (migração 20260225000000) para simulador
+- [x] simulador envia mode=internal e actor_type=owner (quem testa é o dono)
 - [ ] testes no simulador
-- [ ] após simulador: CTA “Quer colocar o Nevo no seu WhatsApp agora?” (Conectar agora / Depois) — ver FASE 6.5
+- [x] CTA "Conectar agora" / "Depois" no signup_request; fluxo completo FASE 6.5 pendente “Quer colocar o Nevo no seu WhatsApp agora?” (Conectar agora / Depois) — ver FASE 6.5
 
 ---
 
@@ -939,6 +952,7 @@ Implementações:
 - [x] cancelar agendamento
 - [x] buscar contato por horário
 - [x] buscar contato por nome
+- [x] simulador envia mode=internal e actor_type=owner
 - [ ] testes no simulador
 
 ---

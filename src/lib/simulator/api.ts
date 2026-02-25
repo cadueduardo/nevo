@@ -3,6 +3,10 @@ export interface SimulatorRequest {
   conversation_id?: string
   message: string
   channel?: 'web_simulator'
+  /** Modo do actor: internal = dono/admin; external = cliente. Simulador do onboarding envia internal. */
+  mode?: 'internal' | 'external'
+  /** Tipo do actor. Simulador do onboarding envia owner (quem testa é o dono). */
+  actor_type?: 'owner' | 'admin' | 'agent' | 'client' | 'unknown'
   context?: {
     business_name?: string
     business_type?: string

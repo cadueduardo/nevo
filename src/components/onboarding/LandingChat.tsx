@@ -799,6 +799,24 @@ export function LandingChat() {
         setAuthChoicePending(false)
         return
       }
+      if (action === 'Conectar agora') {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          appendAssistant(
+            'O recurso de conexão por código está em desenvolvimento. Em breve você poderá conectar seu WhatsApp aqui. Por enquanto, crie sua conta e teste o simulador.'
+          )
+        } else {
+          appendAssistant(
+            'Para conectar seu WhatsApp, crie sua conta primeiro. Depois você poderá conectar aqui.'
+          )
+        }
+        return
+      }
+      if (action === 'Depois') {
+        appendAssistant('Sem problemas. Quando quiser conectar, diga: conectar whatsapp')
+        setAuthChoicePending(false)
+        return
+      }
     }
     // Se Continuar e a última mensagem tem campos editáveis, enviar edits em lote.
     if (action === 'Continuar') {
@@ -822,6 +840,8 @@ export function LandingChat() {
       session_id: simulatorSessionId || sessionId,
       conversation_id: simulatorConversationId || undefined,
       channel: 'web_simulator',
+      mode: 'internal',
+      actor_type: 'owner',
       context: {
         business_name: onboardingData.business_name,
         business_type: onboardingData.business_type,

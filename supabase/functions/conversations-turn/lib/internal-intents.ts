@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * Intents internas de agenda (modo internal, owner/admin).
+ * Intents internas de agenda e orçamento (modo internal, owner/admin).
  * Classificação por padrões; handlers determinísticos.
  */
 import {
@@ -13,6 +13,15 @@ import {
   toMinutes,
   formatDatePt,
 } from "./utils.ts"
+import {
+  extractQuoteSlotsFromText,
+  validateQuoteSlots,
+  calculateQuote,
+  formatInternalQuote,
+  type QuoteSlots,
+  type QuoteServiceRow,
+} from "./quote-engine.ts"
+import type { SimulatorState } from "./types.ts"
 
 const BUSINESS_TZ = "America/Sao_Paulo"
 const TIME_TOLERANCE_MINUTES = 20
@@ -26,6 +35,8 @@ export type InternalIntentType =
   | "query_contact_by_name"
   | "cancel_appointment"
   | "create_appointment_internal"
+  | "request_quote_internal"
+  | "confirm_quote_pdf"
   | null
 
 export interface InternalIntentSlots {
@@ -151,6 +162,15 @@ export function classifyInternalIntent(text: string): ClassifiedInternalIntent {
     return { intent: "create_appointment_internal", slots }
   }
 
+  // request_quote_internal: orçamento, faz orçamento, cotação, etc.
+  if (
+    /\b(orçamento|orcamento|cotação|cotacao|cotar|orçar|orcar)\b/.test(msg) ||
+    /\b(faz|fazer|quero|preciso)\s+(um\s+)?(orçamento|orcamento|cotação|cotacao)\b/.test(msg) ||
+    /\b(orçamento|orcamento)\s+(de|para)\b/.test(msg)
+  ) {
+    return { intent: "request_quote_internal", slots: {} }
+  }
+
   return { intent: null, slots: {} }
 }
 
@@ -160,24 +180,112 @@ export interface HandleInternalIntentParams {
   agentId: string
   message: string
   config?: { business_name?: string }
+  /** Estado do simulador (para quote_pending e confirmação de PDF). */
+  state?: SimulatorState
+  conversationId?: string
 }
 
 export interface HandleInternalIntentResult {
   handled: boolean
   message: string
+  /** Estado atualizado (ex.: quote_pending). */
+  state?: SimulatorState
+  /** Opções de ação (ex.: "Sim" / "Não"). */
+  action_options?: string[]
+}
+
+function isQuoteConfirmation(text: string): boolean {
+  const msg = normalizeText(text)
+  return (
+    /\b(sim|confirmar|confirmo|pode\s+gerar|gerar\s+pdf|quero\s+o\s+pdf)\b/.test(msg) ||
+    /^sim\s*[.!]?$/i.test(text.trim()) ||
+    /^confirmo\s*[.!]?$/i.test(text.trim())
+  )
+}
+
+function isQuoteDecline(text: string): boolean {
+  const msg = normalizeText(text)
+  return (
+    /\b(nao|não|nao\s+quero|dispenso|cancelar)\b/.test(msg) ||
+    /^nao\s*[.!]?$/i.test(text.trim()) ||
+    /^não\s*[.!]?$/i.test(text.trim())
+  )
 }
 
 /**
- * Processa intents internas de agenda. Retorna { handled: true, message } se resolveu;
+ * Processa intents internas de agenda e orçamento. Retorna { handled: true, message } se resolveu;
  * { handled: false } se não é intent interna ou não classificou.
  */
 export async function handleInternalIntent(params: HandleInternalIntentParams): Promise<HandleInternalIntentResult> {
-  const { supabaseAdmin, tenantId, agentId, message } = params
-  const { intent, slots } = classifyInternalIntent(message)
-
-  if (!intent) return { handled: false, message: "" }
-
+  const { supabaseAdmin, tenantId, agentId, message, state: incomingState, conversationId } = params
   const todayIso = getTodayIsoBusinessTz()
+
+  // quote_pending + recusa: limpar estado
+  if (incomingState?.quote_pending && isQuoteDecline(message)) {
+    return {
+      handled: true,
+      message: "Ok, sem problema. O orçamento não foi salvo.",
+      state: { ...incomingState, quote_pending: undefined },
+    }
+  }
+
+  // confirm_quote_pdf: estado tem quote_pending e usuário confirmou (Sim, Confirmar, etc.)
+  if (incomingState?.quote_pending && isQuoteConfirmation(message)) {
+    const pending = incomingState.quote_pending
+    if (!conversationId) {
+      return {
+        handled: true,
+        message: "Não foi possível salvar o orçamento (conversa não identificada). Tente novamente.",
+        state: { ...incomingState, quote_pending: undefined },
+      }
+    }
+    try {
+      const { error: insertErr } = await supabaseAdmin
+        .from("request")
+        .insert({
+          tenant_id: tenantId,
+          conversation_id: conversationId,
+          status: "pending",
+          slots: pending.slots,
+          blueprint_id: pending.service_id,
+          total_value: pending.result.total,
+          currency: pending.result.currency || "BRL",
+          calculation_result: pending.result,
+          is_estimated: false,
+        })
+
+      if (insertErr) {
+        console.error("internal intent confirm_quote_pdf insert error:", insertErr)
+        return {
+          handled: true,
+          message: "Não consegui salvar o orçamento. Tente novamente.",
+          state: { ...incomingState, quote_pending: undefined },
+        }
+      }
+
+      // TODO FASE 4.3: generatePdf() e Signed URL. Por ora: mensagem de sucesso.
+      const totalFormatted = new Intl.NumberFormat("pt-BR", {
+        style: "currency",
+        currency: pending.result.currency || "BRL",
+      }).format(pending.result.total)
+      const nextState = { ...incomingState, quote_pending: undefined }
+      return {
+        handled: true,
+        message: `✅ Orçamento de ${pending.service_name} (${totalFormatted}) salvo no histórico. Em breve: geração de PDF.`,
+        state: nextState,
+      }
+    } catch (err) {
+      console.error("internal intent confirm_quote_pdf error:", err)
+      return {
+        handled: true,
+        message: "Ocorreu um erro ao processar. Tente novamente.",
+        state: { ...incomingState, quote_pending: undefined },
+      }
+    }
+  }
+
+  const { intent, slots } = classifyInternalIntent(message)
+  if (!intent) return { handled: false, message: "" }
 
   switch (intent) {
     case "query_appointments_today": {
@@ -438,6 +546,64 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
         handled: true,
         message:
           "Para criar um agendamento, use o fluxo de agendamento normalmente (informe serviço, data e horário). Em breve teremos criação rápida por mensagem.",
+      }
+    }
+
+    case "request_quote_internal": {
+      // Carregar quote_service do agente
+      const { data: quoteServices, error: qsError } = await supabaseAdmin
+        .from("quote_service")
+        .select("id, agent_id, name, pricing_type, variables_schema, pricing_rules, external_variable_keys, keywords, active")
+        .eq("agent_id", agentId)
+        .eq("active", true)
+
+      if (qsError) {
+        console.error("internal intent request_quote_internal quote_service error:", qsError)
+        return { handled: true, message: "Não consegui carregar os serviços de orçamento. Tente novamente." }
+      }
+
+      const services = (quoteServices || []) as QuoteServiceRow[]
+      if (services.length === 0) {
+        return {
+          handled: true,
+          message:
+            "Ainda não há serviços de orçamento configurados. Configure na área logada (serviços de orçamento) para usar esta função.",
+        }
+      }
+
+      // Usar o primeiro serviço (MVP: um por agente; futuro: detectar por keywords)
+      const service = services[0]
+      const schema = (service.variables_schema || []) as Array<{ key: string; label?: string; required?: boolean }>
+
+      const slots: QuoteSlots = extractQuoteSlotsFromText(message)
+      const validation = validateQuoteSlots(schema, slots)
+
+      if (!validation.valid) {
+        const missingList = validation.missing.join(", ")
+        return {
+          handled: true,
+          message: `Para o orçamento de ${service.name}, preciso de: ${missingList}. Informe na mensagem (ex.: cortina 2,80 x 2,60 blackout wave com instalação).`,
+        }
+      }
+
+      const calcResult = calculateQuote(service, slots)
+      const formatted = formatInternalQuote(calcResult)
+
+      const nextState: SimulatorState = {
+        ...(incomingState || {}),
+        quote_pending: {
+          service_id: service.id,
+          service_name: service.name,
+          slots: slots as Record<string, unknown>,
+          result: calcResult,
+        },
+      }
+
+      return {
+        handled: true,
+        message: `${formatted}\n\nDeseja gerar o PDF do orçamento?`,
+        state: nextState,
+        action_options: ["Sim", "Não"],
       }
     }
 
