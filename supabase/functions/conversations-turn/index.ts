@@ -3572,19 +3572,35 @@ async function getOrCreateAgentForSimTenant(supabaseAdmin: any, tenantId: string
 type ChannelType = "web_simulator" | "whatsapp"
 
 async function getOrCreateChannel(supabaseAdmin: any, tenantId: string, agentId: string, channelType: ChannelType = "web_simulator") {
-  const { data: existing } = await supabaseAdmin
-    .from("channel")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .eq("type", channelType)
-    .eq("agent_id", agentId)
-    .maybeSingle()
+  const dbType = channelType === "whatsapp" ? "whatsapp" : "web_chat"
+  const simSlug = `sim-${tenantId}-${agentId}`
+  let existing: any = null
+  if (dbType === "web_chat") {
+    const { data } = await supabaseAdmin
+      .from("channel")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .eq("agent_id", agentId)
+      .eq("type", "web_chat")
+      .eq("chat_slug", simSlug)
+      .maybeSingle()
+    existing = data
+  } else {
+    const { data } = await supabaseAdmin
+      .from("channel")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .eq("agent_id", agentId)
+      .eq("type", "whatsapp")
+      .maybeSingle()
+    existing = data
+  }
   if (existing) return existing
 
   const insertPayload =
     channelType === "whatsapp"
       ? { tenant_id: tenantId, agent_id: agentId, type: "whatsapp", provider: "twilio", provider_config: {}, is_active: true }
-      : { tenant_id: tenantId, agent_id: agentId, type: "web_simulator", is_active: true }
+      : { tenant_id: tenantId, agent_id: agentId, type: "web_chat", chat_slug: simSlug, is_active: true }
   const { data, error } = await supabaseAdmin
     .from("channel")
     .insert(insertPayload)
