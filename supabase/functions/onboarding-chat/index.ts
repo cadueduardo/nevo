@@ -2769,6 +2769,7 @@ async function processMessage(
         extracted_data: { staff: merged.staff, staff_setup_index: merged.staff_setup_index },
         requires_action: next.requires_action,
         action_options: next.action_options,
+        ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
       }
     }
 
