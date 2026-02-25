@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { resolveActorByPhone } from '@/lib/actor'
 
 /**
  * POST /api/webhooks/evolution/[agentId]
@@ -118,6 +119,16 @@ export async function POST(
   }
 
   const fromNormalized = from.startsWith('whatsapp:') ? from : `whatsapp:${from}`
+
+  const featureAssistenteOrcamento = process.env.FEATURE_ASSISTENTE_ORCAMENTO === 'true'
+  let mode: 'internal' | 'external' | undefined
+  let actor_type: string | undefined
+  if (featureAssistenteOrcamento) {
+    const resolved = await resolveActorByPhone(supabaseAdmin, agent.tenant_id, fromNormalized)
+    mode = resolved.mode
+    actor_type = resolved.actor_type
+  }
+
   const turnPayload = {
     session_id: fromNormalized,
     message: text.trim(),
@@ -127,6 +138,8 @@ export async function POST(
     channel: 'whatsapp' as const,
     from: fromNormalized,
     sender_display_name: pushName?.trim() || undefined,
+    ...(mode != null && { mode }),
+    ...(actor_type != null && { actor_type }),
   }
 
   const baseUrl = (channelRow.evolution_base_url as string).replace(/\/$/, '')

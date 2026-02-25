@@ -22,6 +22,8 @@ export type InternalIntentType =
   | "query_appointments_tomorrow"
   | "query_appointments_by_date"
   | "query_appointment_by_time"
+  | "query_contact_by_appointment_time"
+  | "query_contact_by_name"
   | "cancel_appointment"
   | "create_appointment_internal"
   | null
@@ -96,6 +98,30 @@ export function classifyInternalIntent(text: string): ClassifiedInternalIntent {
     /\b(agenda|agendamentos?|compromissos?|consultas?|horarios?|marcacoes?|marcações?|dia\s+\d)\b/.test(msg)
   ) {
     return { intent: "query_appointments_by_date", slots: { date: dateFromText } }
+  }
+
+  // query_contact_by_appointment_time: contato/dados do cliente por horário (reusa lógica de query_appointment_by_time)
+  const timeForContact = parseTime(text)
+  if (
+    timeForContact &&
+    /\b(contato|dados?|cliente|paciente|telefone|quem\s+e)\b/.test(msg) &&
+    /\b(das?|as|a|às|horario|hora)\b/.test(msg)
+  ) {
+    const date = parseDateOrWeekday(text) || parseDate(text) || todayIso
+    return { intent: "query_contact_by_appointment_time", slots: { date, time: timeForContact } }
+  }
+
+  // query_contact_by_name: buscar contato por nome
+  const contactNameMatch = msg.match(
+    /\b(contato|buscar|dados?\s+de?|quem\s+e|telefone\s+de)\s+(.+?)(?:\s*[?.!]?)$/
+  )
+  if (contactNameMatch && contactNameMatch[2].trim().length >= 2) {
+    const name = contactNameMatch[2].trim()
+    return { intent: "query_contact_by_name", slots: { name } }
+  }
+  if (/\b(contato|buscar)\s+/.test(msg)) {
+    const afterTrigger = msg.replace(/^(?:contato|buscar)\s+/, "").trim()
+    if (afterTrigger.length >= 2) return { intent: "query_contact_by_name", slots: { name: afterTrigger } }
   }
 
   // query_appointment_by_time: horário explícito (ex: "quem tem às 14h", "14:00")
@@ -241,7 +267,8 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
       return { handled: true, message: text }
     }
 
-    case "query_appointment_by_time": {
+    case "query_appointment_by_time":
+    case "query_contact_by_appointment_time": {
       const dateIso = slots.date || todayIso
       const timeStr = slots.time || ""
       const targetMins = toMinutes(timeStr)
@@ -296,6 +323,49 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
       })
       const suffix = inWindow.length > 3 ? `\n(E mais ${inWindow.length - 3} agendamento(s) nessa faixa.)` : ""
       return { handled: true, message: `📅 Por volta das ${timeStr}:\n${lines.join("\n")}${suffix}` }
+    }
+
+    case "query_contact_by_name": {
+      const searchName = slots.name?.trim()
+      if (!searchName || searchName.length < 2) {
+        return { handled: true, message: "Informe o nome para buscar (ex.: contato João)." }
+      }
+
+      const term = `%${searchName}%`
+      const { data: contacts, error } = await supabaseAdmin
+        .from("contact")
+        .select("id, display_name, phone, external_id")
+        .eq("tenant_id", tenantId)
+        .or(`display_name.ilike.${term},phone.ilike.${term}`)
+        .limit(10)
+
+      if (error) {
+        console.error("internal intent query_contact_by_name error:", error)
+        return { handled: true, message: "Não consegui buscar. Tente novamente." }
+      }
+
+      const list = contacts || []
+      if (list.length === 0) {
+        return { handled: true, message: `Nenhum contato encontrado para "${searchName}".` }
+      }
+
+      if (list.length === 1) {
+        const c = list[0]
+        const name = c.display_name || c.external_id || "—"
+        return {
+          handled: true,
+          message: `📇 ${name}\nTel: ${c.phone || "—"}`,
+        }
+      }
+
+      const lines = list.slice(0, 5).map((c: any, i: number) => {
+        const name = c.display_name || c.external_id || c.phone || "—"
+        return `${i + 1}. ${name} – ${c.phone || "—"}`
+      })
+      return {
+        handled: true,
+        message: `Encontrei ${list.length} contato(s):\n${lines.join("\n")}\n\nQual deles? (informe o número ou nome completo)`,
+      }
     }
 
     case "cancel_appointment": {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { resolveActorByPhone } from '@/lib/actor'
 
 /**
  * POST /api/webhooks/twilio/[agentId]
@@ -114,6 +115,16 @@ export async function POST(
         : 'hybrid',
   }
 
+  const featureAssistenteOrcamento = process.env.FEATURE_ASSISTENTE_ORCAMENTO === 'true'
+
+  let mode: 'internal' | 'external' | undefined
+  let actor_type: string | undefined
+  if (featureAssistenteOrcamento) {
+    const resolved = await resolveActorByPhone(supabaseAdmin, agent.tenant_id, from)
+    mode = resolved.mode
+    actor_type = resolved.actor_type
+  }
+
   const turnPayload = {
     session_id: from,
     message: bodyText,
@@ -122,6 +133,8 @@ export async function POST(
     agent_id: agentId,
     channel: 'whatsapp' as const,
     from,
+    ...(mode != null && { mode }),
+    ...(actor_type != null && { actor_type }),
   }
 
   const functionsUrl = `${url}/functions/v1/conversations-turn`
