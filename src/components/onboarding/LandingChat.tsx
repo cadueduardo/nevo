@@ -881,12 +881,13 @@ export function LandingChat() {
         setSimulatorMessages((prev) => [...prev, ...assistantMessages])
       }
     } catch (error: any) {
+      const errMsg = error?.message || 'Erro desconhecido'
       setSimulatorMessages((prev) => [
         ...prev,
         {
           id: `${Date.now() + 99}`,
           role: 'assistant',
-          content: 'Nao consegui responder agora. Pode tentar de novo?',
+          content: `Nao consegui responder: ${errMsg}. Pode tentar de novo?`,
           timestamp: new Date(),
         },
       ])

@@ -39,7 +39,9 @@ export async function POST(req: NextRequest) {
       }
 
       if (!response.ok) {
-        return NextResponse.json({ error: data.error || 'Erro ao processar mensagem' }, { status: response.status })
+        const errMsg = typeof data?.error === 'string' ? data.error : data?.error?.message || 'Erro ao processar mensagem'
+        console.error('[conversations-turn] Edge Function erro:', response.status, errMsg, data)
+        return NextResponse.json({ error: errMsg }, { status: response.status })
       }
 
       return NextResponse.json(data)
@@ -48,11 +50,15 @@ export async function POST(req: NextRequest) {
       if (fetchError.name === 'AbortError') {
         return NextResponse.json({ error: 'Tempo de espera esgotado. Tente novamente.' }, { status: 504 })
       }
+      console.error('[conversations-turn] Fetch error:', fetchError)
       return NextResponse.json({ error: `Erro ao conectar com o servidor: ${fetchError.message}` }, { status: 503 })
     }
   } catch (error: any) {
-    console.error('Error in conversations-turn API route:', error)
-    return NextResponse.json({ error: error.message || 'Erro interno do servidor' }, { status: 500 })
+    console.error('[conversations-turn] Error:', error)
+    return NextResponse.json(
+      { error: error?.message || error?.toString?.() || 'Erro interno do servidor' },
+      { status: 500 }
+    )
   }
 }
 

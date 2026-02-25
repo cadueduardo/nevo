@@ -3852,23 +3852,29 @@ serve(async (req) => {
     }
 
     // Hidrata agenda ocupada real para filtrar horários indisponíveis (além dos slots deste turno).
-    const todayIso = getTodayIsoBusinessTz()
-    const { data: appointmentRows, error: appointmentRowsError } = await supabaseAdmin
-      .from("appointment")
-      .select("staff_name, start_at, status")
-      .eq("tenant_id", tenant.id)
-      .eq("agent_id", agentId)
-      .neq("status", "cancelled")
-      .gte("start_at", `${todayIso}T00:00:00.000-03:00`)
-      .limit(3000)
-    if (appointmentRowsError) {
-      console.error("appointment hydration error:", appointmentRowsError)
-    }
     let persistedBookedSlots: Record<string, Record<string, string[]>> = {}
-    for (const row of (appointmentRows || []) as Array<{ staff_name?: string | null; start_at?: string | null }>) {
-      if (!row?.staff_name || !row?.start_at) continue
-      const { dateIso, time } = toBusinessDateTime(row.start_at)
-      persistedBookedSlots = addBookedSlot(persistedBookedSlots, row.staff_name, dateIso, time)
+    try {
+      const todayIso = getTodayIsoBusinessTz()
+      const { data: appointmentRows, error: appointmentRowsError } = await supabaseAdmin
+        .from("appointment")
+        .select("staff_name, start_at, status")
+        .eq("tenant_id", tenant.id)
+        .eq("agent_id", agentId)
+        .neq("status", "cancelled")
+        .gte("start_at", `${todayIso}T00:00:00.000-03:00`)
+        .limit(3000)
+      if (appointmentRowsError) {
+        console.error("appointment hydration error:", appointmentRowsError)
+      } else {
+        for (const row of (appointmentRows || []) as Array<{ staff_name?: string | null; start_at?: string | null }>) {
+          if (!row?.staff_name || !row?.start_at) continue
+          const { dateIso, time } = toBusinessDateTime(row.start_at)
+          persistedBookedSlots = addBookedSlot(persistedBookedSlots, row.staff_name, dateIso, time)
+        }
+      }
+    } catch (hydrationErr) {
+      console.error("appointment hydration exception:", hydrationErr)
+      // Continua com slots vazios para não bloquear o simulador
     }
 
     const currentState: SimulatorState = {
