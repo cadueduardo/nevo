@@ -25,10 +25,12 @@ export async function POST(req: NextRequest) {
     if (typeof body !== 'object' || body === null) {
       return NextResponse.json({ error: 'Body inválido' }, { status: 400 })
     }
-    const { message, conversation_id, agent_id: bodyAgentId } = body as {
+    const { message, conversation_id, agent_id: bodyAgentId, mode: bodyMode, actor_type: bodyActorType } = body as {
       message?: unknown
       conversation_id?: unknown
       agent_id?: string
+      mode?: 'internal' | 'external'
+      actor_type?: string
     }
     if (typeof message !== 'string' || !message.trim()) {
       return NextResponse.json({ error: 'message é obrigatório' }, { status: 400 })
@@ -69,13 +71,23 @@ export async function POST(req: NextRequest) {
       : bootstrap.tenant_setting
     const businessName = bootstrapWithAgent?.agent?.name ?? tenant.name
     const bc = tenant_setting.business_config as Record<string, unknown>
+    const bookingServices = Array.isArray(bc.booking_services)
+      ? bc.booking_services
+      : Array.isArray(bc.services)
+        ? bc.services
+        : []
+    const catalogServices = Array.isArray(bc.catalog_services)
+      ? bc.catalog_services
+      : bookingServices
     const context = {
       business_name: businessName,
       business_type: bc.business_type ?? undefined,
       context_mode: bc.context_mode ?? 'booking',
       establishment_address: bc.establishment_address ?? undefined,
       tone: tenant_setting.tone ?? undefined,
-      services: Array.isArray(bc.services) ? bc.services : [],
+      catalog_services: catalogServices,
+      booking_services: bookingServices,
+      services: bookingServices,
       when_client_asks_price_no_value: tenant_setting.when_client_asks_price_no_value ?? 'offer_handoff_or_booking',
       schedule: bc.schedule ?? undefined,
       staff: Array.isArray(bc.staff) ? bc.staff : [],
@@ -94,6 +106,8 @@ export async function POST(req: NextRequest) {
         bc.interaction_style === 'hybrid'
           ? bc.interaction_style
           : 'hybrid',
+      branding:
+        typeof bc.branding === 'object' && bc.branding !== null ? bc.branding : undefined,
     }
 
     const sessionId = `app-${user.id}-${tenant.id}`
@@ -130,6 +144,8 @@ export async function POST(req: NextRequest) {
           context,
           tenant_id: tenant.id,
           agent_id: effectiveAgentId,
+          mode: bodyMode === 'external' ? 'external' : 'internal',
+          actor_type: bodyActorType === 'client' ? 'client' : 'owner',
         }),
         signal: controller.signal,
       })

@@ -6,6 +6,8 @@ interface CollectedDataForMigration {
   password?: string
   business_name?: string
   business_type?: string
+  catalog_services?: Array<{ name: string; description?: string }>
+  booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
   services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
   schedule?: {
     days_of_week?: string[]
@@ -41,6 +43,8 @@ interface CollectedDataForMigration {
     deposit_percentage?: number
   }
   dynamic_variables?: Array<{ key: string; label: string; type: string }>
+  quote_services?: Array<{ name: string; pricing_type: string }>
+  quote_external_variable_keys?: string[]
   holidays_attend?: string[]
   closure_periods?: Array<{ start: string; end: string; reason?: string }>
   allow_sequence_booking?: boolean
@@ -55,12 +59,21 @@ interface CollectedDataForMigration {
   }
   interaction_style?: 'numbered_options' | 'conversational' | 'hybrid'
   context?: 'booking' | 'quote' | 'both'
+  branding?: {
+    enabled?: boolean
+    logo_url?: string
+    company_legal_name?: string
+    cnpj?: string
+    company_phone?: string
+    company_email?: string
+  }
 }
 
 interface MigrationResult {
   success: boolean
   user_id?: string
   tenant_id?: string
+  agent_id?: string
   error?: string
 }
 
@@ -115,9 +128,34 @@ export async function migrateOnboardingToTenant(
       return { success: false, error: `Erro ao criar tenant_user: ${tenantUserError.message}` }
     }
 
+    const catalogServices = Array.isArray(collectedData.catalog_services)
+      ? collectedData.catalog_services
+      : Array.isArray(collectedData.services)
+        ? collectedData.services
+        : []
+    const bookingServices = Array.isArray(collectedData.booking_services)
+      ? collectedData.booking_services
+      : Array.isArray(collectedData.services)
+        ? collectedData.services
+        : []
+
     const businessConfig: Record<string, any> = {
+      business_config_version: 2,
+      catalog_services:
+        catalogServices?.map((s) => ({
+          name: s.name,
+          description: s.description ?? undefined,
+        })) ?? [],
+      booking_services:
+        bookingServices?.map((s) => ({
+          name: s.name,
+          duration_minutes: s.duration_minutes ?? undefined,
+          base_price: s.base_price ?? undefined,
+          description: s.description ?? undefined,
+        })) ?? [],
+      // Compat legado durante depreciação
       services:
-        collectedData.services?.map((s) => ({
+        bookingServices?.map((s) => ({
           name: s.name,
           duration_minutes: s.duration_minutes ?? undefined,
           base_price: s.base_price ?? undefined,
@@ -144,6 +182,16 @@ export async function migrateOnboardingToTenant(
     if (collectedData.schedule) {
       businessConfig.schedule = collectedData.schedule
     }
+    if (collectedData.branding) {
+      businessConfig.branding = {
+        enabled: collectedData.branding.enabled ?? false,
+        logo_url: collectedData.branding.logo_url ?? null,
+        company_legal_name: collectedData.branding.company_legal_name ?? null,
+        cnpj: collectedData.branding.cnpj ?? null,
+        company_phone: collectedData.branding.company_phone ?? null,
+        company_email: collectedData.branding.company_email ?? null,
+      }
+    }
 
     const { error: settingsError } = await supabaseAdmin.from('tenant_setting').insert({
       tenant_id: tenantId,
@@ -163,6 +211,43 @@ export async function migrateOnboardingToTenant(
 
     if (settingsError) {
       console.error('Erro ao criar tenant_settings:', settingsError)
+    }
+
+    // Criar agent (flow exige agent_id quando tenant_id preenchido)
+    const { data: agentData, error: agentError } = await supabaseAdmin
+      .from('agent')
+      .insert({
+        tenant_id: tenantId,
+        name: collectedData.business_name,
+        business_type: collectedData.business_type ?? null,
+        channel_primary: 'whatsapp',
+        status: 'active',
+      })
+      .select('id')
+      .single()
+
+    if (agentError || !agentData?.id) {
+      console.error('Erro ao criar agent:', agentError)
+      await supabaseAdmin.from('tenant').delete().eq('id', tenantId)
+      await supabaseAdmin.auth.admin.deleteUser(userId)
+      return { success: false, error: `Erro ao criar agente: ${agentError?.message ?? 'desconhecido'}` }
+    }
+
+    const agentId = agentData.id
+
+    const { error: agentSettingError } = await supabaseAdmin
+      .from('agent_setting')
+      .insert({
+        agent_id: agentId,
+        tone: collectedData.tone_of_voice === 'friendly' ? 'friendly' : collectedData.tone_of_voice === 'formal' ? 'formal' : 'professional',
+        language: 'pt-BR',
+        handoff_mode: collectedData.handoff_mode || 'conditional',
+        business_config: businessConfig,
+        when_client_asks_price_no_value: 'offer_handoff_or_booking',
+      })
+
+    if (agentSettingError) {
+      console.error('Erro ao criar agent_setting:', agentSettingError)
     }
 
     let blueprintData: any = null
@@ -187,23 +272,31 @@ export async function migrateOnboardingToTenant(
       })),
     }
 
-    const { error: flowError } = await supabaseAdmin.from('flow').insert({
-      tenant_id: tenantId,
-      name: 'Fluxo Principal',
-      domain: collectedData.business_type?.toLowerCase(),
-      version: 1,
-      definition: flowDefinition,
-      layout: flowLayout,
-      is_active: true,
-    })
+    const { data: flowData, error: flowError } = await supabaseAdmin
+      .from('flow')
+      .insert({
+        tenant_id: tenantId,
+        agent_id: agentId,
+        name: 'Fluxo Principal',
+        domain: collectedData.business_type?.toLowerCase(),
+        version: 1,
+        definition: flowDefinition,
+        layout: flowLayout,
+        is_active: true,
+      })
+      .select('id')
+      .single()
 
     if (flowError) {
       console.error('Erro ao criar flow:', flowError)
     }
 
-    if (collectedData.dynamic_variables && collectedData.dynamic_variables.length > 0) {
+    const flowId = flowData?.id
+
+    if (collectedData.dynamic_variables && collectedData.dynamic_variables.length > 0 && flowId) {
       const variables = collectedData.dynamic_variables.map((v) => ({
         tenant_id: tenantId,
+        flow_id: flowId,
         key: v.key,
         label: v.label,
         type: v.type === 'text' ? 'text' : v.type === 'number' ? 'number' : 'text',
@@ -218,10 +311,60 @@ export async function migrateOnboardingToTenant(
       }
     }
 
-    return { success: true, user_id: userId, tenant_id: tenantId }
+    // Criar quote_service quando context inclui orçamento (doc: C) quote_service
+    const hasQuote = collectedData.context === 'quote' || collectedData.context === 'both'
+    const quoteServices = collectedData.quote_services || []
+    if (hasQuote && quoteServices.length > 0 && agentId) {
+      const dynamicVars = collectedData.dynamic_variables || []
+      const externalKeys = collectedData.quote_external_variable_keys || []
+      const validExternalKeys = externalKeys.filter((k) => dynamicVars.some((v) => v.key === k))
+
+      for (const qs of quoteServices) {
+        if (!qs.name?.trim()) continue
+        const variablesSchema = dynamicVars.map((v) => ({
+          key: v.key,
+          type: v.type === 'number' ? 'number' : 'text',
+          label: v.label,
+          required: false,
+        }))
+        const keywords = extractKeywordsFromServiceName(qs.name)
+        const { error: qsError } = await supabaseAdmin.from('quote_service').insert({
+          agent_id: agentId,
+          name: qs.name.trim(),
+          pricing_type: mapPricingType(qs.pricing_type) || 'custom_manual',
+          variables_schema: variablesSchema,
+          pricing_rules: {},
+          external_variable_keys: validExternalKeys.length > 0 ? validExternalKeys : (dynamicVars.slice(0, 2).map((v) => v.key) || []),
+          keywords,
+          active: true,
+        })
+        if (qsError) {
+          console.error('Erro ao criar quote_service:', qsError)
+        }
+      }
+    }
+
+    return { success: true, user_id: userId, tenant_id: tenantId, agent_id: agentId }
   } catch (error: any) {
     return { success: false, error: error.message || 'Erro desconhecido na migração' }
   }
+}
+
+function mapPricingType(input: string): string {
+  const t = (input || '').toLowerCase()
+  if (t.includes('area') || t.includes('m²') || t.includes('m2')) return 'area'
+  if (t.includes('linear')) return 'linear'
+  if (t.includes('unit')) return 'unit'
+  if (t.includes('consulta') || t.includes('custom')) return 'custom_manual'
+  return 'custom_manual'
+}
+
+function extractKeywordsFromServiceName(name: string): string[] {
+  const n = (name || '').toLowerCase().trim()
+  if (!n) return []
+  const words = n.split(/\s+/).filter((w) => w.length > 2)
+  const normalized = words.map((w) => w.normalize('NFD').replace(/[\u0300-\u036f]/g, ''))
+  return [...new Set([n, ...words, ...normalized])].slice(0, 10)
 }
 
 function generateSlug(name: string): string {

@@ -78,6 +78,37 @@ export async function GET(
     Authorization: `Bearer ${apiKey}`,
   }
 
+  const tryCreateInstance = async (): Promise<boolean> => {
+    const createUrls = [
+      `${baseUrl}/instance/create`,
+      `${baseUrl}/v1/instance/create`,
+      `${baseUrl}/v2/instance/create`,
+      `${baseUrl}/instances/create`,
+    ]
+    const createBodies: Array<Record<string, unknown>> = [
+      { instanceName: instance, qrcode: true, integration: 'WHATSAPP-BAILEYS' },
+      { instanceName: instance, qrcode: true, integration: 'BAILEYS' },
+      { instance: instance, qrcode: true, integration: 'WHATSAPP-BAILEYS' },
+      { instanceName: instance, qrcode: true },
+    ]
+
+    for (const createUrl of createUrls) {
+      for (const body of createBodies) {
+        try {
+          const createRes = await fetch(createUrl, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+          if (createRes.ok || createRes.status === 409) return true
+        } catch {
+          /* ignora tentativa e segue */
+        }
+      }
+    }
+    return false
+  }
+
   for (const connectUrl of pathsToTry) {
     try {
       res = await fetch(connectUrl, {
@@ -108,11 +139,25 @@ export async function GET(
         )
       }
       if (res.status === 404) {
+        // Auto-healing: tenta criar a instância automaticamente e refaz o connect.
+        const created = await tryCreateInstance()
+        if (created) {
+          try {
+            await new Promise((r) => setTimeout(r, 1200))
+            const retryRes = await fetch(connectUrl, { method: 'GET', headers })
+            if (retryRes.ok) {
+              res = retryRes
+              break
+            }
+          } catch {
+            /* segue para erro padrão abaixo */
+          }
+        }
         return NextResponse.json(
           {
             error:
-              'Instância não encontrada na Evolution. Crie a instância no Manager (http://URL/manager) ou via API antes de conectar.',
-            _debug: isDev ? debug : undefined,
+              'Instância não encontrada na Evolution e não foi possível inicializar automaticamente. Tente novamente ou recrie a instância no Manager.',
+            _debug: isDev ? { ...debug, autoCreateTried: true, autoCreateOk: created } : undefined,
           },
           { status: 502 }
         )

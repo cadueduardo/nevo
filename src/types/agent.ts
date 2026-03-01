@@ -9,7 +9,7 @@ export type WhatsAppConnectionStatus = 'disconnected' | 'connecting' | 'connecte
 
 export interface AgentWhatsAppSummary {
   status: WhatsAppConnectionStatus
-  provider?: 'twilio' | 'custom'
+  provider?: 'evolution'
 }
 
 export interface Agent {

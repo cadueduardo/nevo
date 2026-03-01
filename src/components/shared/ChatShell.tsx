@@ -68,6 +68,7 @@ interface ChatShellProps {
   onClearSignupError?: () => void
   onLoginSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
   onLoginCancel?: () => void
+  onLoginCreateAccount?: () => void
   onAddressSubmit?: (payload: {
     cep: string
     logradouro: string
@@ -103,6 +104,7 @@ export function ChatShell({
   onClearSignupError,
   onLoginSubmit,
   onLoginCancel,
+  onLoginCreateAccount,
   onAddressSubmit,
   onAddressCancel,
   header,
@@ -163,6 +165,7 @@ export function ChatShell({
             onClearSignupError={onClearSignupError}
             onLoginSubmit={onLoginSubmit}
             onLoginCancel={onLoginCancel}
+            onLoginCreateAccount={onLoginCreateAccount}
             onAddressSubmit={onAddressSubmit}
             onAddressCancel={onAddressCancel}
           />

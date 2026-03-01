@@ -66,6 +66,7 @@ export default function AgentDetailPage() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [publishing, setPublishing] = React.useState(false)
+  const [whatsappStatus, setWhatsappStatus] = React.useState<string | null>(null)
   const { setActiveAgentId, notifyAgentConfigUpdated } = useAgentContext()
 
   // Sincronizar aba com URL
@@ -82,6 +83,11 @@ export default function AgentDetailPage() {
       })
       .then((d: AgentDetailBootstrap) => {
         if (!cancelled) setData(d)
+        return fetch(`/api/app/agents/${agentId}/channel/whatsapp`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((channel) => {
+            if (!cancelled && channel?.status) setWhatsappStatus(channel.status as string)
+          })
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Erro')
@@ -300,20 +306,36 @@ export default function AgentDetailPage() {
         </div>
 
         {agent.status === 'draft' && (
-          <Card className="mt-4 border-amber-500/40 bg-amber-500/5">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Configuração pendente</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Este agente está em rascunho e aguardando finalização da configuração do WhatsApp.
-                {pendingParam === 'whatsapp' ? ' Finalize a conexão para começar a receber mensagens reais.' : ''}
-              </p>
-              <Button size="sm" variant="outline" onClick={openWhatsappConfig}>
-                Conectar WhatsApp
-              </Button>
-            </CardContent>
-          </Card>
+          whatsappStatus === 'connected' ? (
+            <Card className="mt-4 border-emerald-500/40 bg-emerald-500/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Seu WhatsApp está conectado!</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-muted-foreground">
+                  Não esqueça de confirmar a ativação do seu agente clicando em publicar.
+                </p>
+                <Button size="sm" onClick={handlePublish} disabled={publishing}>
+                  {publishing ? 'Publicando...' : 'Publicar agente agora!'}
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="mt-4 border-amber-500/40 bg-amber-500/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Configuração pendente</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Este agente está em rascunho e aguardando finalização da configuração do WhatsApp.
+                  {pendingParam === 'whatsapp' ? ' Finalize a conexão para começar a receber mensagens reais.' : ''}
+                </p>
+                <Button size="sm" variant="outline" onClick={openWhatsappConfig}>
+                  Conectar WhatsApp
+                </Button>
+              </CardContent>
+            </Card>
+          )
         )}
 
         <Tabs value={tab} onValueChange={handleTabChange} className="mt-6">
@@ -348,6 +370,7 @@ export default function AgentDetailPage() {
             <AgentChannelWhatsApp
               agentId={agentId}
               onSave={() => notifyAgentConfigUpdated('Canais WhatsApp')}
+              onConnectionStatusChange={setWhatsappStatus}
             />
           </TabsContent>
 

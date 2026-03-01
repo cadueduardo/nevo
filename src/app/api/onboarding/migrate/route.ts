@@ -95,13 +95,12 @@ async function autoProvisionEvolutionForAgent(params: {
   supabaseAdmin: any
   agentId: string
   tenantId: string
-  businessName?: string
 }) {
-  const { supabaseAdmin, agentId, tenantId, businessName } = params
+  const { supabaseAdmin, agentId, tenantId } = params
   const appOrigin = resolveAppOrigin()
   const { baseUrl, apiKey } = getEvolutionEnvConfig()
   const instance = sanitizeInstanceName(
-    `${businessName || 'agente'}-${tenantId.slice(0, 8)}-${agentId.slice(0, 8)}`
+    `nevo-${tenantId.slice(0, 8)}-${agentId.slice(0, 8)}`
   )
 
   if (!baseUrl || !apiKey || !appOrigin) {
@@ -141,10 +140,10 @@ async function autoProvisionEvolutionForAgent(params: {
     `${baseUrl}/instances/create`,
   ]
   const createBodies: Array<Record<string, unknown>> = [
-    { instanceName: instance, qrcode: true, integration: 'WHATSAPP-BAILEYS' },
-    { instanceName: instance, qrcode: true, integration: 'BAILEYS' },
-    { instance: instance, qrcode: true, integration: 'WHATSAPP-BAILEYS' },
-    { instanceName: instance, qrcode: true },
+    { instanceName: instance, qrcode: false, integration: 'WHATSAPP-BAILEYS' },
+    { instanceName: instance, qrcode: false, integration: 'BAILEYS' },
+    { instance: instance, qrcode: false, integration: 'WHATSAPP-BAILEYS' },
+    { instanceName: instance, qrcode: false },
   ]
   const createRes = await tryEvolutionCall(createUrls, 'POST', headers, createBodies)
 
@@ -200,13 +199,28 @@ async function autoProvisionEvolutionForAgent(params: {
 }
 
 function buildBusinessConfigFromCollected(collected: Record<string, any>) {
-  return {
+  const catalogServices = Array.isArray(collected.catalog_services)
+    ? collected.catalog_services
+    : Array.isArray(collected.services)
+      ? collected.services
+      : []
+  const bookingServices = Array.isArray(collected.booking_services)
+    ? collected.booking_services
+    : Array.isArray(collected.services)
+      ? collected.services
+      : []
+
+  const config: Record<string, any> = {
     business_name: collected.business_name,
     business_type: collected.business_type,
     context_mode: collected.context ?? 'booking',
     establishment_address: collected.establishment_address,
     tone_of_voice: collected.tone_of_voice,
-    services: Array.isArray(collected.services) ? collected.services : [],
+    business_config_version: 2,
+    catalog_services: catalogServices,
+    booking_services: bookingServices,
+    // Compat legado durante depreciação: services espelha booking_services
+    services: bookingServices,
     when_client_asks_price_no_value: collected.when_client_asks_price_no_value || 'offer_handoff_or_booking',
     schedule: collected.schedule,
     staff: Array.isArray(collected.staff) ? collected.staff : [],
@@ -219,6 +233,17 @@ function buildBusinessConfigFromCollected(collected: Record<string, any>) {
       ? collected.sequence_eligible_services
       : [],
   }
+  if (collected.branding) {
+    config.branding = {
+      enabled: collected.branding.enabled ?? false,
+      logo_url: collected.branding.logo_url ?? null,
+      company_legal_name: collected.branding.company_legal_name ?? null,
+      cnpj: collected.branding.cnpj ?? null,
+      company_phone: collected.branding.company_phone ?? null,
+      company_email: collected.branding.company_email ?? null,
+    }
+  }
+  return config
 }
 
 export async function POST(req: NextRequest) {
@@ -364,11 +389,48 @@ export async function POST(req: NextRequest) {
         )
       }
 
+      // Criar quote_service quando context inclui orçamento (doc simulação)
+      const hasQuote = collected.context === 'quote' || collected.context === 'both'
+      const quoteServices = Array.isArray(collected.quote_services) ? collected.quote_services : []
+      if (hasQuote && quoteServices.length > 0) {
+        const dynamicVars = Array.isArray(collected.dynamic_variables) ? collected.dynamic_variables : []
+        const externalKeys = Array.isArray(collected.quote_external_variable_keys)
+          ? collected.quote_external_variable_keys.filter((k) => dynamicVars.some((v: any) => v.key === k))
+          : dynamicVars.slice(0, 2).map((v: any) => v.key)
+        for (const qs of quoteServices) {
+          if (!qs?.name?.trim()) continue
+          const variablesSchema = dynamicVars.map((v: any) => ({
+            key: v.key,
+            type: v.type === 'number' ? 'number' : 'text',
+            label: v.label,
+            required: false,
+          }))
+          const pricingType =
+            /area|m²|m2/i.test(qs.pricing_type) ? 'area' :
+            /linear/i.test(qs.pricing_type) ? 'linear' :
+            /unit/i.test(qs.pricing_type) ? 'unit' : 'custom_manual'
+          const keywords = (qs.name || '')
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((w) => w.length > 2)
+            .slice(0, 10)
+          await supabaseAdmin.from('quote_service').insert({
+            agent_id: agent.id,
+            name: qs.name.trim(),
+            pricing_type: pricingType,
+            variables_schema: variablesSchema,
+            pricing_rules: {},
+            external_variable_keys: externalKeys,
+            keywords,
+            active: true,
+          })
+        }
+      }
+
       const evolutionProvision = await autoProvisionEvolutionForAgent({
         supabaseAdmin,
         agentId: agent.id,
         tenantId,
-        businessName: agentName,
       })
 
       return NextResponse.json({
@@ -415,7 +477,148 @@ export async function POST(req: NextRequest) {
       handoff_mode: collected.handoff_mode || 'conditional',
     })
 
-    return NextResponse.json({ success: true, tenant_id: tenantId, redirect_to: '/app' })
+    // Criar agent, agent_setting, flow e quote_service com os dados do onboarding (igual ao fluxo new_agent=true)
+    const agentName =
+      typeof collected.business_name === 'string' && collected.business_name.trim()
+        ? collected.business_name.trim()
+        : 'Novo agente'
+    const businessType =
+      typeof collected.business_type === 'string' && collected.business_type.trim()
+        ? collected.business_type.trim()
+        : null
+
+    const { data: agent, error: agentError } = await supabaseAdmin
+      .from('agent')
+      .insert({
+        tenant_id: tenantId,
+        name: agentName,
+        business_type: businessType,
+        channel_primary: 'whatsapp',
+        status: 'draft',
+      })
+      .select('id')
+      .single()
+
+    if (agentError || !agent?.id) {
+      return NextResponse.json(
+        { error: `Erro ao criar agente: ${agentError?.message ?? 'desconhecido'}` },
+        { status: 500 }
+      )
+    }
+
+    const tone =
+      collected.tone_of_voice === 'friendly'
+        ? 'friendly'
+        : collected.tone_of_voice === 'formal'
+          ? 'formal'
+          : collected.tone_of_voice === 'professional'
+            ? 'professional'
+            : 'professional'
+
+    const handoffMode =
+      typeof collected.handoff_mode === 'string' && collected.handoff_mode.trim()
+        ? collected.handoff_mode
+        : 'conditional'
+
+    const businessConfig = buildBusinessConfigFromCollected(collected)
+
+    const { error: settingError } = await supabaseAdmin
+      .from('agent_setting')
+      .insert({
+        agent_id: agent.id,
+        tone,
+        language: 'pt-BR',
+        handoff_mode: handoffMode,
+        business_config: businessConfig,
+        when_client_asks_price_no_value:
+          businessConfig.when_client_asks_price_no_value || 'offer_handoff_or_booking',
+      })
+
+    if (settingError) {
+      return NextResponse.json(
+        { error: `Agente criado, mas falhou ao salvar configuração: ${settingError.message}` },
+        { status: 500 }
+      )
+    }
+
+    const flowLayout = {
+      nodes: EMPTY_FLOW_DEFINITION.nodes.map((n: { id: string; position: { x: number; y: number } }) => ({
+        id: n.id,
+        position: n.position,
+      })),
+    }
+
+    const { error: flowError } = await supabaseAdmin
+      .from('flow')
+      .insert({
+        tenant_id: tenantId,
+        agent_id: agent.id,
+        name: 'Fluxo Principal',
+        domain: businessType?.toLowerCase() ?? null,
+        version: 1,
+        definition: EMPTY_FLOW_DEFINITION,
+        layout: flowLayout,
+        is_active: true,
+      })
+
+    if (flowError) {
+      return NextResponse.json(
+        { error: `Agente criado, mas falhou ao criar fluxo: ${flowError.message}` },
+        { status: 500 }
+      )
+    }
+
+    // Criar quote_service quando context inclui orçamento
+    const hasQuote = collected.context === 'quote' || collected.context === 'both'
+    const quoteServices = Array.isArray(collected.quote_services) ? collected.quote_services : []
+    if (hasQuote && quoteServices.length > 0) {
+      const dynamicVars = Array.isArray(collected.dynamic_variables) ? collected.dynamic_variables : []
+      const externalKeys = Array.isArray(collected.quote_external_variable_keys)
+        ? collected.quote_external_variable_keys.filter((k) => dynamicVars.some((v: any) => v.key === k))
+        : dynamicVars.slice(0, 2).map((v: any) => v.key)
+      for (const qs of quoteServices) {
+        if (!qs?.name?.trim()) continue
+        const variablesSchema = dynamicVars.map((v: any) => ({
+          key: v.key,
+          type: v.type === 'number' ? 'number' : 'text',
+          label: v.label,
+          required: false,
+        }))
+        const pricingType =
+          /area|m²|m2/i.test(qs.pricing_type) ? 'area' :
+          /linear/i.test(qs.pricing_type) ? 'linear' :
+          /unit/i.test(qs.pricing_type) ? 'unit' : 'custom_manual'
+        const keywords = (qs.name || '')
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((w) => w.length > 2)
+          .slice(0, 10)
+        await supabaseAdmin.from('quote_service').insert({
+          agent_id: agent.id,
+          name: qs.name.trim(),
+          pricing_type: pricingType,
+          variables_schema: variablesSchema,
+          pricing_rules: {},
+          external_variable_keys: externalKeys,
+          keywords,
+          active: true,
+        })
+      }
+    }
+
+    const evolutionProvision = await autoProvisionEvolutionForAgent({
+      supabaseAdmin,
+      agentId: agent.id,
+      tenantId,
+    })
+
+    return NextResponse.json({
+      success: true,
+      agent_id: agent.id,
+      tenant_id: tenantId,
+      redirect_to: `/app/agentes/${agent.id}?tab=canais&pending=whatsapp`,
+      whatsapp_auto_provision: evolutionProvision,
+    })
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Erro interno do servidor' }, { status: 500 })
   }

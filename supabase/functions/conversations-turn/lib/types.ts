@@ -26,6 +26,8 @@ export interface SimulatorConfig {
   context_mode?: SimulatorContextMode
   establishment_address?: EstablishmentAddress
   tone?: "formal" | "amigavel" | "profissional" | "engracado"
+  catalog_services?: Array<{ name: string; description?: string }>
+  booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
   services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
   when_client_asks_price_no_value?: "handoff" | "offer_handoff_or_booking"
   schedule?: {
@@ -64,6 +66,15 @@ export interface SimulatorConfig {
     note?: string
   }
   interaction_style?: "numbered_options" | "conversational" | "hybrid"
+  /** Branding para PDF de orçamento (logo, razão social, etc.). */
+  branding?: {
+    enabled?: boolean
+    logo_url?: string
+    company_legal_name?: string
+    cnpj?: string
+    company_phone?: string
+    company_email?: string
+  }
 }
 
 export interface SimulatorState {
@@ -124,6 +135,14 @@ export interface SimulatorState {
   /** Últimas opções exibidas no turno (fallback genérico para resolver respostas numéricas como "1 - Quero agendar"). */
   last_action_options?: string[]
   booked_slots?: Record<string, Record<string, string[]>>
+  /** Agendamento aguardando confirmação (create_appointment_internal). */
+  appointment_pending?: {
+    date: string
+    time: string
+    service_name: string
+    attendee_name: string
+    duration_minutes: number
+  }
   /** Orçamento calculado aguardando confirmação para gerar PDF (FASE 4). */
   quote_pending?: {
     service_id: string
@@ -169,6 +188,8 @@ export interface ConversationTurnRequest {
     context_mode?: "booking" | "quote" | "both"
     establishment_address?: EstablishmentAddress
     tone?: "formal" | "amigavel" | "profissional" | "engracado"
+    catalog_services?: Array<{ name: string; description?: string }>
+    booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
     services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
     when_client_asks_price_no_value?: "handoff" | "offer_handoff_or_booking"
     schedule?: {

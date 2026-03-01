@@ -2,6 +2,29 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 
+function sanitizeInstanceName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+}
+
+function getEvolutionEnvConfig() {
+  const baseUrl =
+    process.env.EVOLUTION_AUTO_BASE_URL?.trim() ||
+    process.env.EVOLUTION_BASE_URL?.trim() ||
+    null
+  const apiKey =
+    process.env.EVOLUTION_AUTO_API_KEY?.trim() ||
+    process.env.EVOLUTION_API_KEY?.trim() ||
+    null
+  return { baseUrl: baseUrl ? baseUrl.replace(/\/$/, '') : null, apiKey }
+}
+
 /**
  * GET /api/app/agents/[id]/channel/whatsapp
  * Retorna status do canal WhatsApp do agente (sem credenciais).
@@ -81,8 +104,8 @@ export async function GET(
 
 /**
  * PATCH /api/app/agents/[id]/channel/whatsapp
- * Atualiza configuração WhatsApp.
- * Body: provider ('twilio'|'evolution'), twilio_*, evolution_* conforme provider.
+ * Atualiza configuração WhatsApp (Evolution-only).
+ * Body: provider='evolution' (opcional), evolution_*.
  */
 export async function PATCH(
   req: NextRequest,
@@ -131,23 +154,7 @@ export async function PATCH(
     return NextResponse.json({ error: 'Body inválido' }, { status: 400 })
   }
 
-  const provider =
-    body.provider === 'evolution'
-      ? 'evolution'
-      : body.provider === 'twilio' || body.provider === 'custom'
-        ? body.provider
-        : 'twilio'
-
-  const twilioAccountSid =
-    typeof body.twilio_account_sid === 'string' ? body.twilio_account_sid.trim() || null : null
-  const twilioAuthToken =
-    typeof body.twilio_auth_token === 'string' ? body.twilio_auth_token.trim() || null : null
-  const messagingServiceSid =
-    typeof body.messaging_service_sid === 'string'
-      ? body.messaging_service_sid.trim() || null
-      : null
-  const phoneNumber =
-    typeof body.phone_number === 'string' ? body.phone_number.trim() || null : null
+  const provider = 'evolution'
 
   const evolutionBaseUrl =
     typeof body.evolution_base_url === 'string' ? body.evolution_base_url.trim() || null : null
@@ -158,38 +165,45 @@ export async function PATCH(
 
   const { data: existing } = await supabase
     .from('agent_channel_whatsapp')
-    .select('agent_id')
+    .select('agent_id, evolution_base_url, evolution_instance, evolution_api_key_encrypted')
     .eq('agent_id', agentId)
     .maybeSingle()
 
   const row: Record<string, unknown> = {
     provider,
     status: 'disconnected',
+    last_error: null,
     updated_at: new Date().toISOString(),
   }
 
-  if (provider === 'twilio' || provider === 'custom') {
-    if (twilioAccountSid != null) row.twilio_account_sid_encrypted = twilioAccountSid
-    if (twilioAuthToken != null) row.twilio_auth_token_encrypted = twilioAuthToken
-    if (messagingServiceSid != null) row.messaging_service_sid = messagingServiceSid
-    if (phoneNumber != null) row.phone_number = phoneNumber
-    row.evolution_base_url = null
-    row.evolution_instance = null
-    row.evolution_api_key_encrypted = null
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.VERCEL_URL
-    if (baseUrl) {
-      const origin = baseUrl.startsWith('http') ? baseUrl : `https://${baseUrl}`
-      row.webhook_url = `${origin}/api/webhooks/twilio/${agentId}`
-    }
-  } else {
-    if (evolutionBaseUrl != null) row.evolution_base_url = evolutionBaseUrl
-    if (evolutionInstance != null) row.evolution_instance = evolutionInstance
-    if (evolutionApiKey != null) row.evolution_api_key_encrypted = evolutionApiKey
-    row.twilio_account_sid_encrypted = null
-    row.twilio_auth_token_encrypted = null
-    row.messaging_service_sid = null
-    row.webhook_url = null
+  const envEvolution = getEvolutionEnvConfig()
+  const resolvedBaseUrl =
+    evolutionBaseUrl ||
+    (existing?.evolution_base_url as string | null) ||
+    envEvolution.baseUrl
+  const resolvedInstance =
+    evolutionInstance ||
+    (existing?.evolution_instance as string | null) ||
+    sanitizeInstanceName(`nevo-${tenantId.slice(0, 8)}-${agentId.slice(0, 8)}`)
+  const resolvedApiKey =
+    evolutionApiKey ||
+    (existing?.evolution_api_key_encrypted as string | null) ||
+    envEvolution.apiKey
+
+  if (!resolvedBaseUrl || !resolvedInstance || !resolvedApiKey) {
+    return NextResponse.json(
+      {
+        error:
+          'Configuração Evolution incompleta. Preencha URL/instância/API Key ou defina EVOLUTION_AUTO_BASE_URL e EVOLUTION_AUTO_API_KEY no ambiente.',
+      },
+      { status: 400 }
+    )
   }
+
+  row.evolution_base_url = resolvedBaseUrl
+  row.evolution_instance = resolvedInstance
+  row.evolution_api_key_encrypted = resolvedApiKey
+  row.webhook_url = null
 
   if (existing) {
     const { error: updateError } = await supabase
@@ -208,9 +222,6 @@ export async function PATCH(
       agent_id: agentId,
       provider: row.provider,
       status: row.status,
-      twilio_account_sid_encrypted: row.twilio_account_sid_encrypted ?? null,
-      twilio_auth_token_encrypted: row.twilio_auth_token_encrypted ?? null,
-      messaging_service_sid: row.messaging_service_sid ?? null,
       phone_number: row.phone_number ?? null,
       evolution_base_url: row.evolution_base_url ?? null,
       evolution_instance: row.evolution_instance ?? null,

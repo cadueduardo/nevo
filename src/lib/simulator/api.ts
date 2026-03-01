@@ -7,6 +7,9 @@ export interface SimulatorRequest {
   mode?: 'internal' | 'external'
   /** Tipo do actor. Simulador do onboarding envia owner (quem testa é o dono). */
   actor_type?: 'owner' | 'admin' | 'agent' | 'client' | 'unknown'
+  /** tenant_id e agent_id do migrate; garantem que intents internas (agenda, orçamento) usem o agente correto. */
+  tenant_id?: string
+  agent_id?: string
   context?: {
     business_name?: string
     business_type?: string
@@ -21,6 +24,8 @@ export interface SimulatorRequest {
       uf: string
     }
     tone?: 'formal' | 'amigavel' | 'profissional' | 'engracado'
+    catalog_services?: Array<{ name: string; description?: string }>
+    booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
     services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
     when_client_asks_price_no_value?: 'handoff' | 'offer_handoff_or_booking'
     schedule?: {

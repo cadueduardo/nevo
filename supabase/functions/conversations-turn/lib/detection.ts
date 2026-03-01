@@ -189,8 +189,9 @@ export function detectModeFromText(text: string): "booking" | "quote" | null {
   const msg = normalizeText(text)
   const booking = /(agendar|agenda|horario|marcar|consulta|atendimento)/.test(msg)
   const quote = /(orcamento|orcar|preco|valor|cotacao|cotar)/.test(msg)
-  if (booking && !quote) return "booking"
   if (quote && !booking) return "quote"
-  if (booking && quote) return "booking"
+  if (booking && !quote) return "booking"
+  // Em caso ambíguo com palavras de ambos os modos, prioriza orçamento.
+  if (booking && quote) return "quote"
   return null
 }

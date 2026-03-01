@@ -8,12 +8,13 @@ import { restoreOnboardingSession } from '@/lib/onboarding/restore'
 import { sendOnboardingMessage } from '@/lib/onboarding/api'
 import type { OnboardingStep } from '@/types/onboarding'
 import { Button } from '@/components/ui/button'
-import { SimulatorPanel } from '@/features/simulator/components/SimulatorPanel'
+import { SimulatorPanel, type SimulatorRole } from '@/features/simulator/components/SimulatorPanel'
 import { cn } from '@/lib/utils'
 import { sendSimulatorMessage, type SimulatorRequest } from '@/lib/simulator/api'
 import { createClient } from '@/lib/supabase/client'
 import { AuthenticatedHeaderUserMenu } from '@/components/shared/AuthenticatedHeaderUserMenu'
 import Link from 'next/link'
+import { normalizePhoneNumber } from '@/lib/actor'
 
 const TYPING_PLACEHOLDERS = [
   'Ex: Tenho um escritório de advocacia e recebo muitos contatos no WhatsApp',
@@ -86,6 +87,36 @@ function parseSummaryEditableItemsFromText(text: string) {
   return items
 }
 
+function normalizeSignupActionOptions(
+  actionOptions: string[] | undefined,
+  isAuthenticated: boolean
+): string[] | undefined {
+  if (!Array.isArray(actionOptions) || actionOptions.length === 0) return actionOptions
+
+  if (isAuthenticated) {
+    return ['Simular atendimento', 'Conectar meu WhatsApp agora', 'Continuar no painel']
+  }
+
+  const mapped = actionOptions.map((opt) => {
+    if (opt === 'Conectar agora') return 'Conectar meu WhatsApp agora'
+    if (opt === 'Depois' || opt === 'Continuar depois') return 'Deixar para depois'
+    return opt
+  })
+
+  const preferredOrder = [
+    'Criar conta',
+    'Tenho conta',
+    'Simular atendimento',
+    'Conectar meu WhatsApp agora',
+    'Deixar para depois',
+  ]
+
+  const uniqueMapped = Array.from(new Set(mapped))
+  const ordered = preferredOrder.filter((opt) => uniqueMapped.includes(opt))
+  const extra = uniqueMapped.filter((opt) => !preferredOrder.includes(opt))
+  return [...ordered, ...extra]
+}
+
 export function LandingChat() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -104,11 +135,20 @@ export function LandingChat() {
   const [authChoicePending, setAuthChoicePending] = useState(false)
   const [authenticatedEmail, setAuthenticatedEmail] = useState<string | null>(null)
   const [configuredAgentRedirect, setConfiguredAgentRedirect] = useState<string | null>(null)
+  /** tenant_id e agent_id do migrate; usados no simulador para intents internas (agenda, orçamento). */
+  const [simulatorTenantId, setSimulatorTenantId] = useState<string | null>(null)
+  const [simulatorAgentId, setSimulatorAgentId] = useState<string | null>(null)
   const [pendingDraftRedirect, setPendingDraftRedirect] = useState<string | null>(null)
   const [isRestartDialogOpen, setIsRestartDialogOpen] = useState(false)
   const [signupError, setSignupError] = useState<string | null>(null)
   const [focusTrigger, setFocusTrigger] = useState(0)
   const [simulatorFocusTrigger, setSimulatorFocusTrigger] = useState(0)
+  const [simulatorRole, setSimulatorRole] = useState<SimulatorRole>('client')
+  /** FASE 6.5 — Fluxo Conectar WhatsApp (pairing code) */
+  const [connectFlowState, setConnectFlowState] = useState<'idle' | 'awaiting_phone' | 'connecting' | 'connected' | 'error'>('idle')
+  const [connectPairingCode, setConnectPairingCode] = useState<string | null>(null)
+  const [pendingAuthIntent, setPendingAuthIntent] = useState<'connect_whatsapp' | null>(null)
+  const connectPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const supabase = useMemo(() => createClient(), [])
   const retriedCompletedSessionRef = useRef(false)
   const migrationCompletedRef = useRef(false)
@@ -171,6 +211,45 @@ export function LandingChat() {
     }
   }, [authenticatedEmail])
 
+  // FASE 6.5 — Polling de status da conexão WhatsApp
+  useEffect(() => {
+    if (connectFlowState !== 'connecting' || !simulatorAgentId) return
+
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(
+          `/api/whatsapp/connect/status?agent_id=${encodeURIComponent(simulatorAgentId)}`
+        )
+        const data = (await res.json().catch(() => ({}))) as { status?: string }
+        if (data.status === 'connected') {
+          setConnectFlowState('connected')
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: (Date.now() + 1).toString(),
+              role: 'assistant',
+              kind: 'text',
+              content: 'Conectado ✅ A partir de agora o Nevo atende por esse número.',
+              timestamp: new Date(),
+            },
+          ])
+        }
+      } catch {
+        /* ignora */
+      }
+    }
+
+    checkStatus()
+    const id = setInterval(checkStatus, 4000)
+    connectPollRef.current = id
+    return () => {
+      if (connectPollRef.current) {
+        clearInterval(connectPollRef.current)
+        connectPollRef.current = null
+      }
+    }
+  }, [connectFlowState, simulatorAgentId])
+
   // Restaurar sessão após F5: buscar do Supabase e re-hidratar estado
   useEffect(() => {
     if (!sessionId || !supabase) return
@@ -187,16 +266,23 @@ export function LandingChat() {
 
       const hydrated: Message[] = stored.map((m, i) => {
         const isLastAssistant = m.role === 'assistant' && i === stored.length - 1
-        const needsSignupCard = isLastAssistant && lastMeta?.requires_action === 'signup'
         const displayContent = m.role === 'user' ? userMessageDisplayContent(m.content) : m.content
+        const requiresAction = isLastAssistant ? lastMeta?.requires_action ?? undefined : undefined
+        const actionOptionsRaw = isLastAssistant ? lastMeta?.action_options : undefined
+        const actionOptions =
+          requiresAction === 'signup'
+            ? normalizeSignupActionOptions(actionOptionsRaw, Boolean(authenticatedEmail))
+            : actionOptionsRaw
         return {
           id: `restore-${i}-${Date.now()}`,
           role: m.role,
-          kind: needsSignupCard ? 'signup' : 'text',
+          // Não abrir automaticamente o card de signup ao restaurar.
+          // Mantemos o texto + botões do backend para evitar sumiço de CTAs como "Conectar meu WhatsApp agora".
+          kind: 'text',
           content: displayContent,
           timestamp: new Date(),
-          actionOptions: isLastAssistant ? lastMeta?.action_options : undefined,
-          requiresAction: isLastAssistant ? lastMeta?.requires_action ?? undefined : undefined,
+          actionOptions,
+          requiresAction,
         }
       })
       setMessages(hydrated)
@@ -215,7 +301,7 @@ export function LandingChat() {
     return () => {
       cancelled = true
     }
-  }, [sessionId, supabase])
+  }, [sessionId, supabase, authenticatedEmail])
 
   const enableSimulator = () => {
     if (!isSimulatorAvailable) setIsSimulatorAvailable(true)
@@ -232,6 +318,94 @@ export function LandingChat() {
     extra?: { edits?: Array<{ id: string; value: string }>; address?: { cep: string; logradouro: string; numero: string; complemento?: string; bairro: string; localidade: string; uf: string } }
   ) => {
     if ((!content.trim() && !extra?.address) || isLoading || !sessionId) return
+
+    // FASE 6.5 — Fluxo Conectar WhatsApp: número para pairing
+    if (connectFlowState === 'awaiting_phone' && content.trim()) {
+      const phone = normalizePhoneNumber(content)
+      if (phone.length < 12) {
+        setMessages((prev) => [
+          ...prev,
+          { id: Date.now().toString(), role: 'user', content: content, timestamp: new Date() },
+          {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            kind: 'text',
+            content: 'Número inválido. Use DDI+DDD+número (ex: 5511999999999).',
+            timestamp: new Date(),
+          },
+        ])
+        return
+      }
+      const agentId = simulatorAgentId
+      if (!agentId) {
+        setMessages((prev) => [
+          ...prev,
+          { id: Date.now().toString(), role: 'user', content: content, timestamp: new Date() },
+          {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            kind: 'text',
+            content: 'Agente ainda não configurado. Conclua o cadastro primeiro.',
+            timestamp: new Date(),
+          },
+        ])
+        setConnectFlowState('error')
+        return
+      }
+      setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'user', content: phone, timestamp: new Date() }])
+      setIsLoading(true)
+      try {
+        const res = await fetch('/api/whatsapp/connect/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId, phone }),
+        })
+        const data = (await res.json().catch(() => ({}))) as { pairingCode?: string; error?: string; message?: string }
+        if (!res.ok || !data.pairingCode) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: (Date.now() + 1).toString(),
+              role: 'assistant',
+              kind: 'text',
+              content: data.error || 'Não foi possível obter o código. Tente novamente.',
+              timestamp: new Date(),
+              actionOptions: ['Regerar código', 'Depois'],
+            },
+          ])
+          setConnectFlowState('error')
+          setIsLoading(false)
+          return
+        }
+        setConnectPairingCode(data.pairingCode)
+        setConnectFlowState('connecting')
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            kind: 'text',
+            content: `Pronto. Use este código para vincular: **${data.pairingCode}**\n\nNo WhatsApp: Configurações → Aparelhos conectados → Vincular dispositivo → Vincular com código.\n\nAguardando conexão…`,
+            timestamp: new Date(),
+            actionOptions: ['Regerar código'],
+          },
+        ])
+      } catch (e) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: 'assistant',
+            kind: 'text',
+            content: 'Erro ao conectar. Tente novamente.',
+            timestamp: new Date(),
+          },
+        ])
+        setConnectFlowState('error')
+      }
+      setIsLoading(false)
+      return
+    }
 
     // Adicionar mensagem do usuário (omitir se for envio apenas de endereço)
     if (content.trim()) {
@@ -302,26 +476,35 @@ export function LandingChat() {
           ? parseSummaryEditableItemsFromText(response.assistant_message)
           : undefined
 
+      const normalizedActionOptions =
+        response.requires_action === 'signup'
+          ? normalizeSignupActionOptions(response.action_options, Boolean(authenticatedEmail))
+          : response.action_options
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         kind: response.requires_action === 'address' ? 'address' : 'text',
         content: response.assistant_message,
         timestamp: new Date(),
-        actionOptions: response.action_options,
+        actionOptions: normalizedActionOptions,
         editableItems: response.editable_items || (inferredEditableItems && inferredEditableItems.length > 0 ? inferredEditableItems : undefined),
         selectableOptions: response.selectable_options,
         requiresAction: response.requires_action,
         allowCustomInput:
+          response.requires_action === 'catalog_services_list' ||
+          response.requires_action === 'booking_services_list' ||
           response.requires_action === 'services_list' ||
           response.requires_action === 'services_edit' ||
-          response.requires_action === 'quote_variables',
+          response.requires_action === 'quote_variables' ||
+          response.requires_action === 'quote_services_list' ||
+          response.requires_action === 'quote_external_variables',
       }
 
       setMessages((prev) => [...prev, assistantMessage])
       setCurrentStep(response.next_step as OnboardingStep)
 
-      // Se backend pedir signup: manter apenas a mensagem do backend (Criar conta, Tenho conta, Continuar depois).
+      // Se backend pedir signup: manter apenas a mensagem do backend (Criar conta, Tenho conta, Deixar para depois).
       // Não adicionar bloco duplicado - "Criar conta" abre o formulário direto (Google + email/senha).
       if (response.requires_action === 'signup') {
         const { data: { user } } = await supabase.auth.getUser()
@@ -335,12 +518,20 @@ export function LandingChat() {
             })
             if (migrateResponse.ok) {
               migrationCompletedRef.current = true
-              const migrateData = await migrateResponse.json().catch(() => ({}))
+              const migrateData = await migrateResponse.json().catch(() => ({})) as {
+                redirect_to?: string
+                agent_id?: string
+                tenant_id?: string
+              }
               nextPath =
-                typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
-                  ? (migrateData as { redirect_to: string }).redirect_to
-                  : '/app'
+                typeof migrateData.redirect_to === 'string' ? migrateData.redirect_to : '/app'
               setConfiguredAgentRedirect(nextPath)
+              if (migrateData.agent_id) setSimulatorAgentId(migrateData.agent_id)
+              else {
+                const agentMatch = nextPath.match(/^\/app\/agentes\/([a-f0-9-]+)/i)
+                if (agentMatch) setSimulatorAgentId(agentMatch[1])
+              }
+              if (migrateData.tenant_id) setSimulatorTenantId(migrateData.tenant_id)
             } else {
               const err = await migrateResponse.json().catch(() => ({}))
               const fallbackName =
@@ -377,7 +568,7 @@ export function LandingChat() {
             kind: 'text',
             content: `Seu agente ${fallbackName} foi configurado. O que você prefere fazer?`,
             timestamp: new Date(),
-            actionOptions: ['Simular atendimento', 'Configurar Agente'],
+            actionOptions: ['Simular atendimento', 'Conectar meu WhatsApp agora', 'Continuar no painel'],
           }
           setMessages((prev) => {
             const base = [...prev]
@@ -385,7 +576,7 @@ export function LandingChat() {
             return [...base, doneMessage]
           })
           setIsSimulatorAvailable(true)
-          setAuthChoicePending(false)
+          setAuthChoicePending(true)
           setCurrentStep('completed')
           if (!configuredAgentRedirect) setConfiguredAgentRedirect(nextPath)
           return
@@ -475,6 +666,8 @@ export function LandingChat() {
     setIsLoading(false)
     setAuthChoicePending(false)
     setConfiguredAgentRedirect(null)
+    setSimulatorTenantId(null)
+    setSimulatorAgentId(null)
     setSignupError(null)
     setIsSimulatorAvailable(false)
     setIsSimulatorOpen(false)
@@ -583,9 +776,39 @@ export function LandingChat() {
         if (r3.next_step === 'completed') {
           setMessages((prev) => prev.filter((m) => m.kind !== 'signup'))
           lastSignupCredentialsRef.current = { email: payload.email, password: payload.password }
-          appendAssistant('Conta criada! O que você prefere fazer agora?', {
-            actionOptions: ['Acessar minha área', 'Simular atendimento'],
+          // Backend já fez a migração; fazer login para ter sessão e usar agent_id do response
+          migrationCompletedRef.current = true
+          const ext = r3.extracted_data as { agent_id?: string; tenant_id?: string } | undefined
+          const agentId = ext?.agent_id
+          const tenantId = ext?.tenant_id
+          if (agentId) {
+            setSimulatorAgentId(agentId)
+            setConfiguredAgentRedirect(`/app/agentes/${agentId}?tab=canais&pending=whatsapp`)
+          }
+          if (tenantId) setSimulatorTenantId(tenantId)
+          const { error: signInError } = await supabase.auth.signInWithPassword({
+            email: payload.email,
+            password: payload.password,
           })
+          if (signInError) {
+            appendAssistant(
+              'Conta criada! Use o link "Entrar" no topo para acessar com seu email e senha.',
+              { actionOptions: ['Simular atendimento'] }
+            )
+          } else {
+            if (pendingAuthIntent === 'connect_whatsapp') {
+              setPendingAuthIntent(null)
+              setAuthChoicePending(true)
+              setConnectFlowState('awaiting_phone')
+              appendAssistant(
+                'Conta criada e login concluído ✅\n\nAgora vamos conectar seu WhatsApp. Me confirme o número com DDI/DDD (ex: 5511999999999).'
+              )
+            } else {
+              appendAssistant('Conta criada! O que você prefere fazer agora?', {
+                actionOptions: ['Acessar minha área', 'Simular atendimento'],
+              })
+            }
+          }
         }
       }
     } catch (e: any) {
@@ -629,12 +852,27 @@ export function LandingChat() {
         return
       }
       migrationCompletedRef.current = true
-      const migrateData = await migrateResponse.json().catch(() => ({}))
+      const migrateData = (await migrateResponse.json().catch(() => ({}))) as {
+        redirect_to?: string
+        agent_id?: string
+        tenant_id?: string
+      }
+      if (migrateData.agent_id) setSimulatorAgentId(migrateData.agent_id)
+      if (migrateData.tenant_id) setSimulatorTenantId(migrateData.tenant_id)
       const nextPath =
-        typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
-          ? (migrateData as { redirect_to: string }).redirect_to
+        typeof migrateData.redirect_to === 'string'
+          ? migrateData.redirect_to
           : '/app'
       setMessages((prev) => prev.filter((m) => m.kind !== 'login'))
+      if (pendingAuthIntent === 'connect_whatsapp') {
+        setPendingAuthIntent(null)
+        setAuthChoicePending(true)
+        setConnectFlowState('awaiting_phone')
+        appendAssistant(
+          'Login concluído ✅\n\nAgora vamos conectar seu WhatsApp. Me confirme o número com DDI/DDD (ex: 5511999999999).'
+        )
+        return
+      }
       setAuthChoicePending(false)
       router.push(nextPath)
       router.refresh()
@@ -648,6 +886,25 @@ export function LandingChat() {
   const handleLoginCancel = () => {
     setMessages((prev) => prev.filter((m) => m.kind !== 'login'))
     setAuthChoicePending(false)
+    setPendingAuthIntent(null)
+  }
+
+  const handleLoginCreateAccount = () => {
+    setMessages((prev) => {
+      const withoutLogin = prev.filter((m) => m.kind !== 'login')
+      return [
+        ...withoutLogin,
+        {
+          id: (Date.now() + 3).toString(),
+          role: 'assistant',
+          kind: 'signup',
+          content: '',
+          timestamp: new Date(),
+          requiresAction: 'signup',
+        },
+      ]
+    })
+    setAuthChoicePending(true)
   }
 
   const handleAddressSubmit = async (payload: {
@@ -694,52 +951,49 @@ export function LandingChat() {
     if (action === 'Acessar minha área' && lastSignupCredentialsRef.current) {
       const cred = lastSignupCredentialsRef.current
       lastSignupCredentialsRef.current = null
+      const redirectTo = configuredAgentRedirect || '/app'
       try {
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
-          if (isNewAgentOnboarding && !migrationCompletedRef.current) {
+          if (!migrationCompletedRef.current) {
             const migrateResponse = await fetch('/api/onboarding/migrate', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ session_id: sessionId, new_agent: true }),
+              body: JSON.stringify({ session_id: sessionId, new_agent: isNewAgentOnboarding }),
             })
             if (migrateResponse.ok) {
               migrationCompletedRef.current = true
-              const migrateData = await migrateResponse.json().catch(() => ({}))
+              const migrateData = (await migrateResponse.json().catch(() => ({}))) as { redirect_to?: string }
               const nextPath =
-                typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
-                  ? (migrateData as { redirect_to: string }).redirect_to
-                  : '/app'
+                typeof migrateData.redirect_to === 'string' ? migrateData.redirect_to : redirectTo
               router.push(nextPath)
               router.refresh()
               return
             }
           }
-          router.push('/app')
+          router.push(redirectTo)
           router.refresh()
           return
         }
         const { error } = await supabase.auth.signInWithPassword({ email: cred.email, password: cred.password })
         if (!error) {
-          if (isNewAgentOnboarding && !migrationCompletedRef.current) {
+          if (!migrationCompletedRef.current) {
             const migrateResponse = await fetch('/api/onboarding/migrate', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ session_id: sessionId, new_agent: true }),
+              body: JSON.stringify({ session_id: sessionId, new_agent: isNewAgentOnboarding }),
             })
             if (migrateResponse.ok) {
               migrationCompletedRef.current = true
-              const migrateData = await migrateResponse.json().catch(() => ({}))
+              const migrateData = (await migrateResponse.json().catch(() => ({}))) as { redirect_to?: string }
               const nextPath =
-                typeof (migrateData as { redirect_to?: unknown }).redirect_to === 'string'
-                  ? (migrateData as { redirect_to: string }).redirect_to
-                  : '/app'
+                typeof migrateData.redirect_to === 'string' ? migrateData.redirect_to : redirectTo
               router.push(nextPath)
               router.refresh()
               return
             }
           }
-          router.push('/app')
+          router.push(redirectTo)
           router.refresh()
         } else {
           appendAssistant('Não foi possível entrar. Use o link "Entrar" no topo para acessar com seu email e senha.')
@@ -755,10 +1009,40 @@ export function LandingChat() {
       setIsSimulatorOpen(true)
       return
     }
-    if (action === 'Configurar Agente') {
+    if (action === 'Configurar Agente' || action === 'Continuar no painel') {
       const target = configuredAgentRedirect || '/app/agentes'
       router.push(target)
       router.refresh()
+      return
+    }
+    if (action === 'Conectar agora' || action === 'Conectar meu WhatsApp agora') {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        setPendingAuthIntent('connect_whatsapp')
+        setAuthChoicePending(true)
+        appendAssistant('Para conectar seu WhatsApp, primeiro faça login.\n\nSe ainda não tem conta, clique em "Criar conta".')
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 3).toString(),
+            role: 'assistant',
+            kind: 'login',
+            content: '',
+            timestamp: new Date(),
+            requiresAction: 'signup',
+          },
+        ])
+        return
+      }
+      if (!simulatorAgentId) {
+        appendAssistant('Conclua o cadastro primeiro para conectar o WhatsApp.')
+        return
+      }
+      setPendingAuthIntent(null)
+      setConnectFlowState('awaiting_phone')
+      appendAssistant(
+        'Vou preparar a conexão do seu WhatsApp.\n\nMe confirme o número com DDI/DDD (ex: 5511999999999).'
+      )
       return
     }
     if (authChoicePending) {
@@ -794,27 +1078,17 @@ export function LandingChat() {
         setIsSimulatorOpen(true)
         return
       }
-      if (action === 'Continuar depois') {
-        appendAssistant('Sem problemas. Quando quiser, é só criar sua conta por aqui.')
+      if (action === 'Deixar para depois' || action === 'Continuar depois' || action === 'Depois') {
+        appendAssistant(
+          'Sem problemas. Quando quiser, é só criar sua conta por aqui. Para conectar o WhatsApp depois, diga: conectar whatsapp.'
+        )
         setAuthChoicePending(false)
+        setPendingAuthIntent(null)
         return
       }
-      if (action === 'Conectar agora') {
-        const { data: { user } } = await supabase.auth.getUser()
-        if (user) {
-          appendAssistant(
-            'O recurso de conexão por código está em desenvolvimento. Em breve você poderá conectar seu WhatsApp aqui. Por enquanto, crie sua conta e teste o simulador.'
-          )
-        } else {
-          appendAssistant(
-            'Para conectar seu WhatsApp, crie sua conta primeiro. Depois você poderá conectar aqui.'
-          )
-        }
-        return
-      }
-      if (action === 'Depois') {
-        appendAssistant('Sem problemas. Quando quiser conectar, diga: conectar whatsapp')
-        setAuthChoicePending(false)
+      if (action === 'Regerar código' && connectFlowState !== 'idle' && simulatorAgentId) {
+        setConnectFlowState('awaiting_phone')
+        appendAssistant('Me confirme o número com DDI/DDD (ex: 5511999999999).')
         return
       }
     }
@@ -840,8 +1114,10 @@ export function LandingChat() {
       session_id: simulatorSessionId || sessionId,
       conversation_id: simulatorConversationId || undefined,
       channel: 'web_simulator',
-      mode: 'internal',
-      actor_type: 'owner',
+      mode: simulatorRole === 'owner' ? 'internal' : 'external',
+      actor_type: simulatorRole === 'owner' ? 'owner' : 'client',
+      ...(simulatorTenantId && { tenant_id: simulatorTenantId }),
+      ...(simulatorAgentId && { agent_id: simulatorAgentId }),
       context: {
         business_name: onboardingData.business_name,
         business_type: onboardingData.business_type,
@@ -871,7 +1147,7 @@ export function LandingChat() {
         sequence_eligible_services: onboardingData.sequence_eligible_services,
       },
     }),
-    [onboardingData, sessionId, simulatorSessionId, simulatorConversationId]
+    [onboardingData, sessionId, simulatorSessionId, simulatorConversationId, simulatorTenantId, simulatorAgentId, simulatorRole]
   )
 
   const handleSimulatorSend = async (content: string) => {
@@ -920,6 +1196,15 @@ export function LandingChat() {
   const handleSimulatorReset = () => {
     setSimulatorMessages([])
     setIsSimulatorLoading(false)
+    setSimulatorConversationId(null)
+    if (sessionId) {
+      setSimulatorSessionId(`${sessionId}:sim:${Date.now()}`)
+    }
+  }
+
+  const handleSimulatorRoleChange = (newRole: SimulatorRole) => {
+    setSimulatorRole(newRole)
+    setSimulatorMessages([])
     setSimulatorConversationId(null)
     if (sessionId) {
       setSimulatorSessionId(`${sessionId}:sim:${Date.now()}`)
@@ -977,6 +1262,7 @@ export function LandingChat() {
             onClearSignupError={() => setSignupError(null)}
             onLoginSubmit={handleLoginSubmit}
             onLoginCancel={handleLoginCancel}
+            onLoginCreateAccount={handleLoginCreateAccount}
             composerFooter={composerFooter}
             header={
               <div className="px-4 py-3 flex items-center justify-between gap-3">
@@ -1028,6 +1314,8 @@ export function LandingChat() {
               onSend={handleSimulatorSend}
               onReset={handleSimulatorReset}
               onClose={() => setIsSimulatorOpen(false)}
+              role={simulatorRole}
+              onRoleChange={handleSimulatorRoleChange}
               focusTrigger={simulatorFocusTrigger}
             />
           </div>

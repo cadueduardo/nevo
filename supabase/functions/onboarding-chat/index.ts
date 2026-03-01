@@ -39,6 +39,14 @@ interface OnboardingRequest {
     localidade: string
     uf: string
   }
+  /** Dados de branding (logo, razão social, etc.) quando step = branding_* */
+  branding?: {
+    logo_url?: string
+    company_legal_name?: string
+    cnpj?: string
+    company_phone?: string
+    company_email?: string
+  }
 }
 
 interface OnboardingResponse {
@@ -400,15 +408,25 @@ function getStepContextualHint(step: string): string {
     business_type: 'Informe o ramo ou tipo do seu negócio (ex.: barbearia, clínica, consultoria).',
     business_name: 'Informe o nome do seu negócio ou empresa.',
     context: 'Escolha se quer configurar agendamento, orçamento ou ambos.',
+    catalog_services_list: 'Selecione os serviços/produtos do catálogo (lista geral do que você oferece).',
+    booking_services_list: 'Selecione o que pode ser agendado pelo WhatsApp.',
     services_list: 'Selecione os serviços que você oferece ou digite outros no campo. Depois pode clicar em Continuar.',
     services_edit: 'Revise a lista de serviços, adicione ou remova itens e clique em Continuar quando terminar.',
     sequence_booking_offer: 'Escolha se o cliente pode agendar vários serviços na mesma visita ou só um por vez.',
     sequence_services_select: 'Selecione quais serviços podem ser combinados em sequência (ex.: banho + tosa).',
     schedule_days: 'Marque os dias da semana em que você atende.',
     staff_mode: 'Informe se você atende sozinho ou tem colaboradores.',
+    quote_services_list: 'Selecione ou digite os serviços que podem ser orçados (ex.: Cortina, Persiana).',
+    quote_service_pricing: 'Escolha como você cobra: por m², metro linear, unidade ou sob consulta.',
+    quote_external_variables: 'Selecione quais variáveis são suficientes para a estimativa rápida do cliente.',
     summary: 'Revise o resumo e confirme se está correto ou se quer ajustar algo.',
     summary_edit: 'Edite os campos que quiser e clique em Salvar ajustes para continuar.',
     signup_request: 'Escolha criar conta, entrar na sua conta ou continuar depois.',
+    branding_offer: 'Escolha se quer personalizar o PDF do orçamento com logo e dados da empresa agora ou depois.',
+    branding_company_legal_name: 'Informe a razão social da empresa (nome oficial).',
+    branding_cnpj: 'Informe o CNPJ com 14 dígitos (somente números).',
+    branding_company_phone: 'Informe o telefone com DDD (ex.: 11999999999).',
+    branding_company_email: 'Informe o e-mail de contato da empresa.',
   }
   return hints[step] || 'Responda à pergunta acima ou use uma das opções disponíveis.'
 }
@@ -418,6 +436,10 @@ function userMessageDisplayContent(message: string): string {
   const m = (message || '').trim()
   const seqMatch = m.match(/^select_sequence_services:(.+)$/i)
   if (seqMatch) return `Serviços em sequência: ${seqMatch[1].trim()}`
+  const catalogMatch = m.match(/^select_catalog_services:(.+)$/i)
+  if (catalogMatch) return `Catálogo selecionado: ${catalogMatch[1].trim()}`
+  const bookingMatch = m.match(/^select_booking_services:(.+)$/i)
+  if (bookingMatch) return `Serviços agendáveis selecionados: ${bookingMatch[1].trim()}`
   const svcMatch = m.match(/^select_services:(.+)$/i)
   if (svcMatch) return `Serviços selecionados: ${svcMatch[1].trim()}`
   const daysMatch = m.match(/^select_days:(.+)$/i)
@@ -426,6 +448,10 @@ function userMessageDisplayContent(message: string): string {
   if (holMatch) return holMatch[1].trim() ? `Feriados selecionados: ${holMatch[1].trim()}` : 'Feriados selecionados'
   const qvMatch = m.match(/^select_quote_variables:(.+)$/i)
   if (qvMatch) return `Variáveis de orçamento: ${qvMatch[1].trim()}`
+  const qsMatch = m.match(/^select_quote_services:(.+)$/i)
+  if (qsMatch) return `Serviços de orçamento: ${qsMatch[1].trim()}`
+  const qevMatch = m.match(/^select_quote_external_variables:(.+)$/i)
+  if (qevMatch) return `Variáveis para estimativa: ${qevMatch[1].trim()}`
   return m
 }
 
@@ -1220,6 +1246,20 @@ function sanitizeExtractionResult(
   return extracted
 }
 
+function getCatalogServicesFromData(data: Record<string, any>): Array<{ name: string; description?: string }> {
+  if (Array.isArray(data.catalog_services) && data.catalog_services.length > 0) return data.catalog_services
+  if (Array.isArray(data.services) && data.services.length > 0) return data.services
+  return []
+}
+
+function getBookingServicesFromData(
+  data: Record<string, any>
+): Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }> {
+  if (Array.isArray(data.booking_services) && data.booking_services.length > 0) return data.booking_services
+  if (Array.isArray(data.services) && data.services.length > 0) return data.services
+  return []
+}
+
 function parseDaysFromText(message: string): string[] {
   const lower = (message || '').toLowerCase()
 
@@ -1983,12 +2023,16 @@ async function processMessage(
     const merged = { ...collectedData, context: selected }
     const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('context', merged))
 
-    if (next.step === 'services_list' && Array.isArray(merged.services) && merged.services.length > 0) {
+    if (
+      (next.step === 'booking_services_list' || next.step === 'services_list') &&
+      Array.isArray(merged.booking_services) &&
+      merged.booking_services.length > 0
+    ) {
       return {
-        assistant_message: buildServicesReviewMessage(merged.services),
-        next_step: 'services_list',
+        assistant_message: buildServicesReviewMessage(merged.booking_services),
+        next_step: 'booking_services_list',
         extracted_data: { context: selected, services_confirmed: false },
-        editable_items: buildServiceItems(merged.services),
+        editable_items: buildServiceItems(merged.booking_services),
         action_options: ['Continuar'],
         requires_action: 'services_edit',
       }
@@ -2988,6 +3032,240 @@ async function processMessage(
       extracted_data: { staff: merged.staff, staff_setup_index: merged.staff_setup_index },
       requires_action: next.requires_action,
       action_options: next.action_options,
+      ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+    }
+  }
+
+  // Step 12 (doc): quote_services_list
+  if (currentStep === 'quote_services_list') {
+    const selectMatch = text.match(/^select_quote_services:(.+)$/i)
+    const services = selectMatch
+      ? selectMatch[1].split(',').map((s) => s.trim()).filter(Boolean)
+      : parseServicesList(text).map((s) => s.name)
+    if (services.length === 0) {
+      const examples = buildServiceExamples(collectedData.business_type, (collectedData as any).business_segment)
+      return {
+        assistant_message:
+          'Selecione nos checkboxes quais serviços podem ser orçados, ou digite (ex.: Cortina, Persiana).',
+        next_step: 'quote_services_list',
+        selectable_options: buildServiceSelectableOptions(examples),
+        requires_action: 'quote_services_list',
+      }
+    }
+    const quoteServices = services.map((name) => ({ name, pricing_type: '' }))
+    const merged = { ...collectedData, quote_services: quoteServices }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('quote_services_list', merged))
+    return {
+      assistant_message: `✅ Serviços de orçamento: ${services.join(', ')}.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { quote_services: quoteServices },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  // Step 13 (doc): quote_service_pricing
+  if (currentStep === 'quote_service_pricing') {
+    const pricingMap: Record<string, string> = {
+      'por m²': 'area',
+      'por m2': 'area',
+      'área': 'area',
+      'area': 'area',
+      'metro linear': 'linear',
+      'linear': 'linear',
+      'unidade': 'unit',
+      'unit': 'unit',
+      'sob consulta': 'custom_manual',
+      'consulta': 'custom_manual',
+    }
+    const lower = text.toLowerCase().trim()
+    let pricingType = 'custom_manual'
+    for (const [k, v] of Object.entries(pricingMap)) {
+      if (lower.includes(k)) {
+        pricingType = v
+        break
+      }
+    }
+    if (lower.includes('m²') || lower.includes('m2')) pricingType = 'area'
+    if (lower.includes('linear')) pricingType = 'linear'
+    if (lower.includes('unidade')) pricingType = 'unit'
+
+    const quoteServices = Array.isArray((collectedData as any).quote_services) ? [...(collectedData as any).quote_services] : []
+    const idx = quoteServices.findIndex((s: any) => !s.pricing_type)
+    if (idx >= 0) {
+      quoteServices[idx] = { ...quoteServices[idx], pricing_type: pricingType }
+      const merged = { ...collectedData, quote_services: quoteServices }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('quote_service_pricing', merged))
+      return {
+        assistant_message: `✅ ${quoteServices[idx].name}: cobrança por ${pricingType === 'area' ? 'm²' : pricingType === 'linear' ? 'metro linear' : pricingType === 'unit' ? 'unidade' : 'consulta'}.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { quote_services: quoteServices },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+      }
+    }
+    const merged = { ...collectedData, quote_services: quoteServices }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('quote_service_pricing', merged))
+    return {
+      assistant_message: next.message,
+      next_step: next.step,
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+      ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+    }
+  }
+
+  // Step 15 (doc): quote_external_variables
+  if (currentStep === 'quote_external_variables') {
+    const selectMatch = text.match(/^select_quote_external_variables:(.+)$/i)
+    const selected = selectMatch ? selectMatch[1].split(',').map((s) => s.trim()).filter(Boolean) : []
+    const internalVars = collectedData.dynamic_variables || []
+    const validKeys = internalVars.map((v) => v.key)
+    const externalKeys = selected.filter((k) => validKeys.includes(k))
+    if (externalKeys.length === 0) {
+      const opts = internalVars.map((v, i) => ({
+        id: `qev_${i}`,
+        label: v.label || v.key,
+        value: v.key,
+        selected: false,
+      }))
+      return {
+        assistant_message:
+          'Selecione nos checkboxes quais variáveis são suficientes para a estimativa rápida (ex.: largura e altura).',
+        next_step: 'quote_external_variables',
+        selectable_options: opts,
+        requires_action: 'quote_external_variables',
+      }
+    }
+    const merged = { ...collectedData, quote_external_variable_keys: externalKeys.length > 0 ? externalKeys : validKeys.slice(0, 2) }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('quote_external_variables', merged))
+    return {
+      assistant_message: `✅ Para estimativa rápida: ${(merged as any).quote_external_variable_keys.map((k: string) => internalVars.find((v) => v.key === k)?.label || k).join(', ')}.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { quote_external_variable_keys: (merged as any).quote_external_variable_keys },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  // Branding opcional (FASE 4.4)
+  if (currentStep === 'branding_offer') {
+    const wantsSim = /(sim|quero personalizar|personalizar agora)/i.test(text)
+    const wantsDepois = /(depois|depois eu configuro|configuro depois)/i.test(text)
+    if (wantsDepois) {
+      const merged = { ...collectedData, branding_offer_skipped: true, branding: { enabled: false } }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('branding_offer', merged))
+      return {
+        assistant_message: `Sem problemas — pode configurar depois na área do agente. ✅\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { branding_offer_skipped: true, branding: { enabled: false } },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    if (wantsSim) {
+      const merged = { ...collectedData, branding: { enabled: true } }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('branding_offer', merged))
+      return {
+        assistant_message: `Ótimo! Vamos personalizar o PDF. ${next.message}`,
+        next_step: next.step,
+        extracted_data: { branding: { enabled: true } },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+      }
+    }
+    return {
+      assistant_message:
+        'Quando eu gerar o PDF do orçamento, você quer que ele saia com seu **logo e dados da empresa** (timbrado)?',
+      next_step: 'branding_offer',
+      action_options: ['Sim, quero personalizar agora', 'Depois eu configuro'],
+      requires_action: 'branding_offer',
+    }
+  }
+
+  if (currentStep === 'branding_company_legal_name') {
+    const value = text.trim()
+    if (!value || value.length < 2) {
+      return {
+        assistant_message: 'Por favor, informe a razão social da empresa.',
+        next_step: 'branding_company_legal_name',
+        requires_action: 'branding_company_legal_name',
+      }
+    }
+    const existing = (collectedData.branding as Record<string, unknown>) || {}
+    const merged = { ...collectedData, branding: { ...existing, enabled: true, company_legal_name: value } }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('branding_company_legal_name', merged))
+    return {
+      assistant_message: `✅ Razão social anotada.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { branding: { ...existing, enabled: true, company_legal_name: value } },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'branding_cnpj') {
+    const digits = (text || '').replace(/\D/g, '')
+    if (digits.length !== 14) {
+      return {
+        assistant_message: 'Por favor, informe o CNPJ com 14 dígitos (somente números).',
+        next_step: 'branding_cnpj',
+        requires_action: 'branding_cnpj',
+      }
+    }
+    const formatted = digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')
+    const existing = (collectedData.branding as Record<string, unknown>) || {}
+    const merged = { ...collectedData, branding: { ...existing, enabled: true, cnpj: formatted } }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('branding_cnpj', merged))
+    return {
+      assistant_message: `✅ CNPJ anotado.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { branding: { ...existing, enabled: true, cnpj: formatted } },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'branding_company_phone') {
+    const value = (text || '').replace(/\D/g, '').trim()
+    if (value.length < 10) {
+      return {
+        assistant_message: 'Por favor, informe o telefone com DDD (ex.: 11999999999).',
+        next_step: 'branding_company_phone',
+        requires_action: 'branding_company_phone',
+      }
+    }
+    const existing = (collectedData.branding as Record<string, unknown>) || {}
+    const merged = { ...collectedData, branding: { ...existing, enabled: true, company_phone: value } }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('branding_company_phone', merged))
+    return {
+      assistant_message: `✅ Telefone anotado.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { branding: { ...existing, enabled: true, company_phone: value } },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
+  if (currentStep === 'branding_company_email') {
+    const value = (text || '').trim()
+    if (!value || !value.includes('@')) {
+      return {
+        assistant_message: 'Por favor, informe um e-mail válido.',
+        next_step: 'branding_company_email',
+        requires_action: 'branding_company_email',
+      }
+    }
+    const existing = (collectedData.branding as Record<string, unknown>) || {}
+    const merged = { ...collectedData, branding: { ...existing, enabled: true, company_email: value } }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('branding_company_email', merged))
+    return {
+      assistant_message: `✅ E-mail anotado. Seu PDF de orçamento ficará personalizado com esses dados. ✅\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { branding: { ...existing, enabled: true, company_email: value } },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
     }
   }
 
@@ -3517,23 +3795,40 @@ async function processMessage(
     return resp
   }
 
-  if (currentStep === 'services_list') {
-    const selectServicesMatch = text.match(/^select_services:(.+)$/i)
+  if (currentStep === 'catalog_services_list' || currentStep === 'booking_services_list' || currentStep === 'services_list') {
+    const selectServicesMatch =
+      text.match(/^select_catalog_services:(.+)$/i) ||
+      text.match(/^select_booking_services:(.+)$/i) ||
+      text.match(/^select_services:(.+)$/i)
+    const isCatalogStep = currentStep === 'catalog_services_list'
+    const stepStorageKey = isCatalogStep ? 'catalog_services' : 'booking_services'
+    const nextStepKey = isCatalogStep ? 'catalog_services_list' : 'booking_services_list'
+    const requiresActionStep = isCatalogStep ? 'catalog_services_list' : 'booking_services_list'
+
     if (selectServicesMatch) {
       const servicesText = selectServicesMatch[1].trim()
       const newFromPayload = sanitizeExtractedServices(parseServicesList(servicesText), text).services
       if (newFromPayload.length > 0) {
-        const baseServices = Array.isArray(collectedData.services) ? collectedData.services : []
+        const baseServices = isCatalogStep ? getCatalogServicesFromData(collectedData) : getBookingServicesFromData(collectedData)
         const mergedServices = [...baseServices, ...newFromPayload].filter((s, i, self) => {
           const key = (s?.name || '').toLowerCase().trim()
           return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
         })
-        const merged = { ...collectedData, services: mergedServices, services_confirmed: false }
-        const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('services_list', merged))
+        const merged = {
+          ...collectedData,
+          [stepStorageKey]: mergedServices,
+          ...(isCatalogStep ? {} : { services: mergedServices }),
+          services_confirmed: isCatalogStep ? collectedData.services_confirmed : false,
+          business_config_version: 2,
+        }
         return {
           assistant_message: buildServicesReviewMessage(mergedServices),
-          next_step: 'services_list',
-          extracted_data: { services: mergedServices, services_confirmed: false },
+          next_step: nextStepKey,
+          extracted_data: {
+            [stepStorageKey]: mergedServices,
+            ...(isCatalogStep ? {} : { services: mergedServices, services_confirmed: false }),
+            business_config_version: 2,
+          },
           editable_items: buildServiceItems(mergedServices),
           action_options: ['Continuar'],
           requires_action: 'services_edit',
@@ -3546,6 +3841,7 @@ async function processMessage(
       return {
         assistant_message: 'Qual serviço você quer adicionar?',
         next_step: 'services_add',
+        extracted_data: { services_add_target: stepStorageKey },
       }
     }
     const merged = { ...collectedData }
@@ -3560,7 +3856,11 @@ async function processMessage(
 
     services = sanitizeExtractedServices(services, text).services
 
-    const baseServices = shouldReplaceServices(text) ? [] : merged.services || []
+    const baseServices = shouldReplaceServices(text)
+      ? []
+      : isCatalogStep
+        ? getCatalogServicesFromData(merged)
+        : getBookingServicesFromData(merged)
     const unique = [...baseServices, ...services].filter((s, i, self) => {
       const key = (s?.name || '').toLowerCase().trim()
       return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
@@ -3570,22 +3870,33 @@ async function processMessage(
       const serviceExamples = buildServiceExamples(collectedData.business_type, collectedData.business_segment)
       const serviceOpts = buildServiceSelectableOptions(serviceExamples)
       return {
-        assistant_message:
-          'Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nSelecione os que você oferece ou adicione outros abaixo:',
-        next_step: 'services_list',
+        assistant_message: isCatalogStep
+          ? 'Quais serviços/produtos vocês oferecem no geral?\n\nSelecione os que você oferece ou adicione outros abaixo:'
+          : 'Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nSelecione os que você oferece ou adicione outros abaixo:',
+        next_step: nextStepKey,
         selectable_options: serviceOpts,
-        requires_action: 'services_list',
+        requires_action: requiresActionStep,
       }
     }
 
-    const merged2 = { ...merged, services: unique, services_confirmed: false }
+    const merged2 = {
+      ...merged,
+      [stepStorageKey]: unique,
+      ...(isCatalogStep ? {} : { services: unique }),
+      services_confirmed: isCatalogStep ? merged.services_confirmed : false,
+      business_config_version: 2,
+    }
     if (wantsContinue) {
-      const confirmed = { ...merged2, services_confirmed: true }
-      const next = determineNextStep(confirmed as BusinessModelData, '', makeFlowState('services_list', confirmed))
+      const confirmed = { ...merged2, services_confirmed: isCatalogStep ? merged2.services_confirmed : true }
+      const next = determineNextStep(confirmed as BusinessModelData, '', makeFlowState(nextStepKey, confirmed))
       return {
         assistant_message: next.message,
         next_step: next.step,
-        extracted_data: { services: unique, services_confirmed: true },
+        extracted_data: {
+          [stepStorageKey]: unique,
+          ...(isCatalogStep ? {} : { services: unique, services_confirmed: true }),
+          business_config_version: 2,
+        },
         requires_action: next.requires_action,
         action_options: next.action_options,
         ...(next.step === 'schedule_days'
@@ -3595,8 +3906,12 @@ async function processMessage(
     }
     return {
       assistant_message: buildServicesReviewMessage(unique),
-      next_step: 'services_list',
-      extracted_data: { services: unique, services_confirmed: false },
+      next_step: nextStepKey,
+      extracted_data: {
+        [stepStorageKey]: unique,
+        ...(isCatalogStep ? {} : { services: unique, services_confirmed: false }),
+        business_config_version: 2,
+      },
       editable_items: buildServiceItems(unique),
       action_options: ['Continuar'],
       requires_action: 'services_edit',
@@ -3604,6 +3919,8 @@ async function processMessage(
   }
 
   if (currentStep === 'services_add') {
+    const targetKey = collectedData.services_add_target === 'catalog_services' ? 'catalog_services' : 'booking_services'
+    const returnStep = targetKey === 'catalog_services' ? 'catalog_services_list' : 'booking_services_list'
     const services = sanitizeExtractedServices(
       isExplicitServicesList(text)
       ? parseServicesList(text)
@@ -3619,14 +3936,22 @@ async function processMessage(
         next_step: 'services_add',
       }
     }
-    const mergedServices = [...(collectedData.services || []), ...services].filter((s, i, self) => {
+    const baseServices = targetKey === 'catalog_services'
+      ? getCatalogServicesFromData(collectedData)
+      : getBookingServicesFromData(collectedData)
+    const mergedServices = [...baseServices, ...services].filter((s, i, self) => {
       const key = (s?.name || '').toLowerCase().trim()
       return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
     })
     return {
       assistant_message: '✅ Serviço(s) adicionado(s). Você pode revisar a lista abaixo e continuar quando quiser.',
-      next_step: 'services_list',
-      extracted_data: { services: mergedServices, services_confirmed: false },
+      next_step: returnStep,
+      extracted_data: {
+        [targetKey]: mergedServices,
+        ...(targetKey === 'booking_services' ? { services: mergedServices, services_confirmed: false } : {}),
+        services_add_target: null,
+        business_config_version: 2,
+      },
       editable_items: buildServiceItems(mergedServices),
       action_options: ['Continuar'],
       requires_action: 'services_edit',
@@ -3775,7 +4100,7 @@ async function processMessage(
           'Perfeito! Já consigo montar a primeira versão do seu atendimento.\n\nPara salvar tudo e te mostrar o fluxo visual, preciso criar sua conta rapidinho.',
         next_step: 'signup_request',
         requires_action: 'signup',
-        action_options: ['Criar conta', 'Tenho conta', 'Simular atendimento', 'Conectar agora', 'Depois', 'Continuar depois'],
+        action_options: ['Criar conta', 'Tenho conta', 'Simular atendimento', 'Conectar meu WhatsApp agora', 'Deixar para depois'],
       }
     }
     return {
@@ -3794,7 +4119,7 @@ async function processMessage(
         assistant_message: 'Beleza! Use o formulário abaixo para criar sua conta (Google ou email/senha).',
         next_step: 'signup_request',
         requires_action: 'signup',
-        action_options: ['Continuar depois'],
+        action_options: ['Deixar para depois'],
       }
     }
     if (lower.includes('tenho conta') || lower.includes('já tenho')) {
@@ -3802,7 +4127,7 @@ async function processMessage(
         assistant_message: 'Entendido. Use o formulário abaixo para entrar na sua conta.',
         next_step: 'signup_request',
         requires_action: 'signup',
-        action_options: ['Continuar depois'],
+        action_options: ['Deixar para depois'],
       }
     }
     return { assistant_message: 'Ok. Se preferir, você pode criar a conta depois.', next_step: 'signup_request' }
@@ -3833,7 +4158,7 @@ async function processMessage(
     return {
       assistant_message: 'Conta criada 🎉\n\nJá montei a primeira versão do seu fluxo.',
       next_step: 'completed',
-      extracted_data: { user_id: migrationResult.user_id, tenant_id: migrationResult.tenant_id },
+      extracted_data: { user_id: migrationResult.user_id, tenant_id: migrationResult.tenant_id, agent_id: migrationResult.agent_id },
     }
   }
 
@@ -3854,7 +4179,10 @@ async function processMessage(
   if (next.step === 'schedule_days') {
     resp.selectable_options = buildDaysSelectableOptions(mergedData.schedule?.days_of_week || [])
   }
-  if (next.step === 'services_list' && next.selectable_options) {
+  if (
+    (next.step === 'services_list' || next.step === 'booking_services_list' || next.step === 'catalog_services_list') &&
+    next.selectable_options
+  ) {
     resp.selectable_options = next.selectable_options
   }
   if (next.step === 'services_pricing' && !resp.editable_items) {
@@ -3914,6 +4242,13 @@ serve(async (req) => {
     if (body.address && body.address.cep && body.address.logradouro && body.address.numero && body.address.bairro && body.address.localidade && body.address.uf) {
       collectedData = { ...collectedData, establishment_address: body.address }
     }
+    if (body.branding && typeof body.branding === 'object') {
+      const existing = (collectedData.branding as Record<string, unknown>) || {}
+      collectedData = {
+        ...collectedData,
+        branding: { ...existing, ...body.branding },
+      }
+    }
 
     const currentStep = body.current_step || session.current_step_key || 'welcome'
     const isSignupStep = ['signup_email', 'signup_password', 'signup_confirm_password'].includes(currentStep)
@@ -3931,11 +4266,13 @@ serve(async (req) => {
       }).eq('session_id', body.session_id)
 
       let syncResponse: OnboardingResponse
-      if (currentStep === 'services_list') {
-        const services = Array.isArray(collectedData.services) ? collectedData.services : []
+      if (currentStep === 'services_list' || currentStep === 'booking_services_list' || currentStep === 'catalog_services_list') {
+        const services = currentStep === 'catalog_services_list'
+          ? getCatalogServicesFromData(collectedData)
+          : getBookingServicesFromData(collectedData)
         syncResponse = {
           assistant_message: buildServicesReviewMessage(services),
-          next_step: 'services_list',
+          next_step: currentStep,
           extracted_data: collectedData,
           editable_items: buildServiceItems(services),
           action_options: ['Continuar'],
@@ -4030,9 +4367,14 @@ serve(async (req) => {
 
     // IA como fonte principal de exemplos de serviços — categorização por ramo de atividade, sem mapeamento estático
     if (
-      response.next_step === 'services_list' &&
+      (response.next_step === 'services_list' || response.next_step === 'booking_services_list' || response.next_step === 'catalog_services_list') &&
       updatedData.business_type &&
-      (response.requires_action === 'services_list' || response.requires_action === 'services_edit')
+      (
+        response.requires_action === 'services_list' ||
+        response.requires_action === 'booking_services_list' ||
+        response.requires_action === 'catalog_services_list' ||
+        response.requires_action === 'services_edit'
+      )
     ) {
       const aiExamples = await suggestServicesWithAI(updatedData.business_type)
       response.selectable_options = buildServiceSelectableOptions(aiExamples)

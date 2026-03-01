@@ -84,13 +84,23 @@ export async function POST(
 
   const bc = (setting.business_config as Record<string, unknown>) ?? {}
   const businessNameFromConfig = (bc.business_name as string)?.trim()
+  const bookingServices = Array.isArray(bc.booking_services)
+    ? bc.booking_services
+    : Array.isArray(bc.services)
+      ? bc.services
+      : []
+  const catalogServices = Array.isArray(bc.catalog_services)
+    ? bc.catalog_services
+    : bookingServices
   const context = {
     business_name: businessNameFromConfig || (agent.name ?? '') || '',
     business_type: bc.business_type ?? undefined,
     context_mode: bc.context_mode ?? 'booking',
     establishment_address: bc.establishment_address ?? undefined,
     tone: setting.tone ?? undefined,
-    services: Array.isArray(bc.services) ? bc.services : [],
+    catalog_services: catalogServices,
+    booking_services: bookingServices,
+    services: bookingServices,
     when_client_asks_price_no_value: setting.when_client_asks_price_no_value ?? 'offer_handoff_or_booking',
     schedule: bc.schedule ?? undefined,
     staff: Array.isArray(bc.staff) ? bc.staff : [],
@@ -116,6 +126,8 @@ export async function POST(
       bc.interaction_style === 'hybrid'
         ? bc.interaction_style
         : 'hybrid',
+    branding:
+      typeof bc.branding === 'object' && bc.branding !== null ? bc.branding : undefined,
   }
 
   const fromNormalized = from.startsWith('whatsapp:') ? from : `whatsapp:${from}`
@@ -146,34 +158,37 @@ export async function POST(
   const instance = channelRow.evolution_instance as string
   const apiKey = channelRow.evolution_api_key_encrypted as string
   const numberForEvolution = from.replace(/^whatsapp:/, '').replace(/@s\.whatsapp\.net$/, '')
+  const baseCandidates = baseUrl.endsWith('/api')
+    ? [baseUrl, baseUrl.replace(/\/api$/, '')]
+    : [baseUrl, `${baseUrl}/api`]
 
   // Indicador de digitação (3 pontinhos) enquanto processa
   // Evolution API: POST /chat/sendPresence/{instance} | doc: https://doc.evolution-api.com/v2/api-reference/chat-controller/send-presence
-  const presenceUrl = `${baseUrl}/chat/sendPresence/${instance}`
   const presenceNumber = numberForEvolution
-  try {
-    const presenceRes = await fetch(presenceUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: apiKey,
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        number: presenceNumber,
-        options: {
-          presence: 'composing',
-          delay: 15000,
-          number: presenceNumber,
+  for (const presenceUrl of baseCandidates.map((b) => `${b}/chat/sendPresence/${instance}`)) {
+    try {
+      const presenceRes = await fetch(presenceUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: apiKey,
+          Authorization: `Bearer ${apiKey}`,
         },
-      }),
-    })
-    if (!presenceRes.ok) {
+        body: JSON.stringify({
+          number: presenceNumber,
+          options: {
+            presence: 'composing',
+            delay: 15000,
+            number: presenceNumber,
+          },
+        }),
+      })
+      if (presenceRes.ok) break
       const errText = await presenceRes.text()
-      console.warn('[webhooks/evolution] sendPresence falhou:', presenceRes.status, errText)
+      console.warn('[webhooks/evolution] sendPresence falhou:', presenceRes.status, presenceUrl, errText)
+    } catch (e) {
+      console.warn('[webhooks/evolution] sendPresence erro:', presenceUrl, e)
     }
-  } catch (e) {
-    console.warn('[webhooks/evolution] sendPresence erro:', e)
   }
 
   const functionsUrl = `${url}/functions/v1/conversations-turn`
@@ -222,28 +237,35 @@ export async function POST(
     console.error('[webhooks/evolution] conversations-turn não OK:', turnResponse.status, await turnResponse.text())
   }
 
-  const evolutionSendUrl = `${baseUrl}/message/sendText/${instance}`
-
-  try {
-    const evoRes = await fetch(evolutionSendUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: apiKey,
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        number: numberForEvolution,
-        text: replyText,
-      }),
-    })
-    if (!evoRes.ok) {
+  const evolutionSendUrls = baseCandidates.map((b) => `${b}/message/sendText/${instance}`)
+  let sent = false
+  let sendError = ''
+  for (const evolutionSendUrl of evolutionSendUrls) {
+    try {
+      const evoRes = await fetch(evolutionSendUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: apiKey,
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          number: numberForEvolution,
+          text: replyText,
+        }),
+      })
+      if (evoRes.ok) {
+        sent = true
+        break
+      }
       const errText = await evoRes.text()
-      console.error('[webhooks/evolution] Evolution API error:', evoRes.status, errText)
-      return new NextResponse('Erro ao enviar resposta', { status: 502 })
+      sendError = `${evoRes.status} ${evolutionSendUrl} ${errText}`
+    } catch (e) {
+      sendError = `${evolutionSendUrl} ${e instanceof Error ? e.message : String(e)}`
     }
-  } catch (e) {
-    console.error('[webhooks/evolution] Erro ao enviar via Evolution:', e)
+  }
+  if (!sent) {
+    console.error('[webhooks/evolution] Erro ao enviar via Evolution:', sendError)
     return new NextResponse('Erro ao enviar resposta', { status: 502 })
   }
 
@@ -287,13 +309,14 @@ function extractMessageFromEvolutionPayload(body: unknown): {
   if (fromMe === true) return { from: null, text: null, pushName: null }
 
   const message = data.message as Record<string, unknown> | undefined
-  if (!message) return { from: null, text: null, pushName: null }
-
   const messages = data.messages as Array<Record<string, unknown>> | undefined
-  const firstMsg = Array.isArray(messages) && messages.length > 0 ? messages[0] : message
+  const firstMsg = Array.isArray(messages) && messages.length > 0
+    ? messages[0]
+    : message
+  if (!firstMsg && !message) return { from: null, text: null, pushName: null }
   const firstKey = (firstMsg as Record<string, unknown>)?.key as Record<string, unknown> | undefined
   const keyToUse = firstKey ?? key
-  const msgToUse = (firstMsg as Record<string, unknown>)?.message ?? firstMsg
+  const msgToUse = (firstMsg as Record<string, unknown>)?.message ?? firstMsg ?? message
 
   return {
     from: extractRemoteJid(keyToUse ?? data),

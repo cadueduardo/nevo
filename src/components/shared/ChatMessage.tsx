@@ -179,7 +179,8 @@ export function ChatMessage({
   const customItemsCount = allowCustomInput && customInputValue.trim()
     ? customInputValue.split(',').map((s) => s.trim()).filter(Boolean).length
     : 0
-  const isServicesSelection = requiresAction === 'services_list' && allowCustomInput
+  const isServicesSelection =
+    (requiresAction === 'services_list' || requiresAction === 'services_edit') && allowCustomInput
   const isServicesEditInput = requiresAction === 'services_edit' && allowCustomInput
   const suggestionExamples = (selectableOptions || [])
     .map((option) => option.label.trim())
@@ -190,9 +191,9 @@ export function ChatMessage({
       ? `Ex: ${suggestionExamples.join(', ')}`
       : customInputPlaceholder
   const canConfirm = isServicesEditInput
-    ? customItemsCount > 0
+    ? selectedOptions.size > 0 || customItemsCount > 0
     : selectedOptions.size > 0 || customItemsCount > 0 || requiresAction === 'holidays_select'
-  const totalCount = isServicesEditInput ? customItemsCount : selectedOptions.size + customItemsCount
+  const totalCount = selectedOptions.size + customItemsCount
 
   return (
     <div
@@ -338,7 +339,7 @@ export function ChatMessage({
         )}
 
         {/* Input enxuto para adicionar mais serviços em services_edit (sem checkboxes). */}
-        {!isUser && isServicesEditInput && (
+        {!isUser && isServicesEditInput && (!selectableOptions || selectableOptions.length === 0) && (
           <div className="mt-4 space-y-2">
             <div className="rounded-lg border border-border bg-background/50 p-3">
               <p className="text-xs text-muted-foreground mb-2">
@@ -372,7 +373,7 @@ export function ChatMessage({
         )}
 
         {/* Checkboxes para seleção múltipla (dias da semana, serviços, etc) */}
-        {!isUser && selectableOptions && selectableOptions.length > 0 && !isServicesEditInput && (
+        {!isUser && selectableOptions && selectableOptions.length > 0 && (
           <div className="mt-4 space-y-2">
             {isServicesSelection && (
               <div className="mb-3 rounded-lg border border-border bg-background/50 p-3">

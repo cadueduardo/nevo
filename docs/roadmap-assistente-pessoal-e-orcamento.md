@@ -109,6 +109,11 @@ Esses itens pertencem à **área logada** (/app). O objetivo é ativar funcionam
 
 **Simulador:** Após o onboarding, o usuário pode clicar "Simular atendimento" para testar. O simulador é um único chat que chama a mesma Edge Function do turn. Para que as intents internas (agenda, contatos) funcionem no simulador, o **payload deve incluir** `mode: "internal"` e `actor_type: "owner"` — pois quem está testando é o dono que acabou de configurar. Sem isso, o simulador roda como external (cliente) por padrão.
 
+- [x] Landing: payload inclui mode=internal, actor_type=owner; tenant_id/agent_id após migrate
+- [x] Área logada (/app/simulator): payload inclui mode=internal, actor_type=owner (quem testa é dono)
+- [x] Migrate automático após signup (não espera "Acessar minha área")
+- [x] deploy.ps1 lê .env.qa (além de .env, .env.local)
+
 *(Futuro: toggle "Testar como dono" / "Testar como cliente" para alternar entre internal e external.)*
 
 ---
@@ -341,6 +346,8 @@ Pipeline:
 7. generatePdf()
 8. Persistir request
 
+**Implementado em:** `supabase/functions/conversations-turn/lib/internal-intents.ts` (intents `request_quote_internal` e `confirm_quote_pdf`), `lib/quote-engine.ts`. Motor determinístico (extractQuoteSlotsFromText); state.quote_pending para confirmação; persistência em `request` ao confirmar.
+
 ---
 
 ## 4.2 — Resposta padrão internal
@@ -406,23 +413,23 @@ Coleta: **bloco condicional no onboarding** ("Quer que o PDF saia com seu logo e
 
 **Checklist branding opcional:**
 
-- [ ] Implementar pergunta condicional no onboarding
-- [ ] Persistir branding.enabled (true/false)
+- [x] Implementar pergunta condicional no onboarding
+- [x] Persistir branding.enabled (true/false)
 - [ ] Criar upload de logo (requires_action: logo_upload)
-- [ ] Ajustar generatePdf para suportar dois templates (default e branded)
-- [ ] Criar prompt de upgrade no primeiro PDF quando branding.enabled = false
+- [x] Ajustar generatePdf para suportar dois templates (default e branded)
+- [x] Criar prompt de upgrade no primeiro PDF quando branding.enabled = false
 
 ---
 
 ## ✅ CHECK FASE 4
 
-- [ ] coleta livre funcionando
-- [ ] validação funcionando
-- [ ] cálculo correto
-- [ ] PDF gerado (com template default se branding não configurado)
-- [ ] request persistido
-- [ ] PDF funciona sem branding configurado
-- [ ] Primeiro PDF oferece upgrade de timbrado quando branding = false
+- [x] coleta livre funcionando (extractQuoteSlotsFromText em quote-engine.ts)
+- [x] validação funcionando (validateQuoteSlots)
+- [x] cálculo correto (calculateQuote)
+- [x] PDF gerado (lib/generatePdf.ts: pdf-lib + bucket "quotes" + Signed URL 7 dias)
+- [x] request persistido (tenant_id, conversation_id, slots, blueprint_id, total_value, calculation_result)
+- [x] PDF funciona sem branding configurado (template padrão Nevo)
+- [x] Primeiro PDF oferece upgrade de timbrado quando branding = false (mensagem na resposta)
 
 ---
 
@@ -467,10 +474,14 @@ Criar request com:
 
 ## ✅ CHECK FASE 5
 
-- [ ] faixa calculada
-- [ ] resposta curta
-- [ ] CTA funcionando
-- [ ] request salvo
+- [x] faixa calculada (calculateRange em quote-engine.ts)
+- [x] resposta curta (formatExternalQuote)
+- [x] CTA funcionando ("Sim, quero agendar" / "Depois")
+- [x] request salvo (is_estimated=true, total_value=média da faixa)
+
+**Implementado em:** `lib/external-quote-handler.ts`; chamado quando mode !== internal (cliente). Detecção por isPriceQuestion + keywords do quote_service; slots por extractQuoteSlotsFromText.
+
+**Como testar:** Enviar mensagem como cliente (mode=external) — ex.: via WhatsApp com número não cadastrado como owner, ou simulador com toggle "Testar como cliente" (futuro).
 
 ---
 
@@ -496,9 +507,11 @@ Campos:
 
 ## ✅ CHECK FASE 6
 
-- [ ] rate limit ativo (resposta de cooldown quando estourar; ex.: "Você enviou muitos comandos. Tenta em 30 segundos.")
-- [ ] log funcionando (internal_action_log)
+- [x] rate limit ativo (30 comandos/minuto por tenant; resposta "Você enviou muitos comandos. Tenta em 30 segundos.")
+- [x] log funcionando (internal_action_log; migração 20260226000000)
 - [ ] testes de abuso (owner disparar muitos comandos em 1 minuto → bloqueado)
+
+**Implementado em:** `index.ts` (check antes de handleInternalIntent); tabela `internal_action_log` (tenant_id, action, payload, created_at).
 
 ---
 
@@ -652,15 +665,15 @@ Persistir `actor_type` e `mode` em `conversation.context` (já feito na Fase 1).
 
 ### Checklist
 
-- [ ] CTA aparece após simulador (“Conectar agora” / “Depois”)
-- [ ] Apenas owner/admin consegue iniciar
-- [ ] Coleta número (normalizado) no chat
-- [ ] Create Instance (WHATSAPP-BAILEYS, qrcode=false)
-- [ ] Instance Connect retorna pairingCode
-- [ ] Pairing Code exibido ao usuário com instruções
-- [ ] Status polling + persistência no DB
-- [ ] Tratamento de erro + retry
-- [ ] Não trava onboarding se pular
+- [x] CTA aparece após simulador (“Conectar agora” / “Depois”)
+- [x] Apenas owner/admin consegue iniciar
+- [x] Coleta número (normalizado) no chat
+- [x] Create Instance (WHATSAPP-BAILEYS, qrcode=false)
+- [x] Instance Connect retorna pairingCode
+- [x] Pairing Code exibido ao usuário com instruções
+- [x] Status polling + persistência no DB
+- [x] Tratamento de erro + retry
+- [x] Não trava onboarding se pular
 
 Observação: manter `connection_type` extensível (“cloud” no futuro).
 
@@ -684,6 +697,12 @@ Criar cenários:
 3. Owner gera orçamento → OK
 4. Cliente gera estimativa → OK
 5. Cliente tenta cancelar agendamento → bloqueado
+
+**Implementado:**
+- Documento de cenários: `docs/test-scenarios-fase7.md`
+- Bloqueio cliente agenda: resposta genérica quando `isExternalActor` e texto indica consulta de agenda
+- Bloqueio cliente cancelar: `tryHandleCancellationAnytime` retorna mensagem de contato quando `isExternalActor`
+- `ConversationRuntimeContext.isExternalActor` passado como `true` no path external (simulador)
 
 ---
 
@@ -1019,12 +1038,12 @@ O agente deve atualizar o roadmap com as decisões acima:
 
 - [x] actor_type definido (owner/admin/agent/client/unknown)
 - [x] internal só por phone_number autorizado
-- [ ] create_appointment_internal cria appointment e pede confirmação (placeholder: redireciona para fluxo)
+- [x] create_appointment_internal cria appointment e pede confirmação
 - [x] tolerância query_appointment_by_time = ±20min
 - [x] quote_service por agent (MVP)
 - [x] slots (orçamento) separados de agendamento
-- [ ] detecção de serviço híbrida (keywords + IA) — estrutura em quote_service; falta integrar no turn
-- [ ] rate limit 20/min configurável via ENV
+- [x] detecção de serviço híbrida (keywords + IA) — integrado em external-quote-handler
+- [x] rate limit 20/min configurável via ENV (INTERNAL_RATE_LIMIT_PER_MINUTE)
 - [x] intents de contatos incluídas na Fase 2
 - [x] request: apenas adicionar campos
 - [ ] PDF: bucket privado + Signed URL 7 dias (stub em generatePdf.ts; FASE 4)

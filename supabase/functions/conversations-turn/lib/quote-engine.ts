@@ -164,6 +164,61 @@ export function calculateQuote(
   }
 }
 
+/** Resultado da estimativa externa (faixa). */
+export interface RangeResult {
+  service_name: string
+  min: number
+  max: number
+  currency: string
+}
+
+/**
+ * Calcula faixa min-max para estimativa externa (baixa fricção).
+ */
+export function calculateRange(
+  service: QuoteServiceRow,
+  slots: QuoteSlots,
+  currency = "BRL"
+): RangeResult {
+  const rules = (service.pricing_rules || {}) as Record<string, unknown>
+  const margin = 0.2
+
+  let base = 0
+  switch (service.pricing_type) {
+    case "fixed":
+      base = (rules.base_price as number) ?? 0
+      break
+    case "unit": {
+      const unitPrice = (rules.unit_price as number) ?? 0
+      const qty = Number(slots.quantidade ?? slots.qty ?? 1) || 1
+      base = unitPrice * qty
+      break
+    }
+    case "area": {
+      const pricePerM2 = (rules.price_per_m2 as number) ?? 0
+      const width = Number(slots.largura_cm ?? slots.largura ?? 0) / 100
+      const height = Number(slots.altura_cm ?? slots.altura ?? 0) / 100
+      base = width * height * pricePerM2
+      break
+    }
+    default:
+      base = 0
+  }
+
+  const min = Math.max(0, base * (1 - margin))
+  const max = base * (1 + margin)
+  return { service_name: service.name, min, max, currency }
+}
+
+/**
+ * Formata estimativa externa (faixa) para exibição no chat.
+ */
+export function formatExternalQuote(result: RangeResult): string {
+  const minStr = formatValue(result.min)
+  const maxStr = formatValue(result.max)
+  return `Para esse tamanho, o investimento costuma ficar entre ${minStr} e ${maxStr}.\n\nPosso agendar uma visita para confirmar?`
+}
+
 /**
  * Formata orçamento para exibição no chat.
  */

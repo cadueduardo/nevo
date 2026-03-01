@@ -18,6 +18,7 @@ interface ChatThreadProps {
   onClearSignupError?: () => void
   onLoginSubmit?: (payload: { email: string; password: string }) => void | Promise<void>
   onLoginCancel?: () => void
+  onLoginCreateAccount?: () => void
   onAddressSubmit?: (payload: {
     cep: string
     logradouro: string
@@ -41,6 +42,7 @@ export function ChatThread({
   onClearSignupError,
   onLoginSubmit,
   onLoginCancel,
+  onLoginCreateAccount,
   onAddressSubmit,
   onAddressCancel,
 }: ChatThreadProps) {
@@ -76,6 +78,7 @@ export function ChatThread({
                   disabled={isLoading}
                   onSubmit={async (payload) => onLoginSubmit?.(payload)}
                   onCancel={onLoginCancel}
+                  onCreateAccount={onLoginCreateAccount}
                 />
               </div>
             )
@@ -163,12 +166,23 @@ export function ChatThread({
                 onActionClick?.('Quero remover isso.')
               }}
               onOptionSelect={(selectedValues, customInput) => {
-                if (message.requiresAction === 'services_list' || message.requiresAction === 'services_edit') {
+                if (
+                  message.requiresAction === 'catalog_services_list' ||
+                  message.requiresAction === 'booking_services_list' ||
+                  message.requiresAction === 'services_list' ||
+                  message.requiresAction === 'services_edit'
+                ) {
                   const parts = [...selectedValues]
                   if (customInput?.trim()) {
                     parts.push(...customInput.split(',').map((s) => s.trim()).filter(Boolean))
                   }
-                  onActionClick?.(`select_services:${parts.join(', ')}`)
+                  const command =
+                    message.requiresAction === 'catalog_services_list'
+                      ? 'select_catalog_services'
+                      : message.requiresAction === 'booking_services_list'
+                        ? 'select_booking_services'
+                        : 'select_services'
+                  onActionClick?.(`${command}:${parts.join(', ')}`)
                   return
                 }
                 if (message.requiresAction === 'sequence_services_select') {
@@ -181,6 +195,18 @@ export function ChatThread({
                     parts.push(...customInput.split(',').map((s) => s.trim()).filter(Boolean))
                   }
                   onActionClick?.(`select_quote_variables:${parts.join(', ')}`)
+                  return
+                }
+                if (message.requiresAction === 'quote_services_list') {
+                  const parts = [...selectedValues]
+                  if (customInput?.trim()) {
+                    parts.push(...customInput.split(',').map((s) => s.trim()).filter(Boolean))
+                  }
+                  onActionClick?.(`select_quote_services:${parts.join(', ')}`)
+                  return
+                }
+                if (message.requiresAction === 'quote_external_variables') {
+                  onActionClick?.(`select_quote_external_variables:${selectedValues.join(', ')}`)
                   return
                 }
                 const prefix = message.requiresAction === 'holidays_select' ? 'select_holidays' : 'select_days'

@@ -1,11 +1,10 @@
 # Deploy Supabase: migrations + edge functions
-# Usa SUPABASE_PROJECT_REF e SUPABASE_DB_PASSWORD do .env ou .env.local (ou do ambiente).
-# .env e depois .env.local (o segundo sobrescreve).
+# Usa SUPABASE_PROJECT_REF e SUPABASE_DB_PASSWORD do .env, .env.local ou .env.qa (o último sobrescreve).
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 
-foreach ($envFile in @(".env", ".env.local")) {
+foreach ($envFile in @(".env", ".env.local", ".env.qa")) {
   $path = Join-Path $projectRoot $envFile
   if (Test-Path $path) {
     Get-Content $path | ForEach-Object {
@@ -26,7 +25,7 @@ if (-not $ref) {
   exit 1
 }
 if (-not $password) {
-  Write-Host "ERRO: Defina SUPABASE_DB_PASSWORD (ex: Project Settings -> Database -> Database password)" -ForegroundColor Red
+  Write-Host "ERRO: Defina SUPABASE_DB_PASSWORD em .env, .env.local ou .env.qa (Project Settings -> Database -> Database password)" -ForegroundColor Red
   exit 1
 }
 
@@ -37,7 +36,7 @@ npx supabase link --project-ref $ref --password $password
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Aplicando migrations (tabelas) ..." -ForegroundColor Cyan
-npx supabase db push
+npx supabase db push --password $password
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Fazendo deploy das Edge Functions ..." -ForegroundColor Cyan

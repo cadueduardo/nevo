@@ -11,8 +11,15 @@ import {
   parseDate,
   parseDateOrWeekday,
   toMinutes,
+  fromMinutes,
   formatDatePt,
+  isWithinSchedule,
+  isTimeTooSoonForDate,
+  isBusinessClosedForToday,
+  getWeekdayKey,
 } from "./utils.ts"
+import { findServiceFromText, getServiceDurationMinutes } from "./services.ts"
+import { getScheduleForStaff } from "./staff.ts"
 import {
   extractQuoteSlotsFromText,
   validateQuoteSlots,
@@ -22,6 +29,7 @@ import {
   type QuoteServiceRow,
 } from "./quote-engine.ts"
 import type { SimulatorState } from "./types.ts"
+import { generateQuotePdf } from "./generatePdf.ts"
 
 const BUSINESS_TZ = "America/Sao_Paulo"
 const TIME_TOLERANCE_MINUTES = 20
@@ -157,8 +165,10 @@ export function classifyInternalIntent(text: string): ClassifiedInternalIntent {
   ) {
     const time = parseTime(text)
     const date = parseDateOrWeekday(text) || parseDate(text) || todayIso
+    const name = extractAttendeeNameFromMessage(text)
     if (time) slots.time = time
     if (date) slots.date = date
+    if (name) slots.name = name
     return { intent: "create_appointment_internal", slots }
   }
 
@@ -179,10 +189,23 @@ export interface HandleInternalIntentParams {
   tenantId: string
   agentId: string
   message: string
-  config?: { business_name?: string }
+  config?: {
+    business_name?: string
+    branding?: {
+      enabled?: boolean
+      logo_url?: string
+      company_legal_name?: string
+      cnpj?: string
+      company_phone?: string
+      company_email?: string
+    }
+    schedule?: { days_of_week?: string[]; start_time?: string; end_time?: string; breaks?: Array<{ start: string; end: string }>; interval_minutes?: number; min_booking_lead_minutes?: number }
+    services?: Array<{ name: string; duration_minutes?: number }>
+  }
   /** Estado do simulador (para quote_pending e confirmação de PDF). */
   state?: SimulatorState
   conversationId?: string
+  channelId?: string
 }
 
 export interface HandleInternalIntentResult {
@@ -201,6 +224,15 @@ function isQuoteConfirmation(text: string): boolean {
     /^sim\s*[.!]?$/i.test(text.trim()) ||
     /^confirmo\s*[.!]?$/i.test(text.trim())
   )
+}
+
+/** Extrai nome do cliente de mensagens como "agendar para João Silva amanhã 14h" ou "cliente Maria". */
+function extractAttendeeNameFromMessage(text: string): string | null {
+  const m = text.match(/(?:para|cliente)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{1,40}?)(?:\s+(?:amanhã|hoje|\d{1,2}[\/\-]\d{1,2}|\d{1,2}h|\d{1,2}:\d{2})|\s*$)/i)
+  if (m) return m[1].trim()
+  const m2 = text.match(/(?:para|cliente)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s]{1,40})/i)
+  if (m2) return m2[1].trim()
+  return null
 }
 
 function isQuoteDecline(text: string): boolean {
@@ -226,6 +258,89 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
       handled: true,
       message: "Ok, sem problema. O orçamento não foi salvo.",
       state: { ...incomingState, quote_pending: undefined },
+    }
+  }
+
+  // appointment_pending + recusa: limpar estado
+  if (incomingState?.appointment_pending && isQuoteDecline(message)) {
+    return {
+      handled: true,
+      message: "Ok, o agendamento não foi criado.",
+      state: { ...incomingState, appointment_pending: undefined },
+    }
+  }
+
+  // confirm_appointment: estado tem appointment_pending e usuário confirmou
+  if (incomingState?.appointment_pending && isQuoteConfirmation(message)) {
+    const pending = incomingState.appointment_pending
+    try {
+      const startAt = `${pending.date}T${pending.time}:00.000-03:00`
+      const endMins = toMinutes(pending.time) + pending.duration_minutes
+      const endTime = fromMinutes(endMins)
+      const endAt = `${pending.date}T${endTime}:00.000-03:00`
+
+      let contactId: string | null = null
+      if (params.channelId) {
+        const { data: existing } = await supabaseAdmin
+          .from("contact")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .eq("channel_id", params.channelId)
+          .eq("display_name", pending.attendee_name)
+          .limit(1)
+          .maybeSingle()
+        if (existing?.id) {
+          contactId = existing.id
+        } else {
+          const { data: newContact } = await supabaseAdmin
+            .from("contact")
+            .insert({
+              tenant_id: tenantId,
+              channel_id: params.channelId,
+              external_id: `internal:${pending.attendee_name}:${Date.now()}`,
+              display_name: pending.attendee_name,
+              phone: "",
+            })
+            .select("id")
+            .single()
+          contactId = newContact?.id ?? null
+        }
+      }
+
+      const { error: insertErr } = await supabaseAdmin.from("appointment").insert({
+        tenant_id: tenantId,
+        agent_id: agentId,
+        attendee_name: pending.attendee_name,
+        staff_name: null,
+        service_names: [pending.service_name],
+        start_at: startAt,
+        end_at: endAt,
+        status: "confirmed",
+        contact_id: contactId,
+      })
+
+      if (insertErr) {
+        console.error("internal intent confirm_appointment insert error:", insertErr)
+        return {
+          handled: true,
+          message: "Não consegui criar o agendamento. Tente novamente.",
+          state: { ...incomingState, appointment_pending: undefined },
+        }
+      }
+
+      const nextState = { ...incomingState, appointment_pending: undefined }
+      return {
+        handled: true,
+        message: `✅ Agendamento criado: ${pending.attendee_name}, ${pending.service_name}, ${formatDatePt(pending.date)} às ${pending.time}.`,
+        state: nextState,
+      }
+    } catch (err) {
+      console.error("internal intent confirm_appointment error:", err)
+      return {
+        handled: true,
+        message: "Ocorreu um erro ao criar o agendamento. Tente novamente.",
+        state: { ...incomingState, appointment_pending: undefined },
+      }
     }
   }
 
@@ -263,15 +378,37 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
         }
       }
 
-      // TODO FASE 4.3: generatePdf() e Signed URL. Por ora: mensagem de sucesso.
       const totalFormatted = new Intl.NumberFormat("pt-BR", {
         style: "currency",
         currency: pending.result.currency || "BRL",
       }).format(pending.result.total)
       const nextState = { ...incomingState, quote_pending: undefined }
+
+      const branding = params.config?.branding
+      const pdfResult = await generateQuotePdf(supabaseAdmin, tenantId, {
+        serviceName: pending.service_name,
+        total: pending.result.total,
+        currency: pending.result.currency || "BRL",
+        breakdown: pending.result.breakdown,
+        businessName: params.config?.business_name,
+        branding,
+      })
+
+      if (pdfResult?.url) {
+        const upgradeNote =
+          branding?.enabled !== true
+            ? " Quer deixar esse orçamento mais profissional com seu logo e dados da empresa? Configure na área logada."
+            : ""
+        return {
+          handled: true,
+          message: `✅ Orçamento de ${pending.service_name} (${totalFormatted}) salvo no histórico.\n\n📄 PDF gerado. Link para download (válido por 7 dias):\n${pdfResult.url}${upgradeNote}`,
+          state: nextState,
+        }
+      }
+
       return {
         handled: true,
-        message: `✅ Orçamento de ${pending.service_name} (${totalFormatted}) salvo no histórico. Em breve: geração de PDF.`,
+        message: `✅ Orçamento de ${pending.service_name} (${totalFormatted}) salvo no histórico. Não foi possível gerar o PDF agora; acesse pela área logada.`,
         state: nextState,
       }
     } catch (err) {
@@ -540,12 +677,95 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
     }
 
     case "create_appointment_internal": {
-      // Por ora: redireciona para o fluxo normal de agendamento.
-      // O dono pode usar o simulador para criar; ou futuramente extrair slots via IA.
+      const schedule = params.config?.schedule
+      const services = params.config?.services || []
+      const dateIso = slots.date || getTodayIsoBusinessTz()
+      const timeStr = slots.time
+      const serviceName = slots.service || findServiceFromText(message, services)
+      const attendeeName = slots.name || extractAttendeeNameFromMessage(message)
+
+      if (!timeStr) {
+        return {
+          handled: true,
+          message: "Para criar o agendamento, informe o horário (ex.: às 14h, 14:00).",
+        }
+      }
+      if (!attendeeName || attendeeName.length < 2) {
+        return {
+          handled: true,
+          message: "Qual o nome do cliente? (ex.: agendar para João Silva amanhã 14h)",
+        }
+      }
+      if (!serviceName) {
+        const svcList = services.slice(0, 5).map((s) => s.name).join(", ")
+        return {
+          handled: true,
+          message: `Qual serviço? ${svcList ? `Opções: ${svcList}` : "Informe o nome do serviço."}`,
+        }
+      }
+
+      const duration = getServiceDurationMinutes(
+        { services } as any,
+        serviceName
+      ) ?? 60
+      const scheduleForValidation = schedule
+        ? { start_time: schedule.start_time || "09:00", end_time: schedule.end_time || "18:00", breaks: schedule.breaks }
+        : undefined
+      const within = isWithinSchedule(timeStr, scheduleForValidation)
+      if (!within.ok) {
+        return { handled: true, message: within.reason || "Horário fora do expediente." }
+      }
+      if (isTimeTooSoonForDate(dateIso, timeStr, schedule?.min_booking_lead_minutes ?? 20)) {
+        return {
+          handled: true,
+          message: "Esse horário está muito próximo. Escolha um horário com pelo menos 20 min de antecedência.",
+        }
+      }
+      const dayKey = getWeekdayKey(dateIso)
+      const days = schedule?.days_of_week || ["monday", "tuesday", "wednesday", "thursday", "friday"]
+      if (!days.includes(dayKey)) {
+        return {
+          handled: true,
+          message: `Não atendemos nesse dia. Nossa agenda: ${days.join(", ")}.`,
+        }
+      }
+
+      const startAt = `${dateIso}T${timeStr}:00.000-03:00`
+      const endMins = toMinutes(timeStr) + duration
+      const endAt = `${dateIso}T${fromMinutes(endMins)}:00.000-03:00`
+      const { data: conflicts } = await supabaseAdmin
+        .from("appointment")
+        .select("id, attendee_name, start_at")
+        .eq("tenant_id", tenantId)
+        .eq("agent_id", agentId)
+        .neq("status", "cancelled")
+        .lt("start_at", endAt)
+        .gt("end_at", startAt)
+
+      if (Array.isArray(conflicts) && conflicts.length > 0) {
+        const first = conflicts[0] as any
+        const { time } = toBusinessDateTime(first.start_at)
+        return {
+          handled: true,
+          message: `Já existe agendamento às ${time} (${first.attendee_name || "—"}). Escolha outro horário.`,
+        }
+      }
+
+      const nextState: SimulatorState = {
+        ...(incomingState || {}),
+        appointment_pending: {
+          date: dateIso,
+          time: timeStr,
+          service_name: serviceName,
+          attendee_name: attendeeName.trim(),
+          duration_minutes: duration,
+        },
+      }
       return {
         handled: true,
-        message:
-          "Para criar um agendamento, use o fluxo de agendamento normalmente (informe serviço, data e horário). Em breve teremos criação rápida por mensagem.",
+        message: `Confirma: **${attendeeName.trim()}**, ${serviceName}, ${formatDatePt(dateIso)} às ${timeStr}?`,
+        state: nextState,
+        action_options: ["Sim", "Não"],
       }
     }
 

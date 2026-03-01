@@ -1,6 +1,14 @@
 import { BusinessModelExtraction } from './extractors.ts'
 
 export interface BusinessModelData extends BusinessModelExtraction {
+  /** Lista geral do que a empresa oferece (informacional). */
+  catalog_services?: Array<{ name: string; description?: string }>
+  /** Lista do que pode ser agendado (agenda/preço/duração). */
+  booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
+  /** Versão do modelo de configuração do negócio. */
+  business_config_version?: number
+  /** @deprecated manter durante janela de compatibilidade. */
+  services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
   services_confirmed?: boolean
   schedule_breaks_configured?: boolean
   faq?: Array<{ question: string; answer: string }>
@@ -10,6 +18,10 @@ export interface BusinessModelData extends BusinessModelExtraction {
   services_pricing_entered?: boolean
   /** Indica que a pergunta de sequência foi respondida. */
   sequence_booking_configured?: boolean
+  /** Serviços de orçamento (nome + pricing_type). Coletados em quote_services_list + quote_service_pricing. */
+  quote_services?: Array<{ name: string; pricing_type: string }>
+  /** Variáveis para estimativa rápida (cliente). Subconjunto de dynamic_variables. */
+  quote_external_variable_keys?: string[]
   staff?: Array<{
     name: string
     use_business_schedule?: boolean
@@ -29,6 +41,22 @@ export interface FlowState {
   collected_data: Partial<BusinessModelData>
   missing_fields: string[]
   context?: 'booking' | 'quote' | 'both'
+}
+
+function getCatalogServices(data: Partial<BusinessModelData>): Array<{ name: string; description?: string }> {
+  if (Array.isArray(data.catalog_services) && data.catalog_services.length > 0) {
+    return data.catalog_services
+  }
+  return Array.isArray(data.services) ? data.services : []
+}
+
+function getBookingServices(
+  data: Partial<BusinessModelData>
+): Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }> {
+  if (Array.isArray(data.booking_services) && data.booking_services.length > 0) {
+    return data.booking_services
+  }
+  return Array.isArray(data.services) ? data.services : []
 }
 
 function formatContextLabel(context?: 'booking' | 'quote' | 'both'): string | null {
@@ -233,6 +261,8 @@ export function determineNextStep(
   const missing = currentState.missing_fields
 
   const serviceExamples = buildServiceExamples(currentData.business_type, currentData.business_segment)
+  const catalogServices = getCatalogServices(currentData)
+  const bookingServices = getBookingServices(currentData)
 
   if (missing.includes('business_type') || !currentData.business_type) {
     return {
@@ -260,21 +290,34 @@ export function determineNextStep(
   }
 
   if (
+    missing.includes('catalog_services') ||
+    catalogServices.length === 0
+  ) {
+    const serviceOpts = buildServiceSelectableOptions(serviceExamples)
+    return {
+      step: 'catalog_services_list',
+      message:
+        'Quais serviços/produtos vocês oferecem no geral?\n\nSelecione os que você oferece ou adicione outros abaixo:',
+      selectable_options: serviceOpts,
+      requires_action: 'catalog_services_list',
+    }
+  }
+
+  if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
     (
-      missing.includes('services') ||
-      !currentData.services ||
-      currentData.services.length === 0 ||
+      missing.includes('booking_services') ||
+      bookingServices.length === 0 ||
       currentData.services_confirmed !== true
     )
   ) {
     const serviceOpts = buildServiceSelectableOptions(serviceExamples)
     return {
-      step: 'services_list',
+      step: 'booking_services_list',
       message:
         `Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nSelecione os que você oferece ou adicione outros abaixo:`,
       selectable_options: serviceOpts,
-      requires_action: 'services_list',
+      requires_action: 'booking_services_list',
     }
   }
 
@@ -352,8 +395,7 @@ export function determineNextStep(
 
   if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
-    Array.isArray(currentData.services) &&
-    currentData.services.length > 0 &&
+    bookingServices.length > 0 &&
     currentData.schedule?.interval_minutes &&
     !currentData.services_duration_configured
   ) {
@@ -368,8 +410,7 @@ export function determineNextStep(
 
   if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
-    Array.isArray(currentData.services) &&
-    currentData.services.length > 0 &&
+    bookingServices.length > 0 &&
     currentData.services_duration_configured &&
     !currentData.services_pricing_configured
   ) {
@@ -385,8 +426,7 @@ export function determineNextStep(
   // Sequência de serviços: permitir agendar vários na mesma visita
   if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
-    Array.isArray(currentData.services) &&
-    currentData.services.length > 0 &&
+    bookingServices.length > 0 &&
     currentData.services_pricing_configured &&
     !(currentData as any).sequence_booking_configured
   ) {
@@ -405,7 +445,7 @@ export function determineNextStep(
     (currentData as any).allow_sequence_booking === true &&
     (!(currentData as any).sequence_eligible_services || (currentData as any).sequence_eligible_services.length === 0)
   ) {
-    const serviceNames = (currentData.services || []).map((s) => s?.name).filter(Boolean)
+    const serviceNames = bookingServices.map((s) => s?.name).filter(Boolean)
     const selectableOpts = serviceNames.map((name, i) => ({
       id: `seq_svc_${i}`,
       label: name,
@@ -438,6 +478,41 @@ export function determineNextStep(
     return nextStaffStep
   }
 
+  // Step 12 (doc): quote_services_list — serviços que podem ser orçados
+  if (
+    (currentData.context === 'quote' || currentData.context === 'both') &&
+    (!(currentData as any).quote_services || (currentData as any).quote_services.length === 0)
+  ) {
+    const examples = buildServiceExamples(currentData.business_type, currentData.business_segment)
+    const opts = buildServiceSelectableOptions(examples)
+    return {
+      step: 'quote_services_list',
+      message:
+        'Para **orçamento**, quais são seus principais serviços que podem ser orçados?\n\nSelecione ou digite (ex.: Cortina, Persiana).',
+      selectable_options: opts,
+      requires_action: 'quote_services_list',
+    }
+  }
+
+  // Step 13 (doc): quote_service_pricing — tipo de cobrança por serviço
+  const quoteServices = (currentData as any).quote_services as Array<{ name: string; pricing_type?: string }> | undefined
+  if (
+    (currentData.context === 'quote' || currentData.context === 'both') &&
+    Array.isArray(quoteServices) &&
+    quoteServices.length > 0
+  ) {
+    const firstWithoutPricing = quoteServices.findIndex((s) => !s.pricing_type)
+    if (firstWithoutPricing >= 0) {
+      const svc = quoteServices[firstWithoutPricing]
+      return {
+        step: 'quote_service_pricing',
+        message: `Para **${svc.name}**, você cobra por m², metro linear, unidade ou sob consulta?`,
+        action_options: ['Por m² (área)', 'Por metro linear', 'Por unidade', 'Sob consulta'],
+        requires_action: 'quote_service_pricing',
+      }
+    }
+  }
+
   if (
     (currentData.context === 'quote' || currentData.context === 'both') &&
     (!currentData.dynamic_variables || currentData.dynamic_variables.length === 0)
@@ -449,6 +524,77 @@ export function determineNextStep(
         'Ótimo. Pra eu conseguir **qualificar um orçamento** automaticamente, quais informações você precisa que o cliente informe?\n\nSelecione nos checkboxes abaixo e clique em **Confirmar seleção**:',
       selectable_options: quoteVarOpts,
       requires_action: 'quote_variables',
+    }
+  }
+
+  // Step 15 (doc): quote_external_variables — variáveis para estimativa rápida (cliente)
+  if (
+    (currentData.context === 'quote' || currentData.context === 'both') &&
+    Array.isArray(currentData.dynamic_variables) &&
+    currentData.dynamic_variables.length > 0 &&
+    (!(currentData as any).quote_external_variable_keys || (currentData as any).quote_external_variable_keys.length === 0)
+  ) {
+    const internalVars = currentData.dynamic_variables
+    const externalOpts = internalVars.map((v, i) => ({
+      id: `qev_${i}`,
+      label: v.label || v.key,
+      value: v.key,
+      selected: (currentData as any).quote_external_variable_keys?.includes(v.key) ?? false,
+    }))
+    return {
+      step: 'quote_external_variables',
+      message:
+        'Para o **cliente** pedir uma estimativa rápida (antes do orçamento completo), quais dados são suficientes?\n\nRecomendado: poucos (ex.: só largura e altura).',
+      selectable_options: externalOpts,
+      requires_action: 'quote_external_variables',
+    }
+  }
+
+  // Branding opcional (FASE 4.4): apenas quando context inclui orçamento
+  if (
+    (currentData.context === 'quote' || currentData.context === 'both') &&
+    (currentData as any).branding_offer_skipped === undefined &&
+    (currentData as any).branding === undefined
+  ) {
+    return {
+      step: 'branding_offer',
+      message:
+        'Quando eu gerar o PDF do orçamento, você quer que ele saia com seu **logo e dados da empresa** (timbrado)?',
+      action_options: ['Sim, quero personalizar agora', 'Depois eu configuro'],
+      requires_action: 'branding_offer',
+    }
+  }
+
+  // Mini-fluxo branding (quando usuário escolheu "Sim")
+  const branding = (currentData as any).branding
+  if (branding?.enabled === true) {
+    if (!branding.company_legal_name) {
+      return {
+        step: 'branding_company_legal_name',
+        message: 'Qual é a **razão social** da sua empresa? (nome oficial)',
+        requires_action: 'branding_company_legal_name',
+      }
+    }
+    if (!branding.cnpj) {
+      return {
+        step: 'branding_cnpj',
+        message: 'Qual é o **CNPJ** da empresa? (somente números)',
+        requires_action: 'branding_cnpj',
+      }
+    }
+    if (!branding.company_phone) {
+      return {
+        step: 'branding_company_phone',
+        message: 'Qual é o **telefone** da empresa? (com DDD)',
+        requires_action: 'branding_company_phone',
+      }
+    }
+    if (!branding.company_email) {
+      return {
+        step: 'branding_company_email',
+        message: 'Qual é o **e-mail** de contato da empresa?',
+        requires_action: 'branding_company_email',
+      }
     }
   }
 
@@ -672,9 +818,17 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
   if (data.business_name) parts.push(`• Negócio: ${data.business_name}`)
   if (data.business_type) parts.push(`• Tipo: ${data.business_type}`)
 
-  if (data.services && data.services.length > 0) {
+  if (getCatalogServices(data).length > 0) {
     parts.push(
-      `• Serviços: ${data.services
+      `• Catálogo: ${getCatalogServices(data)
+        .map((s) => s.name)
+        .join(', ')}`
+    )
+  }
+
+  if (getBookingServices(data).length > 0) {
+    parts.push(
+      `• Agendáveis: ${getBookingServices(data)
         .map((s) => {
           const dur = s.duration_minutes ? ` (${s.duration_minutes} min)` : ''
           const price = s.base_price != null ? ` — R$ ${s.base_price}` : ''
@@ -785,9 +939,30 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
     parts.push(`• Estilo de respostas: ${interactionStyleLabel}`)
   }
 
+  if (Array.isArray((data as any).quote_services) && (data as any).quote_services.length > 0) {
+    const qs = (data as any).quote_services
+      .map((s: any) => (s.pricing_type ? `${s.name} (${s.pricing_type})` : s.name))
+      .join(', ')
+    parts.push(`• Serviços de orçamento: ${qs}`)
+  }
   if (Array.isArray((data as any).dynamic_variables) && (data as any).dynamic_variables.length > 0) {
     const vars = (data as any).dynamic_variables.map((v: any) => v.label || v.key).filter(Boolean)
     if (vars.length) parts.push(`• Variáveis dinâmicas: ${vars.join(', ')}`)
+  }
+  if (Array.isArray((data as any).quote_external_variable_keys) && (data as any).quote_external_variable_keys.length > 0) {
+    const ext = (data as any).quote_external_variable_keys
+    const labels = (data as any).dynamic_variables || []
+    const extLabels = ext.map((k: string) => labels.find((v: any) => v.key === k)?.label || k)
+    parts.push(`• Estimativa rápida: ${extLabels.join(', ')}`)
+  }
+
+  const branding = (data as any).branding
+  if (branding) {
+    if (branding.enabled === true && (branding.company_legal_name || branding.cnpj)) {
+      parts.push(`• Branding PDF: ${branding.company_legal_name || branding.cnpj || 'configurado'}`)
+    } else if (branding.enabled === false || (data as any).branding_offer_skipped) {
+      parts.push(`• Branding PDF: configurar depois`)
+    }
   }
 
   if (Array.isArray((data as any).faq) && (data as any).faq.length > 0) {
@@ -852,9 +1027,9 @@ export function generateFullStructure(data: Partial<BusinessModelData>): string 
     parts.push(`**Horário:** ${days} - ${time}\n`)
   }
 
-  if (data.services && data.services.length > 0) {
+  if (getBookingServices(data).length > 0) {
     parts.push(
-      `**Serviços:**\n${data.services
+      `**Serviços agendáveis:**\n${getBookingServices(data)
         .map((s, i) => {
           const dur = s.duration_minutes ? ` (${s.duration_minutes} min)` : ''
           const price = s.base_price != null ? ` — R$ ${s.base_price}` : ''

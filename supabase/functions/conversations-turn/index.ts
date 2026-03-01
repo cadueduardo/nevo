@@ -115,6 +115,7 @@ import {
   shouldBlockByTargetAudience,
   buildTargetAudienceRestrictionMessage,
   handleInternalIntent,
+  tryHandleExternalQuote,
 } from "./lib/index.ts"
 import type {
   ConversationTurnRequest,
@@ -176,7 +177,9 @@ async function loadServicesFromSettings(
       .select("business_config")
       .eq("agent_id", agentId)
       .maybeSingle()
-    const agentServices = normalizeIncomingServices(agentSetting?.business_config?.services)
+    const agentServices = normalizeIncomingServices(
+      agentSetting?.business_config?.booking_services ?? agentSetting?.business_config?.services
+    )
     if (agentServices.length > 0) return agentServices
   }
 
@@ -185,7 +188,9 @@ async function loadServicesFromSettings(
     .select("business_config")
     .eq("tenant_id", tenantId)
     .maybeSingle()
-  return normalizeIncomingServices(tenantSetting?.business_config?.services)
+  return normalizeIncomingServices(
+    tenantSetting?.business_config?.booking_services ?? tenantSetting?.business_config?.services
+  )
 }
 
 async function loadServicesFromOnboardingSession(
@@ -198,7 +203,9 @@ async function loadServicesFromOnboardingSession(
     .select("collected_data")
     .eq("session_id", sessionId)
     .maybeSingle()
-  return normalizeIncomingServices(onboardingSession?.collected_data?.services)
+  return normalizeIncomingServices(
+    onboardingSession?.collected_data?.booking_services ?? onboardingSession?.collected_data?.services
+  )
 }
 
 function mergeServicesPreferIncoming(
@@ -228,6 +235,12 @@ function mergeServicesPreferIncoming(
   }
 
   return Array.from(byName.values()).filter((svc) => Boolean((svc.name || "").trim()))
+}
+
+function getEntryActionOptions(config: SimulatorConfig): string[] {
+  if (config.context_mode === "quote") return ["Quero orçamento"]
+  if (config.context_mode === "both") return ["Quero agendar", "Quero orçamento"]
+  return ["Quero agendar"]
 }
 
 function tryHandlePriceQuestionAnytime(
@@ -411,6 +424,8 @@ type ConversationRuntimeContext = {
   supabaseAdmin: any
   tenantId: string
   agentId: string
+  /** FASE 7: true = client/unknown (external); bloqueia cancelamento e consulta de agenda. */
+  isExternalActor?: boolean
   contactId?: string
   contact?: { display_name?: string | null }
   senderDisplayName?: string
@@ -610,6 +625,13 @@ async function tryHandleCancellationAnytime(
   state: SimulatorState,
   senderDisplayName?: string
 ): Promise<SimulatorResult | null> {
+  // FASE 7: Cliente (external) não pode cancelar via chat; apenas owner/admin.
+  if (runtime.isExternalActor && isCancellationIntent(text)) {
+    return buildResult(
+      "Para cancelar ou alterar seu agendamento, entre em contato conosco.",
+      { ...state }
+    )
+  }
   const isPendingFlow = Boolean(
     (state as any).pending_cancel_selection ||
       (state as any).pending_cancel_confirm ||
@@ -2825,6 +2847,21 @@ async function processSimulatorMessage(
   const earlyRuleResult = applyConversationRules(earlyConversationRules, { text, config, nextState })
   if (earlyRuleResult) return earlyRuleResult
 
+  // FASE 7: Cliente consultando agenda (comando interno) → resposta genérica, nunca mostrar agenda real
+  if (runtime?.isExternalActor) {
+    const agendaQueryPattern =
+      /\b(quais?\s+s[aã]o\s+(os\s+)?meus?\s+agendamentos?)\b/i.test(textNorm) ||
+      /\b(meus?\s+compromissos?|minha\s+agenda|agenda\s+de\s+hoje|agendamentos?\s+de\s+hoje)\b/i.test(textNorm) ||
+      /\b(quero\s+ver\s+(os\s+)?(meus?\s+)?agendamentos?)\b/i.test(textNorm)
+    if (agendaQueryPattern) {
+      return buildResult(
+        "Posso te ajudar a agendar uma visita ou tirar dúvidas sobre nossos serviços. O que você prefere?",
+        nextState,
+        ["Quero agendar", "Tirar dúvidas"]
+      )
+    }
+  }
+
   if (runtime) {
     const anytimeCancellationResult = await tryHandleCancellationAnytime(runtime, text, nextState, senderDisplayName)
     if (anytimeCancellationResult) return anytimeCancellationResult
@@ -2904,8 +2941,8 @@ async function processSimulatorMessage(
   // Primeira interacao: usar IA para responder com linguagem natural e contexto do negocio.
   if (isFirst && isGreeting(text)) {
     const aiGreeting = await answerWithContextualAI(config, text, history)
-    if (aiGreeting) return buildResult(aiGreeting, { ...nextState, step: "qualification" }, ["Quero agendar"])
-    return buildResult(getGreetingMessage(config), { ...nextState, step: "qualification" }, ["Quero agendar"])
+    if (aiGreeting) return buildResult(aiGreeting, { ...nextState, step: "qualification" }, getEntryActionOptions(config))
+    return buildResult(getGreetingMessage(config), { ...nextState, step: "qualification" }, getEntryActionOptions(config))
   }
 
   // PRIORIDADE: Se é primeira mensagem — IA interpreta intenção e responde com contexto (consierge)
@@ -2963,12 +3000,22 @@ async function processSimulatorMessage(
     // Primeiro: IA responde (horário para amanhã, endereço, serviços, etc.) usando config + histórico
     const firstAiAnswer = await answerWithContextualAI(config, text, history)
     if (firstAiAnswer?.trim()) {
-      return buildResult(`${greeting}\n\n${firstAiAnswer}`, { ...nextState, step: "qualification" }, ["Quero agendar"])
+      return buildResult(`${greeting}\n\n${firstAiAnswer}`, { ...nextState, step: "qualification" }, getEntryActionOptions(config))
     }
     // Fallback só se IA indisponível
     const firstInfoAnswer = tryAnswerInformationalQuestion(config, text)
     if (firstInfoAnswer) {
-      return buildResult(`${greeting}\n\n${firstInfoAnswer}`, { ...nextState, step: "qualification" }, ["Quero agendar"])
+      return buildResult(`${greeting}\n\n${firstInfoAnswer}`, { ...nextState, step: "qualification" }, getEntryActionOptions(config))
+    }
+
+    // Em contexto "both", se a mensagem já indica claramente orçamento, não pode cair em booking.
+    if (config.context_mode === "both") {
+      const detectedMode = detectModeFromText(text)
+      if (detectedMode === "quote") {
+        nextState.mode = "quote"
+        nextState.step = "quote"
+        return handleQuoteModeMessage(config, text, nextState)
+      }
     }
 
     const orchestrator = await getOrchestrator()
@@ -3718,13 +3765,22 @@ serve(async (req) => {
         ? { reject_unlisted_services: true, use_ai_matching: true, ...ctxLead }
         : { reject_unlisted_services: true, use_ai_matching: true }
 
+    const incomingCatalogServices = normalizeIncomingServices((body.context as any)?.catalog_services)
+    const incomingBookingServices = normalizeIncomingServices((body.context as any)?.booking_services)
+    const incomingLegacyServices = normalizeIncomingServices(body.context?.services)
+    const resolvedBookingServices = incomingBookingServices.length > 0 ? incomingBookingServices : incomingLegacyServices
+    const resolvedCatalogServices = incomingCatalogServices.length > 0 ? incomingCatalogServices : resolvedBookingServices
+
     const config: SimulatorConfig = {
       business_name: body.context?.business_name,
       business_type: body.context?.business_type,
       context_mode: body.context?.context_mode,
       establishment_address: body.context?.establishment_address,
       tone: body.context?.tone,
-      services: normalizeIncomingServices(body.context?.services),
+      catalog_services: resolvedCatalogServices,
+      booking_services: resolvedBookingServices,
+      // Compat legado: enquanto houver código antigo, services aponta para booking_services.
+      services: resolvedBookingServices,
       when_client_asks_price_no_value: body.context?.when_client_asks_price_no_value || "offer_handoff_or_booking",
       schedule: body.context?.schedule,
       staff: body.context?.staff || [],
@@ -3736,6 +3792,7 @@ serve(async (req) => {
       sequence_eligible_services: body.context?.sequence_eligible_services ?? [],
       target_audience: body.context?.target_audience,
       interaction_style: body.context?.interaction_style ?? "hybrid",
+      branding: body.context?.branding,
     }
 
     const tenant = (body as { tenant_id?: string }).tenant_id
@@ -3952,28 +4009,93 @@ serve(async (req) => {
       (incomingActorType === "owner" || incomingActorType === "admin")
 
     if (isInternalActor) {
-      const internalResult = await handleInternalIntent({
+      // FASE 6: Rate limit configurável via ENV (default 20/min)
+      const RATE_LIMIT_WINDOW_SEC = 60
+      const RATE_LIMIT_MAX = Math.max(1, parseInt(Deno.env.get("INTERNAL_RATE_LIMIT_PER_MINUTE") || "20", 10) || 20)
+      const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_SEC * 1000).toISOString()
+      const { count: recentCount, error: countErr } = await supabaseAdmin
+        .from("internal_action_log")
+        .select("*", { count: "exact", head: true })
+        .eq("tenant_id", tenant.id)
+        .gte("created_at", windowStart)
+      if (!countErr && (recentCount ?? 0) >= RATE_LIMIT_MAX) {
+        result = {
+          message: "Você enviou muitos comandos. Tenta em 30 segundos.",
+          state: stateWithFirstFlag,
+          action_options: undefined,
+        }
+      } else {
+        await supabaseAdmin.from("internal_action_log").insert({
+          tenant_id: tenant.id,
+          action: "internal_command",
+          payload: { message: body.message },
+        })
+        const internalResult = await handleInternalIntent({
+          supabaseAdmin,
+          tenantId: tenant.id,
+          agentId,
+          message: body.message,
+          config: {
+            business_name: config.business_name,
+            branding: config.branding,
+            schedule: config.schedule,
+            services: config.services,
+          },
+          state: stateWithFirstFlag,
+          conversationId: conversation.id,
+          channelId: channel.id,
+        })
+        if (internalResult.handled) {
+          result = {
+            message: internalResult.message,
+            state: internalResult.state ?? stateWithFirstFlag,
+            action_options: internalResult.action_options,
+          }
+        } else {
+          // Não classificou como intent interna; segue fluxo normal.
+          try {
+            result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
+              supabaseAdmin,
+              tenantId: tenant.id,
+              agentId,
+              contactId: contact.id,
+              contact,
+              senderDisplayName,
+              history,
+              config,
+            })
+          } catch (err) {
+            console.error("processSimulatorMessage error:", err)
+            result = {
+              message: "Desculpe, tive um problema ao processar. Pode repetir?",
+              state: stateWithFirstFlag,
+              action_options: undefined,
+            }
+          }
+        }
+      }
+    } else {
+      // FASE 5: Orçamento externo (cliente pergunta preço com medidas → faixa + CTA)
+      const externalQuoteResult = await tryHandleExternalQuote({
         supabaseAdmin,
         tenantId: tenant.id,
         agentId,
-        message: body.message,
-        config: { business_name: config.business_name },
-        state: stateWithFirstFlag,
         conversationId: conversation.id,
+        message: body.message,
       })
-      if (internalResult.handled) {
+      if (externalQuoteResult.handled) {
         result = {
-          message: internalResult.message,
-          state: internalResult.state ?? stateWithFirstFlag,
-          action_options: internalResult.action_options,
+          message: externalQuoteResult.message || "",
+          state: stateWithFirstFlag,
+          action_options: externalQuoteResult.action_options,
         }
       } else {
-        // Não classificou como intent interna; segue fluxo normal.
         try {
           result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
             supabaseAdmin,
             tenantId: tenant.id,
             agentId,
+            isExternalActor: true,
             contactId: contact.id,
             contact,
             senderDisplayName,
@@ -3987,26 +4109,6 @@ serve(async (req) => {
             state: stateWithFirstFlag,
             action_options: undefined,
           }
-        }
-      }
-    } else {
-      try {
-        result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
-          supabaseAdmin,
-          tenantId: tenant.id,
-          agentId,
-          contactId: contact.id,
-          contact,
-          senderDisplayName,
-          history,
-          config,
-        })
-      } catch (err) {
-        console.error("processSimulatorMessage error:", err)
-        result = {
-          message: "Desculpe, tive um problema ao processar. Pode repetir?",
-          state: stateWithFirstFlag,
-          action_options: undefined,
         }
       }
     }

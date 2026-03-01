@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { SimulatorPanel } from '@/features/simulator/components/SimulatorPanel'
+import { SimulatorPanel, type SimulatorRole } from '@/features/simulator/components/SimulatorPanel'
 import { useAgentContext } from '@/components/providers/AgentProvider'
 import type { Message } from '@/components/shared/ChatShell'
 
@@ -25,33 +25,40 @@ export function SimulatorAppClient({ onClose, agentIdOverride }: SimulatorAppCli
   const [loading, setLoading] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [focusTrigger, setFocusTrigger] = useState(0)
+  const [role, setRole] = useState<SimulatorRole>('client')
 
   const handleClose = useCallback(() => {
     if (onClose) onClose()
     else router.push('/app')
   }, [onClose, router])
 
-  const onSend = useCallback(async (content: string) => {
-    setLoading(true)
-    const userMessage: Message = {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      kind: 'text',
-      content,
-      timestamp: new Date(),
-    }
-    setMessages((prev) => [...prev, userMessage])
+  const mode = role === 'owner' ? 'internal' : 'external'
+  const actorType = role === 'owner' ? 'owner' : 'client'
 
-    try {
-      const res = await fetch('/api/app/simulator', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: content,
-          conversation_id: conversationId ?? undefined,
-          agent_id: effectiveAgentId,
-        }),
-      })
+  const onSend = useCallback(
+    async (content: string) => {
+      setLoading(true)
+      const userMessage: Message = {
+        id: `u-${Date.now()}`,
+        role: 'user',
+        kind: 'text',
+        content,
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, userMessage])
+
+      try {
+        const res = await fetch('/api/app/simulator', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: content,
+            conversation_id: conversationId ?? undefined,
+            agent_id: effectiveAgentId,
+            mode,
+            actor_type: actorType,
+          }),
+        })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         throw new Error(data.error || res.statusText)
@@ -86,7 +93,15 @@ export function SimulatorAppClient({ onClose, agentIdOverride }: SimulatorAppCli
     } finally {
       setLoading(false)
     }
-  }, [conversationId, effectiveAgentId])
+  },
+    [conversationId, effectiveAgentId, mode, actorType]
+  )
+
+  const handleRoleChange = useCallback((newRole: SimulatorRole) => {
+    setRole(newRole)
+    setMessages([])
+    setConversationId(null)
+  }, [])
 
   const onReset = useCallback(async () => {
     const currentConversationId = conversationId
@@ -117,6 +132,8 @@ export function SimulatorAppClient({ onClose, agentIdOverride }: SimulatorAppCli
       onSend={onSend}
       onReset={onReset}
       onClose={handleClose}
+      role={role}
+      onRoleChange={handleRoleChange}
       focusTrigger={focusTrigger}
     />
   )

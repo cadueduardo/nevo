@@ -19,9 +19,10 @@ interface LoginCardProps {
   disabled?: boolean
   onSubmit: (payload: LoginCardSubmitPayload) => void | Promise<void>
   onCancel?: () => void
+  onCreateAccount?: () => void
 }
 
-export function LoginCard({ disabled, onSubmit, onCancel }: LoginCardProps) {
+export function LoginCard({ disabled, onSubmit, onCancel, onCreateAccount }: LoginCardProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
@@ -79,6 +80,19 @@ export function LoginCard({ disabled, onSubmit, onCancel }: LoginCardProps) {
           Entrar
         </Button>
       </CardFooter>
+      {onCreateAccount && (
+        <div className="px-6 pb-5 text-sm text-muted-foreground">
+          Você ainda não tem uma conta?{' '}
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onCreateAccount}
+            className="underline underline-offset-2 hover:text-foreground disabled:opacity-60"
+          >
+            Criar agora
+          </button>
+        </div>
+      )}
     </Card>
   )
 }
