@@ -357,10 +357,11 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
    - "both": se mencionar ambos
    - Frases como "quero um assistente de agendamento" devem preencher context="booking" (e não services)
 
-8. COLABORADORES (staff):
-   - Extraia apenas se o usuário mencionar colaboradores por nome
-   - Ex.: "tenho a Carla e a Maria" -> [{"name":"Carla"},{"name":"Maria"}]
-   - Não inventar nomes
+8. COLABORADORES (staff) e MODO (staff_mode):
+   - Se o usuário disser o PRÓPRIO nome (dono/atendente), inclua em staff: [{"name": "Nome"}]. Ex.: "Meu nome é Ronny", "sou o João", "me chamo Maria" -> staff: [{"name":"Ronny"}] (ou João/Maria).
+   - Se mencionar colaboradores por nome: "tenho a Carla e a Maria" -> [{"name":"Carla"},{"name":"Maria"}]. Não inventar nomes.
+   - Se a mensagem indicar que a pessoa atende SOZINHA (ex.: "sou barbeiro", "tenho uma barbearia", "só eu atendo", "atendo sozinho", sem mencionar equipe/colaboradores), inclua staff_mode: "solo".
+   - staff_mode: "solo" | "team" (omitir se não der para inferir)
 
 9. TOM DE VOZ (tone_of_voice):
    - Extraia APENAS se o usuário pediu explicitamente um tom (ex.: "pode ser mais formal", "bem amigável", etc.)
@@ -384,6 +385,7 @@ Retorne APENAS um JSON válido com os campos identificados:
     "end_time": "HH:mm"
   },
   "staff": [{"name": "Carla"}, {"name": "Maria"}],
+  "staff_mode": "solo" | "team",
   "context": "booking" | "quote" | "both",
   "tone_of_voice": "formal" | "friendly" | "professional" | "funny"
 }

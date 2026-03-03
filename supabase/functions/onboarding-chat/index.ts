@@ -126,6 +126,22 @@ function looksLikeBusinessSeedInput(message: string): boolean {
   return hasBusinessHint || hasSelfDescription || isLikelyBusinessInfoFirstMessage(text)
 }
 
+/** Extrai o nome do dono/atendente quando a mensagem diz "Meu nome é X", "me chamo X", "sou o X". */
+function extractOwnerNameFromText(message: string): string | null {
+  const m = (message || '').trim()
+  if (!m || m.length < 5) return null
+  const meuNome = m.match(/\bmeu\s+nome\s+[eé]\s+([^.,!?]+)/i)
+  if (meuNome) return meuNome[1].trim().replace(/\s+/g, ' ').slice(0, 80) || null
+  const meChamo = m.match(/\bme\s+chamo\s+([^.,!?]+)/i)
+  if (meChamo) return meChamo[1].trim().replace(/\s+/g, ' ').slice(0, 80) || null
+  const souO = m.match(/\bsou\s+(?:o\s+|a\s+)?([^.,!?]+?)(?:\s+e\s+tenho|\s+e\s+atendo|,|\.|$)/i)
+  if (souO) {
+    const name = souO[1].trim().replace(/\s+/g, ' ')
+    if (name.length >= 2 && name.length <= 80 && !/^(barbeiro|manicure|dentista|advogado|chef|personal)$/i.test(name)) return name
+  }
+  return null
+}
+
 function normalizeForComparison(value: string): string {
   return (value || '')
     .normalize('NFD')
@@ -4395,10 +4411,15 @@ serve(async (req) => {
         const hasBusinessContext = hasInitialExtraction || isLikelyBusinessInfoFirstMessage(body.message)
 
         if (hasBusinessContext) {
+          const ownerName = extractOwnerNameFromText(body.message)
+          const hasStaffFromExtraction = Array.isArray(firstExtraction?.staff) && firstExtraction.staff.length > 0
           const mergedFirst = {
             ...collectedData,
             ...firstExtraction,
             ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
+            ...(ownerName && !hasStaffFromExtraction
+              ? { staff: [{ name: ownerName }], staff_mode: (firstExtraction as any)?.staff_mode || 'solo' }
+              : {}),
           }
           response = await processMessage(
             body.message,
