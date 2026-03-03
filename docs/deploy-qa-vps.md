@@ -149,6 +149,49 @@ nevoqa.pratikapp.com.br {
 
 Lembre de ter o DNS de **nevoqa.pratikapp.com.br** apontando para o IP do VPS.
 
+**Se aparecer 400 (Bad Request) em `/_next/static/` (CSS, JS, chunks):**
+
+O 400 costuma vir do **Nginx**, não do Next.js. Faça o seguinte no VPS:
+
+1. **Conferir qual porta o QA está usando:**  
+   `grep -r "PORT\|3010\|3001" /opt/nevo-qa/.env /opt/nevo-qa/ecosystem*.config.* 2>/dev/null` ou `pm2 show nevo-qa`. Use essa porta no `proxy_pass` abaixo.
+
+2. **Deixar um único `location /`** no server do nevoqa, repassando tudo para o Node (sem `alias`, sem `location /_next/`):
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name nevoqa.pratikapp.com.br;
+
+    location / {
+        proxy_pass http://127.0.0.1:3010;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+    }
+}
+```
+
+3. **Remover** qualquer outro `location` para esse server que mexa com `/_next` ou que use `alias`/`return 400`. Não use `location /_next/` com `alias`.
+
+4. **Procurar 400 no Nginx:**  
+   `sudo grep -r "return 400\|400;" /etc/nginx/` — se houver regra que devolve 400 para o host/URI do QA, remova ou ajuste.
+
+5. **Testar e recarregar:**  
+   `sudo nginx -t && sudo systemctl reload nginx`
+
+6. **Se usar HTTPS:** o bloco `listen 443 ssl` (e certificado) deve ter o **mesmo** `location / { proxy_pass ... }`; não crie `location /_next/` separado.
+
+Há um exemplo completo em **`scripts/nginx-nevoqa.conf`** no repositório para copiar/colar ou comparar.
+
+**Favicon 404:** o app usa ícone via metadata; se quiser remover o 404 de `/favicon.ico`, coloque um arquivo `favicon.ico` em `public/` no projeto e faça novo build/deploy.
+
 ---
 
 ## 7. Deploy posterior do QA (após alterações no código)

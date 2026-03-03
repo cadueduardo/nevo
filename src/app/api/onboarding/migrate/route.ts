@@ -417,7 +417,7 @@ export async function POST(req: NextRequest) {
           const keywords = (qs.name || '')
             .toLowerCase()
             .split(/\s+/)
-            .filter((w) => w.length > 2)
+            .filter((w: string) => w.length > 2)
             .slice(0, 10)
           await supabaseAdmin.from('quote_service').insert({
             agent_id: agent.id,
@@ -601,7 +601,7 @@ export async function POST(req: NextRequest) {
         const keywords = (qs.name || '')
           .toLowerCase()
           .split(/\s+/)
-          .filter((w) => w.length > 2)
+          .filter((w: string) => w.length > 2)
           .slice(0, 10)
         await supabaseAdmin.from('quote_service').insert({
           agent_id: agent.id,
