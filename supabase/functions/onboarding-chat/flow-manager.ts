@@ -460,9 +460,10 @@ export function determineNextStep(
     }
   }
 
+  // Sempre perguntar se atende sozinho ou tem colaboradores (mesmo com nome do dono já preenchido), para não pular cadastro de equipe.
   if (
     (currentData.context === 'booking' || currentData.context === 'both') &&
-    (missing.includes('staff') || !currentData.staff || currentData.staff.length === 0)
+    !(currentData as any).staff_mode
   ) {
     return {
       step: 'staff_mode',

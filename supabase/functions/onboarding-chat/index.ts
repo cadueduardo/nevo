@@ -2665,7 +2665,18 @@ async function processMessage(
   if (currentStep === 'staff_mode') {
     const isSolo = /(s[oó]\s*eu\s*atendo|atendo\s*sozinho|sozinh[oa]|s[oó]\s*eu|apenas\s*eu|somente\s*eu)/i.test(text)
     const hasTeam = /(eu\s*e\s*outros|colaboradores?|funcion[aá]rios?|equipe|temos|tenho)/i.test(text)
+    const hasOneStaffAlready = Array.isArray(collectedData.staff) && collectedData.staff.length === 1 && (collectedData.staff[0]?.name || '').trim().length > 0
     if (isSolo && !hasTeam) {
+      if (hasOneStaffAlready) {
+        const name = collectedData.staff![0].name
+        return {
+          assistant_message: `Perfeito, ${name}. A sua agenda é a mesma do estabelecimento ou tem horário próprio?`,
+          next_step: 'staff_schedule_mode',
+          extracted_data: { staff_mode: 'solo', owner_attends: true },
+          action_options: ['Mesmo horário do estabelecimento', 'Horário próprio'],
+          requires_action: 'staff_schedule_mode',
+        }
+      }
       return {
         assistant_message: 'Perfeito. Qual é o seu nome? (você será o único atendente cadastrado)',
         next_step: 'staff_list',
@@ -4417,9 +4428,8 @@ serve(async (req) => {
             ...collectedData,
             ...firstExtraction,
             ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
-            ...(ownerName && !hasStaffFromExtraction
-              ? { staff: [{ name: ownerName }], staff_mode: (firstExtraction as any)?.staff_mode || 'solo' }
-              : {}),
+            // Pré-preenche nome do dono para não repetir "Qual é o seu nome?"; não define staff_mode para sempre mostrar "Só eu ou tenho outros?".
+            ...(ownerName && !hasStaffFromExtraction ? { staff: [{ name: ownerName }] } : {}),
           }
           response = await processMessage(
             body.message,
