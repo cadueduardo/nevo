@@ -394,9 +394,14 @@ export async function POST(req: NextRequest) {
       const quoteServices = Array.isArray(collected.quote_services) ? collected.quote_services : []
       if (hasQuote && quoteServices.length > 0) {
         const dynamicVars = Array.isArray(collected.dynamic_variables) ? collected.dynamic_variables : []
+        const dynamicVarKeys = dynamicVars
+          .map((v: any) => (typeof v?.key === 'string' ? v.key : ''))
+          .filter((k: string) => k.length > 0)
         const externalKeys = Array.isArray(collected.quote_external_variable_keys)
-          ? collected.quote_external_variable_keys.filter((k) => dynamicVars.some((v: any) => v.key === k))
-          : dynamicVars.slice(0, 2).map((v: any) => v.key)
+          ? collected.quote_external_variable_keys.filter(
+              (k: unknown): k is string => typeof k === 'string' && dynamicVarKeys.includes(k)
+            )
+          : dynamicVarKeys.slice(0, 2)
         for (const qs of quoteServices) {
           if (!qs?.name?.trim()) continue
           const variablesSchema = dynamicVars.map((v: any) => ({
@@ -573,9 +578,14 @@ export async function POST(req: NextRequest) {
     const quoteServices = Array.isArray(collected.quote_services) ? collected.quote_services : []
     if (hasQuote && quoteServices.length > 0) {
       const dynamicVars = Array.isArray(collected.dynamic_variables) ? collected.dynamic_variables : []
+      const dynamicVarKeys = dynamicVars
+        .map((v: any) => (typeof v?.key === 'string' ? v.key : ''))
+        .filter((k: string) => k.length > 0)
       const externalKeys = Array.isArray(collected.quote_external_variable_keys)
-        ? collected.quote_external_variable_keys.filter((k) => dynamicVars.some((v: any) => v.key === k))
-        : dynamicVars.slice(0, 2).map((v: any) => v.key)
+        ? collected.quote_external_variable_keys.filter(
+            (k: unknown): k is string => typeof k === 'string' && dynamicVarKeys.includes(k)
+          )
+        : dynamicVarKeys.slice(0, 2)
       for (const qs of quoteServices) {
         if (!qs?.name?.trim()) continue
         const variablesSchema = dynamicVars.map((v: any) => ({
