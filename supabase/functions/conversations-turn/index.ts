@@ -3264,6 +3264,24 @@ async function processSimulatorMessage(
       return buildResult(infoAnswer, nextState)
     }
 
+    // Confirmação de público (esclarecimento homens+infantil): "Sim, nos encaixamos" → fluxo múltiplo (antes da triagem para não ser capturado pela IA)
+    const nQual = normalizeText(text)
+    const trimmedQual = nQual.trim()
+    const isAudienceConfirmation =
+      /^(1\s*[-–—.)]\s*)?(sim,?\s*nos\s+encaixamos|nos\s+encaixamos)\s*$/i.test(trimmedQual) ||
+      /^sim,?\s*nos\s+encaixamos\s*$/i.test(trimmedQual) ||
+      trimmedQual === "1" ||
+      (trimmedQual.length <= 60 && /\bnos\s+encaixamos\b/i.test(trimmedQual))
+    if (isAudienceConfirmation && (config.services || []).length > 0) {
+      nextState.mode = "booking"
+      nextState.step = undefined
+      nextState.pending_additional_booking = true
+      nextState.pending_attendee_name = true
+      nextState.pending_additional_count = 2
+      nextState.expected_additional_count = 2
+      return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
+    }
+
     // Triagem: SEMPRE verificar contexto da mensagem antes de mostrar menu
     if (
       !isGreeting(text) &&
