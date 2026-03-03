@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { normalizeText } from "./utils.ts"
 import type { SimulatorConfig } from "./types.ts"
 
@@ -30,6 +30,30 @@ function inferRequestedAudienceFromText(text: string): RequestedAudience {
   return null
 }
 
+/** Cliente está pedindo agendamento para o próprio público permitido (ex.: "agendar pra mim" em men_only). */
+function textIndicatesBookingForAllowedAudience(config: SimulatorConfig, text: string): boolean {
+  const mode = (config.target_audience?.mode || "all") as AudienceMode
+  if (mode === "all" || mode === "custom") return false
+  const msg = normalizeText(text || "")
+  if (!msg) return false
+
+  const agendarParaMim = /(quero\s+)?agendar\s+(ent[ãa]o\s+)?(pra|para)\s+(mim|eu)(\s+e\s+meu\s+filho)?/i
+  const simQueroAgendar = /^(sim|ok|entendi|beleza)[,\s]*\s*(quero\s+)?agendar/i
+  const soQueroAgendar = /^s[oó]\s+quero\s+agendar/i
+
+  if (mode === "men_only") {
+    // "agendar pra mim", "agendar pra mim e meu filho" (eu + filho = masculino), "sim, quero agendar"
+    if (agendarParaMim.test(msg) || simQueroAgendar.test(msg) || soQueroAgendar.test(msg)) return true
+  }
+  if (mode === "women_only") {
+    if (agendarParaMim.test(msg) || simQueroAgendar.test(msg) || soQueroAgendar.test(msg)) return true
+  }
+  if (mode === "kids_only") {
+    if (/(agendar|marcar)\s+(pra|para|pro)\s+(meu\s+filho|minha\s+filha|meu\s+bebe|crianca)/i.test(msg)) return true
+  }
+  return false
+}
+
 function expectedByMode(mode: AudienceMode): RequestedAudience {
   if (mode === "women_only" || mode === "men_only" || mode === "kids_only") return mode
   return null
@@ -55,6 +79,9 @@ export function shouldBlockByTargetAudience(
   const mode = (config.target_audience?.mode || "all") as AudienceMode
   const expected = expectedByMode(mode)
   if (!expected) return false
+
+  // Cliente aceitou a restrição e pede agendamento para o público permitido (ex.: "agendar pra mim e meu filho" em men_only).
+  if (textIndicatesBookingForAllowedAudience(config, text)) return false
 
   const requested = inferRequestedAudienceFromText(text)
   if (!requested) return false

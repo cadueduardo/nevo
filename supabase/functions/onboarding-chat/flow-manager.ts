@@ -662,8 +662,16 @@ export function determineNextStep(
     return {
       step: 'target_audience',
       message:
-        'Seu atendimento e focado em algum publico especifico? Isso ajuda a qualificar melhor as conversas.',
-      action_options: ['Atendo todos os publicos', 'Somente mulheres', 'Somente homens', 'Infantil', 'Outro publico especifico'],
+        'Seu atendimento e focado em algum publico especifico? Isso ajuda a qualificar melhor as conversas. (Pode escolher mais de um, ex.: homens e infantil.)',
+      action_options: [
+        'Atendo todos os publicos',
+        'Somente mulheres',
+        'Somente homens',
+        'Infantil',
+        'Homens e infantil',
+        'Mulheres e infantil',
+        'Outro publico especifico',
+      ],
       requires_action: 'target_audience',
     }
   }

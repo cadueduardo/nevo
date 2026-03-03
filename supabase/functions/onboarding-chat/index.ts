@@ -1056,8 +1056,8 @@ function parseTargetAudience(value: string): TargetAudienceResult | null {
   if (!v) return null
   if (v.includes('todos') || v.includes('todas') || v.includes('geral')) return { mode: 'all' }
   const modes: ('women_only' | 'men_only' | 'kids_only' | 'custom')[] = []
-  if (v.includes('somente mulheres') || v.includes('so mulheres') || v.includes('feminino')) modes.push('women_only')
-  if (v.includes('somente homens') || v.includes('so homens') || v.includes('masculino')) modes.push('men_only')
+  if (v.includes('mulheres') || v.includes('somente mulheres') || v.includes('so mulheres') || v.includes('feminino')) modes.push('women_only')
+  if (v.includes('homens') || v.includes('somente homens') || v.includes('so homens') || v.includes('masculino')) modes.push('men_only')
   if (v.includes('infantil') || v.includes('crianca') || v.includes('crianÃ§a')) modes.push('kids_only')
   if (v.includes('outro') || v.includes('especifico') || v.includes('especÃ­fico')) {
     const note = value.replace(/^(outro[s]?|publico especifico|publico especifico:)\s*[:\-]?\s*/i, '').trim()
@@ -1982,19 +1982,24 @@ async function processMessage(
       ...extracted,
       ...(hasExtractedServices ? { services_confirmed: false } : {}),
       ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
+      // Nunca usar staff_mode vindo da IA: sempre mostrar o passo "Só eu atendo ou tenho outros?".
+      staff_mode: collectedData.staff_mode,
     }
     const hasSeedExtraction = hasOnboardingSeedExtraction(extracted) || Boolean(resolvedBusinessType)
 
     if (hasSeedExtraction || merged.business_type) {
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('collect_free_text', merged))
+      const dataToPersist = {
+        ...extracted,
+        ...(hasExtractedServices ? { services_confirmed: false } : {}),
+        ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
+        // Não persistir staff_mode da IA; só o que o usuário escolher no passo staff_mode.
+        staff_mode: collectedData.staff_mode,
+      }
       return {
         assistant_message: next.message,
         next_step: next.step,
-        extracted_data: {
-          ...extracted,
-          ...(hasExtractedServices ? { services_confirmed: false } : {}),
-          ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
-        },
+        extracted_data: dataToPersist,
         requires_action: next.requires_action,
         action_options: next.action_options,
         ...(next.step === 'schedule_days'
@@ -3496,9 +3501,17 @@ async function processMessage(
     if (!audience) {
       return {
         assistant_message:
-          'Seu atendimento e focado em algum publico especifico?',
+          'Seu atendimento e focado em algum publico especifico? (Pode escolher mais de um, ex.: homens e infantil.)',
         next_step: 'target_audience',
-        action_options: ['Atendo todos os publicos', 'Somente mulheres', 'Somente homens', 'Infantil', 'Homens e infantil', 'Outro publico especifico'],
+        action_options: [
+          'Atendo todos os publicos',
+          'Somente mulheres',
+          'Somente homens',
+          'Infantil',
+          'Homens e infantil',
+          'Mulheres e infantil',
+          'Outro publico especifico',
+        ],
         requires_action: 'target_audience',
       }
     }
@@ -4430,6 +4443,8 @@ serve(async (req) => {
             ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
             // Pré-preenche nome do dono para não repetir "Qual é o seu nome?"; não define staff_mode para sempre mostrar "Só eu ou tenho outros?".
             ...(ownerName && !hasStaffFromExtraction ? { staff: [{ name: ownerName }] } : {}),
+            // Nunca usar staff_mode vindo da IA na primeira mensagem: sempre mostrar o passo "Só eu atendo ou tenho outros?".
+            staff_mode: undefined,
           }
           response = await processMessage(
             body.message,
