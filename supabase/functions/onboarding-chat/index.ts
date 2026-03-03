@@ -431,19 +431,34 @@ function getStepContextualHint(step: string): string {
   return hints[step] || 'Responda à pergunta acima ou use uma das opções disponíveis.'
 }
 
-/** Retorna conteúdo legível para exibição quando a mensagem do usuário é um comando de ação (select_*). */
+/** Dias da semana em inglês -> português para exibição no chat (capitalizado). */
+const DAYS_DISPLAY: Record<string, string> = {
+  monday: 'Segunda',
+  tuesday: 'Terça',
+  wednesday: 'Quarta',
+  thursday: 'Quinta',
+  friday: 'Sexta',
+  saturday: 'Sábado',
+  sunday: 'Domingo',
+}
+
+/** Retorna conteúdo legível para exibição quando a mensagem do usuário é um comando de ação (select_*). Sem nomes técnicos. */
 function userMessageDisplayContent(message: string): string {
   const m = (message || '').trim()
   const seqMatch = m.match(/^select_sequence_services:(.+)$/i)
   if (seqMatch) return `Serviços em sequência: ${seqMatch[1].trim()}`
   const catalogMatch = m.match(/^select_catalog_services:(.+)$/i)
-  if (catalogMatch) return `Catálogo selecionado: ${catalogMatch[1].trim()}`
+  if (catalogMatch) return `Serviços que ofereço: ${catalogMatch[1].trim()}`
   const bookingMatch = m.match(/^select_booking_services:(.+)$/i)
-  if (bookingMatch) return `Serviços agendáveis selecionados: ${bookingMatch[1].trim()}`
+  if (bookingMatch) return `Serviços que podem ser agendados: ${bookingMatch[1].trim()}`
   const svcMatch = m.match(/^select_services:(.+)$/i)
   if (svcMatch) return `Serviços selecionados: ${svcMatch[1].trim()}`
   const daysMatch = m.match(/^select_days:(.+)$/i)
-  if (daysMatch) return `Dias selecionados: ${daysMatch[1].trim()}`
+  if (daysMatch) {
+    const raw = daysMatch[1].trim().split(/[\s,]+/).map((d) => d.trim().toLowerCase()).filter(Boolean)
+    const pt = raw.map((d) => DAYS_DISPLAY[d] || d).join(', ')
+    return pt ? `Dias de atendimento: ${pt}` : 'Dias de atendimento selecionados'
+  }
   const holMatch = m.match(/^select_holidays:(.*)$/i)
   if (holMatch) return holMatch[1].trim() ? `Feriados selecionados: ${holMatch[1].trim()}` : 'Feriados selecionados'
   const qvMatch = m.match(/^select_quote_variables:(.+)$/i)
@@ -458,6 +473,44 @@ function userMessageDisplayContent(message: string): string {
 /** Usuário ainda no começo: falta business_type, business_name ou context. */
 function hasMinimalData(data: any): boolean {
   return !data?.business_type || !data?.business_name || !data?.context
+}
+
+const DAYS_LABELS: Record<string, string> = {
+  monday: 'segunda',
+  tuesday: 'terça',
+  wednesday: 'quarta',
+  thursday: 'quinta',
+  friday: 'sexta',
+  saturday: 'sábado',
+  sunday: 'domingo',
+}
+
+/** Reconhecimento curto do que foi entendido da primeira mensagem (tipo, local, dias, contexto). */
+function buildFirstMessageAcknowledgment(data: Record<string, any>): string {
+  const type = (data?.business_type || '').trim()
+  const name = (data?.business_name || '').trim()
+  const region = (data?.service_area as { region?: string })?.region?.trim()
+  const days = Array.isArray((data?.schedule as { days_of_week?: string[] })?.days_of_week)
+    ? (data.schedule as { days_of_week: string[] }).days_of_week
+    : []
+  const context = data?.context
+  if (!type) return ''
+
+  const parts: string[] = []
+  if (name) parts.push(`${name}.`)
+  parts.push(`Você tem um(a) ${type}`)
+  if (region) parts.push(`em ${region}`)
+  if (days.length > 0) {
+    const labels = days.map((d: string) => DAYS_LABELS[d] || d).join(', ')
+    parts.push(`e atende de ${labels}`)
+  }
+  if (context === 'booking') parts.push('e quer usar para **agendamento**')
+  else if (context === 'quote') parts.push('e quer usar para **orçamento**')
+  else if (context === 'both') parts.push('e quer usar para **agendamento e orçamento**')
+
+  if (parts.length <= 1) return ''
+  const line = (name ? parts.slice(1) : parts).join(' ') + '.'
+  return `Beleza! ${line}\n\n`
 }
 
 /** Mensagem do tutorial introdutório quando o usuário não sabe o que fazer. */
@@ -3814,24 +3867,27 @@ async function processMessage(
           const key = (s?.name || '').toLowerCase().trim()
           return key && i === self.findIndex((x) => (x?.name || '').toLowerCase().trim() === key)
         })
+        // Considerar seleção confirmada e avançar direto (sem etapa "Tem mais algum serviço?").
         const merged = {
           ...collectedData,
           [stepStorageKey]: mergedServices,
-          ...(isCatalogStep ? {} : { services: mergedServices }),
-          services_confirmed: isCatalogStep ? collectedData.services_confirmed : false,
+          ...(isCatalogStep ? {} : { services: mergedServices, services_confirmed: true }),
           business_config_version: 2,
         }
+        const next = determineNextStep(merged as BusinessModelData, '', makeFlowState(nextStepKey, merged))
         return {
-          assistant_message: buildServicesReviewMessage(mergedServices),
-          next_step: nextStepKey,
+          assistant_message: next.message,
+          next_step: next.step,
           extracted_data: {
             [stepStorageKey]: mergedServices,
-            ...(isCatalogStep ? {} : { services: mergedServices, services_confirmed: false }),
+            ...(isCatalogStep ? {} : { services: mergedServices, services_confirmed: true }),
             business_config_version: 2,
           },
-          editable_items: buildServiceItems(mergedServices),
-          action_options: ['Continuar'],
-          requires_action: 'services_edit',
+          requires_action: next.requires_action,
+          action_options: next.action_options,
+          ...(next.step === 'schedule_days'
+            ? { selectable_options: buildDaysSelectableOptions(merged.schedule?.days_of_week || []) }
+            : {}),
         }
       }
     }
@@ -4318,8 +4374,11 @@ serve(async (req) => {
           requires_action: 'welcome_intro_choice',
         }
       } else {
-      // Pedido de ajuda/tutorial na primeira mensagem tem prioridade sobre extração.
-      if (await classifyNeedsIntroTutorial(body.message)) {
+      // Se a primeira mensagem já descreve o negócio (ramo, local, horário, agendamento etc.), não mostrar tutorial.
+      const hasClearBusinessDescription = isLikelyBusinessInfoFirstMessage(body.message)
+      const needsTutorial =
+        !hasClearBusinessDescription && (await classifyNeedsIntroTutorial(body.message))
+      if (needsTutorial) {
         response = {
           assistant_message: `${buildIntroTutorialMessage()}\n\nQuando quiser, escolha uma opção abaixo:`,
           next_step: 'welcome_tutorial_cta',
@@ -4336,17 +4395,22 @@ serve(async (req) => {
         const hasBusinessContext = hasInitialExtraction || isLikelyBusinessInfoFirstMessage(body.message)
 
         if (hasBusinessContext) {
+          const mergedFirst = {
+            ...collectedData,
+            ...firstExtraction,
+            ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
+          }
           response = await processMessage(
             body.message,
             'collect_free_text',
-            {
-              ...collectedData,
-              ...firstExtraction,
-              ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
-            },
+            mergedFirst,
             session,
             supabaseAdmin
           )
+          const ack = buildFirstMessageAcknowledgment(mergedFirst)
+          if (ack && response.assistant_message) {
+            response = { ...response, assistant_message: ack + response.assistant_message }
+          }
         } else {
           response = {
             assistant_message:
@@ -4365,7 +4429,7 @@ serve(async (req) => {
 
     const updatedData = { ...collectedData, ...(response.extracted_data || {}) }
 
-    // IA como fonte principal de exemplos de serviços — categorização por ramo de atividade, sem mapeamento estático
+    // Opções de serviços: em booking_services_list usar o catálogo já confirmado pelo usuário (não lista genérica da IA)
     if (
       (response.next_step === 'services_list' || response.next_step === 'booking_services_list' || response.next_step === 'catalog_services_list') &&
       updatedData.business_type &&
@@ -4376,8 +4440,17 @@ serve(async (req) => {
         response.requires_action === 'services_edit'
       )
     ) {
-      const aiExamples = await suggestServicesWithAI(updatedData.business_type)
-      response.selectable_options = buildServiceSelectableOptions(aiExamples)
+      const catalogServices = Array.isArray(updatedData.catalog_services) ? updatedData.catalog_services : []
+      const catalogNames = catalogServices.map((s: { name: string }) => (s?.name || '').trim()).filter(Boolean)
+      const useCatalogForBooking =
+        response.next_step === 'booking_services_list' && response.requires_action === 'booking_services_list' && catalogNames.length > 0
+
+      if (useCatalogForBooking) {
+        response.selectable_options = buildServiceSelectableOptions(catalogNames.join(', '))
+      } else {
+        const aiExamples = await suggestServicesWithAI(updatedData.business_type)
+        response.selectable_options = buildServiceSelectableOptions(aiExamples)
+      }
     }
     // Não injetar handoff_mode por padrão — só mostrar na UI se o usuário configurou explicitamente
 

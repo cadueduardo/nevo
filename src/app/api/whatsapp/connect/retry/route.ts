@@ -9,6 +9,8 @@ import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 import { normalizePhoneNumber } from '@/lib/actor'
 
+export const dynamic = 'force-dynamic'
+
 function buildEvolutionBaseCandidates(baseUrl: string): string[] {
   const normalized = baseUrl.replace(/\/$/, '')
   const candidates = [normalized]

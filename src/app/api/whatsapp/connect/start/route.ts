@@ -17,6 +17,8 @@ import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 import { normalizePhoneNumber } from '@/lib/actor'
 
+export const dynamic = 'force-dynamic'
+
 function resolveAppOrigin(): string | null {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.VERCEL_URL
   if (!baseUrl) return null

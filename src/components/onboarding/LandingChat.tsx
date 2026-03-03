@@ -22,17 +22,41 @@ const TYPING_PLACEHOLDERS = [
   'Ex: Sou personal chef e quero automatizar agendamentos e preços',
 ]
 
-/** Conteúdo legível para exibir quando a mensagem é um comando de ação (select_*). */
+const DAYS_DISPLAY: Record<string, string> = {
+  monday: 'Segunda',
+  tuesday: 'Terça',
+  wednesday: 'Quarta',
+  thursday: 'Quinta',
+  friday: 'Sexta',
+  saturday: 'Sábado',
+  sunday: 'Domingo',
+}
+
+/** Conteúdo legível para exibir quando a mensagem é um comando de ação (select_*). Sem nomes técnicos; dias em pt-BR. */
 function userMessageDisplayContent(message: string): string {
   const m = (message || '').trim()
   const seqMatch = m.match(/^select_sequence_services:(.+)$/i)
   if (seqMatch) return `Serviços em sequência: ${seqMatch[1].trim()}`
+  const catalogMatch = m.match(/^select_catalog_services:(.+)$/i)
+  if (catalogMatch) return `Serviços que ofereço: ${catalogMatch[1].trim()}`
+  const bookingMatch = m.match(/^select_booking_services:(.+)$/i)
+  if (bookingMatch) return `Serviços que podem ser agendados: ${bookingMatch[1].trim()}`
   const svcMatch = m.match(/^select_services:(.+)$/i)
   if (svcMatch) return `Serviços selecionados: ${svcMatch[1].trim()}`
   const daysMatch = m.match(/^select_days:(.+)$/i)
-  if (daysMatch) return `Dias selecionados: ${daysMatch[1].trim()}`
+  if (daysMatch) {
+    const raw = daysMatch[1].trim().split(/[\s,]+/).map((d) => d.trim().toLowerCase()).filter(Boolean)
+    const pt = raw.map((d) => DAYS_DISPLAY[d] ?? d).join(', ')
+    return pt ? `Dias de atendimento: ${pt}` : 'Dias de atendimento selecionados'
+  }
   const holMatch = m.match(/^select_holidays:(.*)$/i)
   if (holMatch) return holMatch[1].trim() ? `Feriados selecionados: ${holMatch[1].trim()}` : 'Feriados selecionados'
+  const qvMatch = m.match(/^select_quote_variables:(.+)$/i)
+  if (qvMatch) return `Variáveis de orçamento: ${qvMatch[1].trim()}`
+  const qsMatch = m.match(/^select_quote_services:(.+)$/i)
+  if (qsMatch) return `Serviços de orçamento: ${qsMatch[1].trim()}`
+  const qevMatch = m.match(/^select_quote_external_variables:(.+)$/i)
+  if (qevMatch) return `Variáveis para estimativa: ${qevMatch[1].trim()}`
   return m
 }
 
