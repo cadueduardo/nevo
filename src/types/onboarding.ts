@@ -37,6 +37,7 @@ export type OnboardingStep =
   | 'tone_of_voice'
   | 'handoff_mode'
   | 'target_audience'
+  | 'target_audience_kids_age'
   | 'interaction_style'
   | 'faq_offer'
   | 'faq_question'

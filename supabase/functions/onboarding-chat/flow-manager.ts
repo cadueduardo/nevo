@@ -676,6 +676,20 @@ export function determineNextStep(
     }
   }
 
+  const ta = (currentData as any).target_audience
+  const hasKidsAudience =
+    ta?.mode === 'kids_only' ||
+    (Array.isArray(ta?.modes) && ta.modes.includes('kids_only'))
+  if (hasKidsAudience && ta?.kids_age_min === undefined) {
+    return {
+      step: 'target_audience_kids_age',
+      message:
+        'Você atende crianças de **qualquer idade** ou a partir de quantos anos? (Ex.: a partir de 6 anos, a partir de 8 anos. Se atende de qualquer idade, pode responder "qualquer idade" ou "0".)',
+      action_options: ['Qualquer idade', 'A partir de 6 anos', 'A partir de 8 anos', 'A partir de 10 anos', 'Outra idade'],
+      requires_action: 'target_audience_kids_age',
+    }
+  }
+
   if (!(currentData as any).interaction_style) {
     return {
       step: 'interaction_style',

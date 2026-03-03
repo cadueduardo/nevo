@@ -1035,7 +1035,7 @@ type TargetAudienceResult =
   | { mode: 'custom'; note?: string }
   | { modes: ('women_only' | 'men_only' | 'kids_only' | 'custom')[]; note?: string }
 
-function buildTargetAudienceLabel(ta: { mode?: string; modes?: string[]; note?: string } | null | undefined): string {
+function buildTargetAudienceLabel(ta: { mode?: string; modes?: string[]; note?: string; kids_age_min?: number } | null | undefined): string {
   if (!ta) return ''
   const labels: Record<string, string> = {
     all: 'Todos os públicos',
@@ -1044,11 +1044,17 @@ function buildTargetAudienceLabel(ta: { mode?: string; modes?: string[]; note?: 
     kids_only: 'Infantil',
     custom: ta.note ? `Personalizado (${ta.note})` : 'Personalizado',
   }
-  if (Array.isArray(ta.modes) && ta.modes.length > 0) {
-    return ta.modes.map((m) => labels[m] || m).filter(Boolean).join(' e ')
+  let base =
+    Array.isArray(ta.modes) && ta.modes.length > 0
+      ? ta.modes.map((m) => labels[m] || m).filter(Boolean).join(' e ')
+      : ta.mode
+        ? labels[ta.mode] || ta.mode
+        : 'Todos os públicos'
+  const hasKids = ta.mode === 'kids_only' || (Array.isArray(ta.modes) && ta.modes?.includes('kids_only'))
+  if (hasKids && ta.kids_age_min != null) {
+    base += ta.kids_age_min === 0 ? ' (crianças de qualquer idade)' : ` (crianças a partir de ${ta.kids_age_min} anos)`
   }
-  if (ta.mode) return labels[ta.mode] || ta.mode
-  return 'Todos os públicos'
+  return base
 }
 
 function parseTargetAudience(value: string): TargetAudienceResult | null {
@@ -1068,6 +1074,25 @@ function parseTargetAudience(value: string): TargetAudienceResult | null {
   if (modes.length > 1) return { modes }
   if (modes.length === 1) return { mode: modes[0] as 'women_only' | 'men_only' | 'kids_only' }
   return { mode: 'custom', note: value.trim() }
+}
+
+/** Retorna idade mínima para infantil: 0 = qualquer idade, ou número 1-18. null = não reconheceu. */
+function parseKidsAgeMin(value: string): number | null {
+  const v = (value || '').toLowerCase().trim()
+  if (!v) return null
+  if (v.includes('qualquer') || v === '0' || /^0\s*anos?$/.test(v)) return 0
+  const fromMatch = v.match(/(?:a\s+partir\s+de|a partir de|partir\s+de)\s*(\d{1,2})/i)
+  if (fromMatch) {
+    const n = parseInt(fromMatch[1], 10)
+    if (n >= 0 && n <= 18) return n
+  }
+  const numMatch = v.match(/(\d{1,2})\s*(?:anos?)?/)
+  if (numMatch) {
+    const n = parseInt(numMatch[1], 10)
+    if (n >= 0 && n <= 18) return n
+  }
+  if (/^(6|8|10)\s*anos?$/.test(v)) return parseInt(v, 10)
+  return null
 }
 
 function parseInteractionStyle(value: string): 'numbered_options' | 'conversational' | 'hybrid' | null {
@@ -1977,24 +2002,41 @@ async function processMessage(
     const extracted = sanitizeExtractionResult(extractedRaw, text)
     const hasExtractedServices = Array.isArray(extracted.services) && extracted.services.length > 0
     const resolvedBusinessType = resolveBusinessTypeCandidate(extracted.business_type, text)
+    // Mesclar schedule para não perder breaks/dados já extraídos do texto (ex.: primeira mensagem com "pausa das 12 as 13").
+    const existingSchedule = collectedData.schedule || {}
+    const extractedSchedule = extracted.schedule || {}
+    const mergedSchedule = {
+      ...existingSchedule,
+      ...extractedSchedule,
+      breaks: Array.isArray(extractedSchedule.breaks) && extractedSchedule.breaks.length > 0
+        ? extractedSchedule.breaks
+        : Array.isArray(existingSchedule.breaks) && existingSchedule.breaks.length > 0
+          ? existingSchedule.breaks
+          : undefined,
+    }
+    const hasBreaks = Array.isArray(mergedSchedule.breaks) && mergedSchedule.breaks.length > 0
     const merged = {
       ...collectedData,
       ...extracted,
+      schedule: mergedSchedule,
       ...(hasExtractedServices ? { services_confirmed: false } : {}),
       ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
-      // Nunca usar staff_mode vindo da IA: sempre mostrar o passo "Só eu atendo ou tenho outros?".
       staff_mode: collectedData.staff_mode,
+      ...(hasBreaks ? { schedule_breaks_configured: true } : {}),
     }
     const hasSeedExtraction = hasOnboardingSeedExtraction(extracted) || Boolean(resolvedBusinessType)
 
     if (hasSeedExtraction || merged.business_type) {
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('collect_free_text', merged))
-      const dataToPersist = {
+      const dataToPersist: Record<string, any> = {
         ...extracted,
         ...(hasExtractedServices ? { services_confirmed: false } : {}),
         ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
-        // Não persistir staff_mode da IA; só o que o usuário escolher no passo staff_mode.
         staff_mode: collectedData.staff_mode,
+      }
+      if (merged.schedule && Object.keys(merged.schedule).length > 0) {
+        dataToPersist.schedule = merged.schedule
+        if (merged.schedule_breaks_configured) dataToPersist.schedule_breaks_configured = true
       }
       return {
         assistant_message: next.message,
@@ -3536,6 +3578,34 @@ async function processMessage(
     }
   }
 
+  if (currentStep === 'target_audience_kids_age') {
+    const ageMin = parseKidsAgeMin(text)
+    const existingTa = (collectedData.target_audience || {}) as Record<string, unknown>
+    if (ageMin === null) {
+      return {
+        assistant_message:
+          'Você atende crianças de **qualquer idade** ou a partir de quantos anos? (Ex.: a partir de 6 anos, a partir de 8 anos. Se atende de qualquer idade, responda "qualquer idade" ou "0".)',
+        next_step: 'target_audience_kids_age',
+        action_options: ['Qualquer idade', 'A partir de 6 anos', 'A partir de 8 anos', 'A partir de 10 anos', 'Outra idade'],
+        requires_action: 'target_audience_kids_age',
+      }
+    }
+    const updatedAudience = {
+      ...existingTa,
+      kids_age_min: ageMin,
+    }
+    const merged = { ...collectedData, target_audience: updatedAudience }
+    const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('target_audience_kids_age', merged))
+    const ageLabel = ageMin === 0 ? 'qualquer idade' : `a partir de ${ageMin} anos`
+    return {
+      assistant_message: `✅ Anotado: crianças ${ageLabel}.\n\n${next.message}`,
+      next_step: next.step,
+      extracted_data: { target_audience: updatedAudience },
+      requires_action: next.requires_action,
+      action_options: next.action_options,
+    }
+  }
+
   if (currentStep === 'interaction_style') {
     const style = parseInteractionStyle(text)
     if (!style) {
@@ -4437,7 +4507,7 @@ serve(async (req) => {
         if (hasBusinessContext) {
           const ownerName = extractOwnerNameFromText(body.message)
           const hasStaffFromExtraction = Array.isArray(firstExtraction?.staff) && firstExtraction.staff.length > 0
-          const mergedFirst = {
+          const mergedFirst: Record<string, any> = {
             ...collectedData,
             ...firstExtraction,
             ...(resolvedBusinessType ? { business_type: resolvedBusinessType } : {}),
@@ -4445,6 +4515,19 @@ serve(async (req) => {
             ...(ownerName && !hasStaffFromExtraction ? { staff: [{ name: ownerName }] } : {}),
             // Nunca usar staff_mode vindo da IA na primeira mensagem: sempre mostrar o passo "Só eu atendo ou tenho outros?".
             staff_mode: undefined,
+          }
+          // Extrair horário e pausa do texto da primeira mensagem (ex.: "das 8 as 18", "pausa das 12 as 13") para contemplar todos os itens do fluxo.
+          const parsedSchedule = parseScheduleNarrative(body.message)
+          if (parsedSchedule.start_time || parsedSchedule.end_time || (Array.isArray(parsedSchedule.breaks) && parsedSchedule.breaks.length > 0)) {
+            mergedFirst.schedule = { ...(mergedFirst.schedule || {}), ...parsedSchedule }
+            if (Array.isArray(mergedFirst.schedule?.breaks) && mergedFirst.schedule.breaks.length > 0) {
+              mergedFirst.schedule_breaks_configured = true
+            }
+          }
+          // Se a primeira mensagem disser que não atende em feriados, pular o passo de feriados.
+          if (/n[aã]o\s+atendo\s+(de\s+)?(fins?\s+de\s+semana\s+e\s+)?(nem\s+)?feriados|n[aã]o\s+atendo\s+em\s+feriados|nem\s+feriados|n[aã]o\s+atende(mos)?\s+em\s+feriados/i.test(body.message)) {
+            mergedFirst.holidays_skipped = true
+            mergedFirst.holidays_attend = []
           }
           response = await processMessage(
             body.message,

@@ -64,6 +64,8 @@ export interface SimulatorConfig {
     mode?: "all" | "women_only" | "men_only" | "kids_only" | "custom"
     modes?: ("all" | "women_only" | "men_only" | "kids_only" | "custom")[]
     note?: string
+    /** Idade mínima em anos para público infantil (0 = qualquer idade). */
+    kids_age_min?: number
   }
   interaction_style?: "numbered_options" | "conversational" | "hybrid"
   /** Branding para PDF de orçamento (logo, razão social, etc.). */

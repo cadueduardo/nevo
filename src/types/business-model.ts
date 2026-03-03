@@ -81,6 +81,10 @@ export interface TargetAudience {
   /** Múltiplos tipos de público (ex.: masculino + infantil). Vazio ou ausente = todos. */
   modes?: TargetAudienceMode[]
   note?: string
+  /** Idade mínima em anos para atender crianças (ex.: 8 = a partir de 8 anos). Omitir ou 0 = qualquer idade. */
+  kids_age_min?: number
+  /** Idade máxima em anos considerada "infantil" (opcional). */
+  kids_age_max?: number
 }
 
 export type InteractionStyle = 'numbered_options' | 'conversational' | 'hybrid'

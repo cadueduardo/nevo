@@ -72,6 +72,52 @@ export function buildTargetAudienceRestrictionMessage(config: SimulatorConfig): 
   return MODE_RESTRICTION_MESSAGES[mode] || "No momento, atendemos todos os publicos."
 }
 
+/** Config tem público masculino + infantil (Homens e infantil). */
+function configHasMenAndKidsAudience(config: SimulatorConfig): boolean {
+  const ta = config.target_audience
+  if (!ta) return false
+  const modes = Array.isArray(ta.modes) && ta.modes.length > 0 ? ta.modes : ta.mode ? [ta.mode] : []
+  return modes.includes("men_only") && modes.includes("kids_only")
+}
+
+/** Mensagem pede agendamento "pra mim e meu filho" (ambíguo: gênero + idade do filho). */
+function textMentionsMeAndChild(text: string): boolean {
+  const msg = normalizeText(text || "")
+  if (!msg) return false
+  const hasMe = /\b(mim|eu)\b/i.test(msg) || /(pra|para)\s+(mim|eu)\b/i.test(msg)
+  const hasChild = /\b(meu\s+filho|minha\s+filha|meu\s+bebe|minha\s+crianca)\b/i.test(msg)
+  return hasMe && hasChild
+}
+
+/**
+ * Mensagem de esclarecimento quando cliente pede "pra mim e meu filho" e o estabelecimento
+ * atende homens e infantil (opção 2): confirmar perfil antes de seguir com agendamento.
+ */
+export function buildAudienceClarificationMessage(config: SimulatorConfig): string {
+  const ta = config.target_audience
+  const business = (config.business_name || "").trim()
+  const ageMin = ta?.kids_age_min
+  const kidsPart =
+    ageMin != null && ageMin > 0
+      ? `crianças a partir de ${ageMin} anos`
+      : "crianças (de qualquer idade)"
+  const intro = business
+    ? `Podemos sim agendar! Só pra alinhar: aqui na ${business} atendemos **homens e ${kidsPart}**.`
+    : `Podemos sim agendar! Só pra alinhar: aqui atendemos **homens e ${kidsPart}**.`
+  return `${intro} Você e seu filho se encaixam? Se sim, escolho um horário pra vocês.`
+}
+
+/**
+ * Retorna true quando devemos mostrar a mensagem de esclarecimento (opção 2)
+ * em vez de ir direto ao agendamento: público homens + infantil e cliente disse "pra mim e meu filho".
+ */
+export function needsAudienceClarification(config: SimulatorConfig, text: string): boolean {
+  if (!configHasMenAndKidsAudience(config)) return false
+  if (!textMentionsMeAndChild(text)) return false
+  if (shouldBlockByTargetAudience(config, text)) return false
+  return true
+}
+
 export function shouldBlockByTargetAudience(
   config: SimulatorConfig,
   text: string

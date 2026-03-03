@@ -350,6 +350,7 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
      * Se mencionar explicitamente (segunda, terça, etc), converta para inglês: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
      * Se mencionar "segunda a sexta" ou similar, extraia todos os dias do intervalo
      * Se NÃO mencionar dias, NÃO invente/infira dias (deixe o campo ausente)
+   - PAUSA NO DIA (schedule.breaks): Se o usuário mencionar pausa, intervalo ou almoço com horário (ex.: "pausa das 12 às 13", "faço uma pausa das 12 as 13", "intervalo 12h-13h"), extraia como: "breaks": [{"start": "12:00", "end": "13:00"}]. Sempre use formato "HH:mm". Um único intervalo por vez na lista, a menos que ele cite mais de uma pausa.
 
 7. CONTEXTO (context):
    - "booking": se mencionar agendamento, marcação, horários
@@ -368,6 +369,10 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
    - NÃO inferir tom pelo estilo da mensagem
    - Valores: "formal", "friendly", "professional", "funny"
 
+10. FERIADOS (holidays_skipped / holidays_attend):
+   - Se o usuário disser que NÃO atende em feriados (ex.: "não atendo feriados", "nem feriados", "não atendo de finais de semana e nem feriados", "não atendo em feriados"), inclua: "holidays_skipped": true e "holidays_attend": [].
+   - Se mencionar que atende em feriados ou listar datas, NÃO inferir — omitir.
+
 IMPORTANTE:
 - NÃO inferir/preencher automaticamente: dias da semana, horários ou tom de voz.
 - Se o usuário não informou um desses itens, NÃO inclua o campo no JSON.
@@ -382,12 +387,15 @@ Retorne APENAS um JSON válido com os campos identificados:
   "schedule": {
     "days_of_week": ["monday", "tuesday", ...],
     "start_time": "HH:mm",
-    "end_time": "HH:mm"
+    "end_time": "HH:mm",
+    "breaks": [{"start": "HH:mm", "end": "HH:mm"}]
   },
   "staff": [{"name": "Carla"}, {"name": "Maria"}],
   "staff_mode": "solo" | "team",
   "context": "booking" | "quote" | "both",
-  "tone_of_voice": "formal" | "friendly" | "professional" | "funny"
+  "tone_of_voice": "formal" | "friendly" | "professional" | "funny",
+  "holidays_skipped": true,
+  "holidays_attend": []
 }
 
 Retorne APENAS o JSON, sem markdown, sem explicações, sem texto adicional.`

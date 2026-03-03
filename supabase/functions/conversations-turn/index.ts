@@ -114,6 +114,8 @@ import {
   isDateBlocked,
   shouldBlockByTargetAudience,
   buildTargetAudienceRestrictionMessage,
+  buildAudienceClarificationMessage,
+  needsAudienceClarification,
   handleInternalIntent,
   tryHandleExternalQuote,
 } from "./lib/index.ts"
@@ -2285,6 +2287,15 @@ const earlyConversationRules: ConversationRule[] = [
         step: "qualification",
       },
       ["Quero agendar"]
+    )
+  },
+  // Homens + infantil: quando cliente diz "pra mim e meu filho", esclarecer perfil antes de agendar (opção 2).
+  ({ config, text, nextState }) => {
+    if (!needsAudienceClarification(config, text)) return null
+    return buildResult(
+      buildAudienceClarificationMessage(config),
+      { ...nextState, step: "qualification" },
+      ["Sim, nos encaixamos", "Quero agendar"]
     )
   },
 ]
