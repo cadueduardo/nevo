@@ -80,33 +80,6 @@ export async function handleBookingModeMessage(context: SimulatorHandlerContext)
   const { text, config, nextState, history, senderDisplayName, isFirst } = context
   const cordial = getCordialPrefix(config, isFirst)
 
-  // Agendamento duplo: quando estamos esperando o nome do próximo agendamento ("De quem será o próximo agendamento?")
-  // e o usuário responde com um nome (ex: "Davi"), extrair o nome e seguir no fluxo de booking. Evita perder o contexto
-  // e responder "Pode me dar mais detalhes?" em vez de continuar o agendamento em sequência.
-  if (nextState.pending_attendee_name) {
-    const trimmed = text.trim()
-    const looksLikeName =
-      trimmed.length >= 2 &&
-      trimmed.length <= 200 &&
-      !isExplicitBookingIntent(text) &&
-      !isGreeting(text)
-    if (looksLikeName) {
-      const lastAssistant =
-        nextState.last_prompt ||
-        (history.length > 0 ? history.filter((m) => m.role === "assistant").pop()?.content : "") ||
-        ""
-      const name = await extractAttendeeNameForMultiBooking(text, { lastAssistantMessage: lastAssistant })
-      if (name) {
-        nextState.pending_attendee_name = false
-        nextState.slots = { ...nextState.slots, attendee_name: name, quote_answers: nextState.slots?.quote_answers || {} }
-        if (!nextState.slots.customer_name) nextState.slots.customer_name = name
-        nextState.pending_additional_booking = true
-        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-        return buildResult(result.message, result.state, result.action_options)
-      }
-    }
-  }
-
   if (isPriceQuestion(text)) {
     const serviceName = findServiceFromText(text, config.services || [])
     const svc = getServiceWithPrice(config.services || [], serviceName)

@@ -1196,6 +1196,7 @@ export function LandingChat() {
         content: m.content,
         timestamp: new Date(m.created_at),
         actionOptions: m.action_options,
+        serviceMultiSelect: m.service_multi_select ?? false,
       }))
       if (assistantMessages.length > 0) {
         setSimulatorMessages((prev) => [...prev, ...assistantMessages])

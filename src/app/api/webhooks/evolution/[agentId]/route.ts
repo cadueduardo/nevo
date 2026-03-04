@@ -212,7 +212,7 @@ export async function POST(
   if (turnResponse.ok) {
     try {
       const data = (await turnResponse.json()) as {
-        messages?: Array<{ content?: string; action_options?: string[] }>
+        messages?: Array<{ content?: string; action_options?: string[]; service_multi_select?: boolean }>
       }
       const lastMsg = Array.isArray(data.messages) ? data.messages[data.messages.length - 1] : null
       if (lastMsg?.content) {
@@ -220,11 +220,14 @@ export async function POST(
         const opts = lastMsg.action_options
         if (Array.isArray(opts) && opts.length > 0) {
           const hasNumbering = opts.some((opt) => /^\d+\s*-\s+/.test(opt))
-          const optsLabel = opts.length === 1
-            ? '\n\n_Opção:_\n'
-            : hasNumbering
-              ? '\n\n_Opções (responda com número ou texto):_\n'
-              : '\n\n_Opções (responda com texto):_\n'
+          const isMulti = Boolean(lastMsg.service_multi_select)
+          const optsLabel = isMulti
+            ? '\n\n_Opções múltiplas (responda com números separados por vírgula, ex.: 1,2):_\n'
+            : opts.length === 1
+              ? '\n\n_Opção:_\n'
+              : hasNumbering
+                ? '\n\n_Opções (responda com número ou texto):_\n'
+                : '\n\n_Opções (responda com texto):_\n'
           const optsText = opts.join('\n')
           const withOpts = replyText + optsLabel + optsText
           if (withOpts.length <= 4096) replyText = withOpts

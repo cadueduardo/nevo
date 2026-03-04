@@ -40,6 +40,36 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
   } = ctx
 
   const isDigitOnlyEarly = /^[1-9]\d*$/.test(text.trim())
+  const lastCompletedBooking =
+    Array.isArray(nextState.completed_bookings) && nextState.completed_bookings.length > 0
+      ? nextState.completed_bookings[nextState.completed_bookings.length - 1]
+      : undefined
+  const referenceBooking = nextState.last_booking || lastCompletedBooking
+  const inferredTemplateChoice = parseTemplateChoice(text, state.last_template_options || undefined)
+
+  // Fallback defensivo: se o estado perdeu pending_template_choice, mas o cliente escolheu
+  // "mesmo dia e colaborador", ainda assim seguimos pelo fluxo de sequencia.
+  if (
+    !nextState.pending_template_choice &&
+    !nextState.pending_second_service_choice &&
+    inferredTemplateChoice === "same_next" &&
+    referenceBooking
+  ) {
+    if (!nextState.last_booking) nextState.last_booking = referenceBooking
+    const defaultService = nextState.slots.service || nextState.pending_default_service || referenceBooking.service
+    const serviceList = buildServiceOptions(config.services || [])
+    const numberedServiceOpts = serviceList.map((o, i) => `${i + 1} - ${o}`)
+    nextState.pending_second_service_choice = true
+    const firstName = referenceBooking.attendee_name || "o primeiro"
+    const secondName = nextState.slots.attendee_name || "ele"
+    const defaultLabel = defaultService === "visita" ? "visita" : defaultService
+    const question =
+      defaultService
+        ? `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. O dele tambem vai ser ${defaultLabel}? Ou prefere trocar o servico:`
+        : `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. Qual servico?`
+    return buildResult(question, nextState, numberedServiceOpts)
+  }
+
   const serviceOpts = buildServiceOptions(config.services || [])
   const canResolveService = serviceOpts.length > 0 && resolveOptionByNumber(text, serviceOpts)
 
@@ -230,11 +260,12 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       nextState.slots.service = slotsInterpretation.service
     }
     nextState.pending_attendee_name = false
-    if (nextState.last_booking && !nextState.pending_template_choice) {
+    if (referenceBooking && !nextState.pending_template_choice) {
+      if (!nextState.last_booking) nextState.last_booking = referenceBooking
       nextState.pending_template_choice = true
-      const staffLabel = nextState.last_booking.staff_name ? ` da ${nextState.last_booking.staff_name}` : ""
-      const dateLabel = nextState.last_booking.date ? formatDatePt(nextState.last_booking.date) : "esse dia"
-      const hasOtherStaff = getOtherStaffOptions(config, nextState.last_booking.staff_name).length > 0
+      const staffLabel = referenceBooking.staff_name ? ` da ${referenceBooking.staff_name}` : ""
+      const dateLabel = referenceBooking.date ? formatDatePt(referenceBooking.date) : "esse dia"
+      const hasOtherStaff = getOtherStaffOptions(config, referenceBooking.staff_name).length > 0
       const rawOpts = [
         "Mesmo dia e colaborador (proximo horario)",
         "Outro horario no mesmo dia",

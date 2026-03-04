@@ -8,7 +8,7 @@ import {
   getMockAvailability,
   isWithinSchedule,
 } from "../utils.ts"
-import { getServicesTotalDuration } from "../services.ts"
+import { getServicesTotalDuration, findServicesFromText } from "../services.ts"
 import { generateAvailabilityResponseWithAI } from "../ai.ts"
 import type { BookingContext } from "./context.ts"
 
@@ -17,16 +17,47 @@ export async function handleAiSlots(ctx: BookingContext): Promise<SimulatorResul
   const si = ctx.slotsInterpretation
   if (!si) return null
 
+  const expectingMultiServiceSelection =
+    Boolean(ctx.state.service_selection_multi) &&
+    Array.isArray(ctx.state.last_service_options) &&
+    ctx.state.last_service_options.length > 0
+
   const { waitingFor, isDigitOnly, normalizedText, allowAiDateAutofill } = ctx
   const isHojeOuAmanha = normalizedText.includes("hoje") || normalizedText.includes("amanha")
 
   if (
     waitingFor === "service" &&
-    si.service &&
     !nextState.slots.service &&
     !isDigitOnly
   ) {
-    nextState.slots.service = si.service
+    if (expectingMultiServiceSelection) {
+      // Quando o turno explicitamente permite multi-select, evitar que a IA fixe
+      // serviço único prematuramente (ex.: "corte de cabelo") antes do parser
+      // de múltiplos ("corte de cabelo e barba") no handler de service.
+      if (config.allow_sequence_booking) {
+        const eligibleForSequence =
+          (config.sequence_eligible_services?.length ?? 0) > 0
+            ? config.sequence_eligible_services || []
+            : (config.services || []).map((s) => s.name).filter(Boolean)
+        const multipleFromText = findServicesFromText(text, config.services || [], eligibleForSequence)
+        if (multipleFromText.length >= 2) {
+          nextState.slots.service = multipleFromText.join(", ")
+        }
+      }
+    } else if (config.allow_sequence_booking) {
+      const eligibleForSequence =
+        (config.sequence_eligible_services?.length ?? 0) > 0
+          ? config.sequence_eligible_services || []
+          : (config.services || []).map((s) => s.name).filter(Boolean)
+      const multipleFromText = findServicesFromText(text, config.services || [], eligibleForSequence)
+      if (multipleFromText.length >= 2) {
+        nextState.slots.service = multipleFromText.join(", ")
+      } else if (si.service) {
+        nextState.slots.service = si.service
+      }
+    } else if (si.service) {
+      nextState.slots.service = si.service
+    }
   }
 
   if (
