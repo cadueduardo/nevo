@@ -52,11 +52,20 @@ function formatScheduleValuePtBR(value: string): string {
   return out
 }
 
+/** Remove prefixo "N - " das opções para enviar só o label ao backend. */
+function stripOptionLabel(option: string): string {
+  const trimmed = option.trim()
+  const match = trimmed.match(/^\d+\s*-\s*(.+)$/)
+  return match ? match[1].trim() : trimmed
+}
+
 interface ChatMessageProps {
   role: 'user' | 'assistant'
   content: string
   timestamp?: Date
   actionOptions?: string[]
+  /** Quando true, exibir actionOptions como checkboxes e enviar múltiplos selecionados separados por vírgula. */
+  actionOptionsMultiSelect?: boolean
   editableItems?: EditableItem[]
   selectableOptions?: SelectableOption[]
   onActionClick?: (action: string) => void
@@ -77,6 +86,7 @@ export function ChatMessage({
   content, 
   timestamp,
   actionOptions,
+  actionOptionsMultiSelect = false,
   editableItems,
   selectableOptions,
   onActionClick,
@@ -98,6 +108,8 @@ export function ChatMessage({
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(() => {
     return new Set(selectableOptions?.filter(opt => opt.selected).map(opt => opt.value) || [])
   })
+  /** Opções de ação selecionadas quando actionOptionsMultiSelect é true (índices). */
+  const [selectedActionIndices, setSelectedActionIndices] = useState<Set<number>>(new Set())
 
   // Atualizar selectedOptions quando selectableOptions mudar
   useEffect(() => {
@@ -430,8 +442,8 @@ export function ChatMessage({
           </div>
         )}
         
-        {/* Botões de ação */}
-        {!isUser && actionOptions && actionOptions.length > 0 && (
+        {/* Botões de ação (single) ou multi-select (checkboxes) */}
+        {!isUser && actionOptions && actionOptions.length > 0 && !actionOptionsMultiSelect && (
           <div className="flex flex-wrap gap-2 mt-3">
             {actionOptions.map((option, index) => {
               if (option.startsWith('open_url|')) {
@@ -482,6 +494,63 @@ export function ChatMessage({
                 </button>
               )
             })}
+          </div>
+        )}
+        {!isUser && actionOptions && actionOptions.length > 0 && actionOptionsMultiSelect && (
+          <div className="flex flex-col gap-2 mt-3">
+            <div className="flex flex-wrap gap-3">
+              {actionOptions.map((option, index) => {
+                if (option.startsWith('open_url|')) return null
+                const isChecked = selectedActionIndices.has(index)
+                return (
+                  <label
+                    key={index}
+                    className={cn(
+                      'flex items-center gap-2 cursor-pointer',
+                      'px-3 py-2 rounded-lg border text-sm',
+                      isChecked
+                        ? 'bg-primary/10 border-primary text-foreground'
+                        : 'bg-background dark:bg-foreground/10 border-border text-foreground hover:bg-muted'
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => {
+                        setSelectedActionIndices((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(index)) next.delete(index)
+                          else next.add(index)
+                          return next
+                        })
+                      }}
+                      className="rounded border-border"
+                    />
+                    <span>{option.replace(/^\d+\s*-\s*/, '')}</span>
+                  </label>
+                )
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedActionIndices.size === 0) return
+                const labels = Array.from(selectedActionIndices)
+                  .sort((a, b) => a - b)
+                  .map((i) => stripOptionLabel(actionOptions![i]))
+                onActionClick?.(labels.join(', '))
+                setSelectedActionIndices(new Set())
+              }}
+              disabled={selectedActionIndices.size === 0}
+              className={cn(
+                'self-start px-4 py-2 rounded-lg text-sm font-medium',
+                'bg-primary text-primary-foreground hover:bg-primary/90',
+                'disabled:opacity-50 disabled:pointer-events-none',
+                'focus:outline-none focus:ring-2 focus:ring-primary/20'
+              )}
+            >
+              Confirmar seleção ({selectedActionIndices.size} {selectedActionIndices.size === 1 ? 'serviço' : 'serviços'})
+            </button>
           </div>
         )}
 

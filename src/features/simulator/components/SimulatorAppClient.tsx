@@ -66,13 +66,14 @@ export function SimulatorAppClient({ onClose, agentIdOverride }: SimulatorAppCli
       if (data.conversation_id) setConversationId(data.conversation_id)
       const list = Array.isArray(data.messages) ? data.messages : []
       const assistantMessages: Message[] = list.map(
-        (m: { content?: string; action_options?: string[] }, idx: number) => ({
+        (m: { content?: string; action_options?: string[]; service_multi_select?: boolean }, idx: number) => ({
           id: `a-${Date.now()}-${idx}`,
           role: 'assistant',
           kind: 'text',
           content: m.content ?? '',
           timestamp: new Date(),
           actionOptions: m.action_options,
+          serviceMultiSelect: m.service_multi_select ?? false,
         })
       )
       setMessages((prev) => [...prev, ...assistantMessages])

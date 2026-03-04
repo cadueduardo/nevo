@@ -134,6 +134,8 @@ export interface SimulatorState {
   last_confirm_options?: string[]
   /** Últimas opções de serviço (para resolver "1", "2" por número). */
   last_service_options?: string[]
+  /** Quando true, o cliente pode exibir os last_service_options como multi-select (checkboxes) para agendar mais de um serviço em sequência. */
+  service_selection_multi?: boolean
   /** Últimas opções exibidas no turno (fallback genérico para resolver respostas numéricas como "1 - Quero agendar"). */
   last_action_options?: string[]
   booked_slots?: Record<string, Record<string, string[]>>
@@ -238,6 +240,8 @@ export interface ConversationTurnResponse {
     content: string
     created_at: string
     action_options?: string[]
+    /** Quando true, o cliente (simulador/WhatsApp) deve exibir action_options como multi-select (checkboxes) para escolher mais de um serviço em sequência. */
+    service_multi_select?: boolean
   }>
 }
 

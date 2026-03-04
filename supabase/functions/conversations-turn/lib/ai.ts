@@ -273,7 +273,7 @@ Retorne JSON com: intent, inferred_service (o que o cliente pediu ou nome exato 
 
 /** Extração de slots a partir de mensagem livre. Usa IA para interpretar contexto. */
 export type SlotsInterpretation = {
-  /** Nome da pessoa (ex: "Cadu" de "meu marido, Cadu"). NÃO incluir termos de parentesco. */
+  /** Nome da pessoa que receberá o agendamento. NÃO incluir termos de parentesco. */
   attendee_name?: string | null
   /** Cliente citou apenas parentesco sem nome (ex: "meu filho") — perguntar o nome. */
   relationship_only?: boolean
@@ -330,16 +330,13 @@ export async function interpretSlotsFromMessageWithAI(
   const systemPrompt = `Você extrai informações estruturadas de mensagens livres do cliente em um fluxo de agendamento.
 ${senderNote}
 
-REGRAS CRÍTICAS para attendee_name:
-- O attendee é SEMPRE quem VAI RECEBER o serviço. Quem está escrevendo pode estar agendando PARA outra pessoa (marido, filho, etc.).
-- "Meu marido, Cadu" ou "meu marido Cadu" → attendee_name: "Cadu" (o NOME do marido)
-- "Agenda para o meu marido Cesar" → attendee_name: "Cesar"
-- "Vamos agendar primeiro para o meu marido" (sem nome) → relationship_only: true, relationship: "marido"
-- "Agenda primeiro do meu marido as 14" (sem nome) → relationship_only: true, relationship: "marido"
-- "Vamos agendar primeiro para o meu filho" (sem nome) → relationship_only: true, relationship: "filho"
-- "Meu filho João" → attendee_name: "João"
-- CRÍTICO - Resposta direta ao pedido do nome: Se a última pergunta do assistente pede o nome (ex: "Qual o nome dele(a)?", "Qual é o nome?") e o cliente responde APENAS com um nome próprio (ex: "Cesar", "João", "Maria Silva"), retorne attendee_name com esse nome e relationship_only: false. NÃO retorne relationship_only nesses casos.
-- Ignore "meu", "minha", "meu marido", "minha esposa", "meu filho" como nome. O nome é SEMPRE o substantivo próprio explícito (Cesar, João, Maria). Se só há parentesco sem nome, relationship_only.
+REGRAS para attendee_name:
+- attendee_name = a pessoa que VAI RECEBER o serviço (a persona do agendamento). Quem escreve pode estar agendando para si ou para outro (filho, marido, etc.).
+- Use compreensão de linguagem natural: leia a frase no contexto da última pergunta do assistente e identifique a persona (quem recebe o agendamento). Extraia o nome próprio dessa pessoa, independentemente de como o cliente se expressou — só o nome, nome na frase, parentesco + nome, referência a si + nome, etc.
+- Se a última pergunta foi "De quem será o primeiro/próximo agendamento?" ou "Qual o nome dele(a)?", a resposta do cliente pode ser imprevisível. Sua tarefa é interpretar o texto e extrair o nome da pessoa que receberá o agendamento. Não espere formato fixo.
+- relationship_only: true apenas quando o cliente menciona parentesco ou relação (filho, marido, etc.) e NÃO informa o nome próprio. Se houver nome próprio na mensagem, extraia em attendee_name e relationship_only: false.
+- Se o cliente indicar que é para ele mesmo mas não disser o nome, use sender_display_name se disponível no contexto; caso contrário deixe attendee_name null e relationship_only conforme o caso.
+- Nome = substantivo próprio da pessoa (não cargo, não profissão, não só "meu filho" sem nome). Se só há relação sem nome, relationship_only + relationship.
 
 REGRAS para service, date, time:
 - Extraia serviço apenas se corresponder à lista: ${servicesJson}
@@ -424,8 +421,66 @@ Extraia as informações. Retorne JSON.`
 }
 
 /**
+ * Extrai o nome do atendido quando o contexto é "De quem será o primeiro/próximo agendamento?".
+ * A IA interpreta o texto livre e identifica a persona que receberá o agendamento, sem depender de exemplos fixos.
+ */
+export async function extractAttendeeNameForMultiBooking(
+  message: string,
+  context: { lastAssistantMessage?: string }
+): Promise<string | null> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!apiKey) return null
+
+  const trimmed = (message || "").trim()
+  if (trimmed.length < 2 || trimmed.length > 300) return null
+
+  const lastMsg = (context.lastAssistantMessage || "").trim()
+  const prompt = `Contexto: o assistente perguntou quem será o primeiro ou o próximo agendamento.
+
+Resposta do cliente: "${trimmed}"
+${lastMsg ? `Última pergunta do assistente: "${lastMsg}"` : ""}
+
+Tarefa: a partir da resposta do cliente, identifique a pessoa que vai receber o agendamento (a persona do atendimento) e extraia apenas o nome próprio dessa pessoa. Use compreensão de linguagem natural: o cliente pode escrever só o nome, uma frase com parentesco e nome, referência a si mesmo e nome, ou qualquer outra forma. Interprete o contexto e extraia o nome.
+
+Se não for possível identificar um nome próprio (pessoa que recebe o serviço), retorne null.
+Retorne APENAS um JSON: { "attendee_name": "Nome" } ou { "attendee_name": null }.`
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "Você é um extrator de entidades. Dada a pergunta do assistente e a resposta do cliente, identifique a persona que receberá o agendamento e extraia apenas o nome próprio. Interprete o texto; não dependa de formato fixo. Retorne apenas JSON com attendee_name (string ou null)." },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 60,
+        temperature: 0,
+        response_format: { type: "json_object" },
+      }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    if (!content) return null
+    const parsed = JSON.parse(content)
+    const name = parsed?.attendee_name
+    if (name != null && typeof name === "string" && name.trim().length >= 2 && name.length <= 120) {
+      return name.trim()
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Gera resposta fluida quando o cliente pergunta sobre disponibilidade.
- * Ex: "Agenda para o Cesar, tem horário às 14?" → consulta agenda → "Claro! Temos sim às 14. Posso confirmar para o Cesar?"
+ * Ex: cliente pergunta se tem horário às 14 → consulta agenda → confirma e pergunta se pode confirmar.
  */
 export async function generateAvailabilityResponseWithAI(
   config: SimulatorConfig,
@@ -546,9 +601,8 @@ export async function interpretAdditionalBookingsWithAI(
     `Contexto: ${context?.has_completed_booking ? "ja existe um agendamento finalizado" : "nao ha agendamento finalizado"}\n` +
     "REGRAS:\n" +
     "- VARIOS SERVICOS para a MESMA pessoa (ex: 'corte e barba', 'corte de cabelo e barba', 'quero os dois') = UM so agendamento. Retorne has_additional FALSE e count 0.\n" +
-    "- Um UNICO agendamento PARA outra pessoa (ex: 'quero agendar para meu marido', 'agendar para minha esposa', 'para o João') " +
-    "e UM so agendamento. Retorne has_additional FALSE, count 0 e for_whom com a mencao (ex: 'meu marido', 'minha esposa', 'João').\n" +
-    "- Multiplos agendamentos: so quando o cliente quer MAIS DE UMA PESSOA/horario (ex: 'pra mim e pro meu filho', 'dois agendamentos', 'um pra mim e outro pro João', 'agendar para meu marido e meu filho'). " +
+    "- Um UNICO agendamento PARA outra pessoa (ex.: 'quero agendar para meu marido', 'agendar para minha esposa', 'para [nome]') = UM só agendamento. Retorne has_additional FALSE, count 0 e for_whom com a menção (parentesco ou nome).\n" +
+    "- Múltiplos agendamentos: só quando o cliente quer MAIS DE UMA PESSOA/horário (ex.: 'pra mim e pro meu filho', 'dois agendamentos', 'um pra mim e outro pra outra pessoa'). " +
     "Retorne has_additional true e count com a quantidade de PESSOAS adicionais.\n" +
     "- Se nao houver mencao a outra pessoa nem multiplos, retorne count 0, has_additional false e for_whom null."
 

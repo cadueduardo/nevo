@@ -194,6 +194,25 @@ export function resolveOptionByNumber(text: string, options: string[]): string |
   return null
 }
 
+/** Resolve "1,2", "1 e 2", "1 - 2" etc. para múltiplos itens. Retorna array de labels (sem numeração) ou [] se inválido. */
+export function resolveMultipleOptionsByNumber(text: string, options: string[]): string[] {
+  const t = text.trim()
+  const raw = t
+    .split(/[\s,;]+|\be\b/)
+    .map((s) => s.replace(/^[-\s]+|[-\s]+$/g, "").trim())
+    .filter(Boolean)
+  const indices: number[] = []
+  for (const part of raw) {
+    if (/^[1-9]\d*$/.test(part)) {
+      const idx = parseInt(part, 10) - 1
+      if (idx >= 0 && idx < options.length && !indices.includes(idx)) indices.push(idx)
+    }
+  }
+  if (indices.length === 0) return []
+  indices.sort((a, b) => a - b)
+  return indices.map((i) => options[i].replace(/^\d+\s*-\s*/, "").trim())
+}
+
 // --- Schedule ---
 
 export function buildDailySlots(start = "09:00", end = "18:00", intervalMinutes = 60): string[] {

@@ -11,6 +11,8 @@ import {
   classifyNeedsIntroTutorial,
   answerDoubtWithAI,
   suggestServicesWithAI,
+  generateCatalogServiceDescriptions,
+  isLikelyPersonName,
   BusinessModelExtraction,
 } from './extractors.ts'
 
@@ -425,6 +427,8 @@ function getStepContextualHint(step: string): string {
     business_name: 'Informe o nome do seu negócio ou empresa.',
     context: 'Escolha se quer configurar agendamento, orçamento ou ambos.',
     catalog_services_list: 'Selecione os serviços/produtos do catálogo (lista geral do que você oferece).',
+    catalog_services_descriptions_offer: 'Escolha se quer gerar descrições sugeridas por IA ou pular por enquanto.',
+    catalog_services_descriptions_review: 'Para cada serviço: Aprovar, Editar, Refazer a sugestão ou Pular.',
     booking_services_list: 'Selecione o que pode ser agendado pelo WhatsApp.',
     services_list: 'Selecione os serviços que você oferece ou digite outros no campo. Depois pode clicar em Continuar.',
     services_edit: 'Revise a lista de serviços, adicione ou remova itens e clique em Continuar quando terminar.',
@@ -1404,6 +1408,17 @@ function parseStaffNames(message: string): string[] {
   return parts.filter((name) => !blacklist.includes(name.toLowerCase()))
 }
 
+/** Indica se o texto parece cargo/profissão ou tipo de negócio em vez de nome de pessoa (ex.: "barbeiro", "um barbeiro"). */
+function looksLikeProfessionOrRole(name: string, businessType?: string): boolean {
+  const n = (name || '').trim().toLowerCase()
+  if (n.length < 2) return true
+  const normalized = n.replace(/^(um|uma|o|a)\s+/, '')
+  const professionLike = /^(barbeiro|dentista|designer|consultor|terapeuta|massagista|esteticista|manicure|cabeleireiro|veterin[aá]rio|advogado|contador|corretor|gerente|atendente|professor|instrutor|t[eé]cnico)(a|o|as|os)?$/i.test(normalized)
+  const sameAsBusiness = businessType && normalized === (businessType || '').trim().toLowerCase()
+  const startsWithArticle = /^(um|uma|o|a)\s+/i.test(n)
+  return professionLike || sameAsBusiness || (startsWithArticle && normalized.length < 25)
+}
+
 function getStaffSetupIndex(data: any): number {
   const idx = Number(data?.staff_setup_index)
   return Number.isFinite(idx) && idx >= 0 ? idx : 0
@@ -2025,6 +2040,9 @@ async function processMessage(
       ...(hasBreaks ? { schedule_breaks_configured: true } : {}),
     }
     const hasSeedExtraction = hasOnboardingSeedExtraction(extracted) || Boolean(resolvedBusinessType)
+    if (Array.isArray((extracted as any).faq) && (extracted as any).faq.length > 0) {
+      merged.faq = [...((merged as any).faq || []), ...(extracted as any).faq]
+    }
 
     if (hasSeedExtraction || merged.business_type) {
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('collect_free_text', merged))
@@ -2037,6 +2055,9 @@ async function processMessage(
       if (merged.schedule && Object.keys(merged.schedule).length > 0) {
         dataToPersist.schedule = merged.schedule
         if (merged.schedule_breaks_configured) dataToPersist.schedule_breaks_configured = true
+      }
+      if (Array.isArray((merged as any).faq) && (merged as any).faq.length > 0) {
+        dataToPersist.faq = (merged as any).faq
       }
       return {
         assistant_message: next.message,
@@ -2172,6 +2193,209 @@ async function processMessage(
       requires_action: next.requires_action,
       action_options: next.action_options,
       ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+    }
+  }
+
+  // Step opcional (doc): oferta de descrições do catálogo — Gerar descrições | Pular por enquanto
+  if (currentStep === 'catalog_services_descriptions_offer') {
+    const lower = (text || '').toLowerCase().trim()
+    const skip = /pular|pular por enquanto|nao|não|depois/.test(lower) || lower === '2'
+    const generate = /gerar|gerar descri|sim|quero/.test(lower) || lower === '1'
+
+    if (skip) {
+      const merged = { ...collectedData, catalog_descriptions_offer_done: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('catalog_services_descriptions_offer', merged))
+      return {
+        assistant_message: `Tudo bem, pode adicionar descrições depois no resumo.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: { catalog_descriptions_offer_done: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+      }
+    }
+
+    if (generate) {
+      const catalog = getCatalogServicesFromData(collectedData)
+      const names = catalog.map((s) => s?.name).filter(Boolean) as string[]
+      if (names.length === 0) {
+        const merged = { ...collectedData, catalog_descriptions_offer_done: true }
+        const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('catalog_services_descriptions_offer', merged))
+        return {
+          assistant_message: `Não há serviços no catálogo para descrever.\n\n${next.message}`,
+          next_step: next.step,
+          extracted_data: { catalog_descriptions_offer_done: true },
+          requires_action: next.requires_action,
+          action_options: next.action_options,
+        }
+      }
+      const suggestions = await generateCatalogServiceDescriptions(names, collectedData.business_type)
+      const first = suggestions[0]
+      const merged = {
+        ...collectedData,
+        catalog_descriptions_suggestions: suggestions,
+        catalog_descriptions_review_index: 0,
+      }
+      const reviewActions = ['Aprovar', 'Editar', 'Refazer', 'Pular']
+      return {
+        assistant_message: first
+          ? `**[${first.name}]**\nSugestão: "${first.suggested || '(sem sugestão)'}"\n\nO que deseja fazer?`
+          : 'Nenhuma sugestão gerada. Pode continuar.',
+        next_step: 'catalog_services_descriptions_review',
+        extracted_data: {
+          catalog_descriptions_suggestions: suggestions,
+          catalog_descriptions_review_index: 0,
+        },
+        requires_action: 'catalog_services_descriptions_review',
+        action_options: reviewActions,
+      }
+    }
+
+    return {
+      assistant_message: 'Quer que eu sugira uma descrição curta pra cada serviço? Escolha **Gerar descrições** ou **Pular por enquanto**.',
+      next_step: 'catalog_services_descriptions_offer',
+      requires_action: 'catalog_services_descriptions_offer',
+      action_options: ['Gerar descrições', 'Pular por enquanto'],
+    }
+  }
+
+  // Revisão de descrições (um serviço por vez): Aprovar | Editar | Refazer | Pular
+  if (currentStep === 'catalog_services_descriptions_review') {
+    const suggestions = (collectedData as any).catalog_descriptions_suggestions as Array<{ name: string; suggested: string }> | undefined
+    const idx = typeof (collectedData as any).catalog_descriptions_review_index === 'number' ? (collectedData as any).catalog_descriptions_review_index : 0
+    const catalog = getCatalogServicesFromData(collectedData)
+    const waitingEdit = (collectedData as any).catalog_descriptions_waiting_edit === true
+
+    if (waitingEdit && suggestions && suggestions[idx] && text.trim().length >= 2) {
+      const name = suggestions[idx].name
+      const updatedCatalog = catalog.map((s) => (s.name === name ? { ...s, description: text.trim() } : s))
+      const nextIdx = idx + 1
+      const nextMerged = {
+        ...collectedData,
+        catalog_services: updatedCatalog,
+        catalog_descriptions_suggestions: suggestions,
+        catalog_descriptions_review_index: nextIdx,
+        catalog_descriptions_waiting_edit: false,
+      }
+      if (nextIdx >= suggestions.length) {
+        nextMerged.catalog_descriptions_offer_done = true
+        const next = determineNextStep(nextMerged as BusinessModelData, '', makeFlowState('catalog_services_descriptions_review', nextMerged))
+        return {
+          assistant_message: `✅ Descrição de **${name}** salva.\n\n${next.message}`,
+          next_step: next.step,
+          extracted_data: {
+            catalog_services: updatedCatalog,
+            catalog_descriptions_offer_done: true,
+            catalog_descriptions_review_index: nextIdx,
+            catalog_descriptions_waiting_edit: false,
+          },
+          requires_action: next.requires_action,
+          action_options: next.action_options,
+          ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+        }
+      }
+      const nextItem = suggestions[nextIdx]
+      return {
+        assistant_message: `✅ Salvo.\n\n**[${nextItem.name}]**\nSugestão: "${nextItem.suggested || '(sem sugestão)'}"\n\nO que deseja fazer?`,
+        next_step: 'catalog_services_descriptions_review',
+        extracted_data: {
+          catalog_services: updatedCatalog,
+          catalog_descriptions_suggestions: suggestions,
+          catalog_descriptions_review_index: nextIdx,
+          catalog_descriptions_waiting_edit: false,
+        },
+        requires_action: 'catalog_services_descriptions_review',
+        action_options: ['Aprovar', 'Editar', 'Refazer', 'Pular'],
+      }
+    }
+
+    const action = (text || '').toLowerCase().trim()
+    const isApprove = /aprovar|^1$/.test(action)
+    const isEdit = /editar|^2$/.test(action)
+    const isRefazer = /refazer|^3$/.test(action)
+    const isSkip = /pular|^4$/.test(action)
+
+    if (!suggestions || idx >= suggestions.length) {
+      const merged = { ...collectedData, catalog_descriptions_offer_done: true }
+      const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('catalog_services_descriptions_review', merged))
+      return {
+        assistant_message: next.message,
+        next_step: next.step,
+        extracted_data: { catalog_descriptions_offer_done: true },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+      }
+    }
+
+    const current = suggestions[idx]
+    const currentName = current.name
+
+    if (isEdit) {
+      return {
+        assistant_message: `Envie o texto da descrição que você quer usar para **${currentName}**.`,
+        next_step: 'catalog_services_descriptions_review',
+        extracted_data: { catalog_descriptions_waiting_edit: true },
+        requires_action: 'catalog_services_descriptions_review',
+      }
+    }
+
+    if (isRefazer) {
+      const newSuggestions = await generateCatalogServiceDescriptions([currentName], collectedData.business_type)
+      const newSuggested = newSuggestions[0]?.suggested || current.suggested
+      const updatedSuggestions = suggestions.map((s, i) => (i === idx ? { ...s, suggested: newSuggested } : s))
+      return {
+        assistant_message: `**[${currentName}]**\nNova sugestão: "${newSuggested || '(sem sugestão)'}"\n\nO que deseja fazer?`,
+        next_step: 'catalog_services_descriptions_review',
+        extracted_data: {
+          catalog_descriptions_suggestions: updatedSuggestions,
+          catalog_descriptions_review_index: idx,
+        },
+        requires_action: 'catalog_services_descriptions_review',
+        action_options: ['Aprovar', 'Editar', 'Refazer', 'Pular'],
+      }
+    }
+
+    const updatedCatalog = catalog.map((s) =>
+      s.name === currentName
+        ? { ...s, description: isApprove ? (current.suggested || s.description) : s.description }
+        : s
+    )
+    const nextIdx = idx + 1
+    const nextMerged = {
+      ...collectedData,
+      catalog_services: updatedCatalog,
+      catalog_descriptions_suggestions: suggestions,
+      catalog_descriptions_review_index: nextIdx,
+    }
+    if (nextIdx >= suggestions.length) {
+      nextMerged.catalog_descriptions_offer_done = true
+      const next = determineNextStep(nextMerged as BusinessModelData, '', makeFlowState('catalog_services_descriptions_review', nextMerged))
+      return {
+        assistant_message: `✅ Pronto.\n\n${next.message}`,
+        next_step: next.step,
+        extracted_data: {
+          catalog_services: updatedCatalog,
+          catalog_descriptions_offer_done: true,
+          catalog_descriptions_review_index: nextIdx,
+        },
+        requires_action: next.requires_action,
+        action_options: next.action_options,
+        ...(next.selectable_options ? { selectable_options: next.selectable_options } : {}),
+      }
+    }
+
+    const nextItem = suggestions[nextIdx]
+    return {
+      assistant_message: `**[${nextItem.name}]**\nSugestão: "${nextItem.suggested || '(sem sugestão)'}"\n\nO que deseja fazer?`,
+      next_step: 'catalog_services_descriptions_review',
+      extracted_data: {
+        catalog_services: updatedCatalog,
+        catalog_descriptions_suggestions: suggestions,
+        catalog_descriptions_review_index: nextIdx,
+      },
+      requires_action: 'catalog_services_descriptions_review',
+      action_options: ['Aprovar', 'Editar', 'Refazer', 'Pular'],
     }
   }
 
@@ -2712,7 +2936,13 @@ async function processMessage(
   if (currentStep === 'staff_mode') {
     const isSolo = /(s[oó]\s*eu\s*atendo|atendo\s*sozinho|sozinh[oa]|s[oó]\s*eu|apenas\s*eu|somente\s*eu)/i.test(text)
     const hasTeam = /(eu\s*e\s*outros|colaboradores?|funcion[aá]rios?|equipe|temos|tenho)/i.test(text)
-    const hasOneStaffAlready = Array.isArray(collectedData.staff) && collectedData.staff.length === 1 && (collectedData.staff[0]?.name || '').trim().length > 0
+    const oneStaffName = Array.isArray(collectedData.staff) && collectedData.staff.length === 1 ? (collectedData.staff[0]?.name || '').trim() : ''
+    const heuristicIsProfession = oneStaffName ? looksLikeProfessionOrRole(oneStaffName, collectedData.business_type) : true
+    const aiSaysPersonName =
+      oneStaffName && !heuristicIsProfession
+        ? await isLikelyPersonName(oneStaffName, { business_type: collectedData.business_type }).catch(() => false)
+        : false
+    const hasOneStaffAlready = oneStaffName.length > 0 && !heuristicIsProfession && aiSaysPersonName
     if (isSolo && !hasTeam) {
       if (hasOneStaffAlready) {
         const name = collectedData.staff![0].name

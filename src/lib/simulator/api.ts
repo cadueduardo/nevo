@@ -77,6 +77,8 @@ export interface SimulatorResponse {
     content: string
     created_at: string
     action_options?: string[]
+    /** Quando true, exibir action_options como multi-select (checkboxes) para escolher mais de um serviço em sequência. */
+    service_multi_select?: boolean
   }>
 }
 

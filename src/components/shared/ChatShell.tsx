@@ -43,6 +43,8 @@ export interface Message {
   content: string
   timestamp?: Date
   actionOptions?: string[]
+  /** Quando true, exibir actionOptions como multi-select (checkboxes) para escolher mais de um serviço. */
+  serviceMultiSelect?: boolean
   editableItems?: EditableItem[]
   selectableOptions?: SelectableOption[]
   requiresAction?: string | null

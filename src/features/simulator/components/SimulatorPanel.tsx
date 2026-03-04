@@ -88,6 +88,7 @@ export function SimulatorPanel({
             content={message.content}
             timestamp={message.timestamp}
             actionOptions={message.actionOptions}
+            actionOptionsMultiSelect={message.serviceMultiSelect}
             selectableOptions={message.selectableOptions}
             onActionClick={(action) => onSend(action)}
           />

@@ -18,6 +18,8 @@ export interface BusinessModelData extends BusinessModelExtraction {
   services_pricing_entered?: boolean
   /** Indica que a pergunta de sequência foi respondida. */
   sequence_booking_configured?: boolean
+  /** Indica que o usuário respondeu à oferta de descrições do catálogo (Gerar ou Pular). */
+  catalog_descriptions_offer_done?: boolean
   /** Serviços de orçamento (nome + pricing_type). Coletados em quote_services_list + quote_service_pricing. */
   quote_services?: Array<{ name: string; pricing_type: string }>
   /** Variáveis para estimativa rápida (cliente). Subconjunto de dynamic_variables. */
@@ -294,12 +296,30 @@ export function determineNextStep(
     catalogServices.length === 0
   ) {
     const serviceOpts = buildServiceSelectableOptions(serviceExamples)
+    const names = catalogServices.map((s) => s?.name).filter(Boolean) as string[]
+    const message =
+      names.length > 0
+        ? `Você informou: **${names.join('**, **')}**. Está certo? Quer adicionar mais? (pode selecionar abaixo ou digitar outros)`
+        : 'Quais serviços/produtos vocês oferecem no geral?\n\nSelecione os que você oferece ou adicione outros abaixo:'
     return {
       step: 'catalog_services_list',
-      message:
-        'Quais serviços/produtos vocês oferecem no geral?\n\nSelecione os que você oferece ou adicione outros abaixo:',
+      message,
       selectable_options: serviceOpts,
       requires_action: 'catalog_services_list',
+    }
+  }
+
+  // Step opcional (doc): oferta de sugestão de descrições para o catálogo — agendamento e orçamento
+  if (
+    catalogServices.length > 0 &&
+    !currentData.catalog_descriptions_offer_done
+  ) {
+    return {
+      step: 'catalog_services_descriptions_offer',
+      message:
+        'Pra você não perder tempo, eu posso sugerir uma descrição curta pra cada serviço. Você revisa e edita. Quer que eu gere agora?',
+      action_options: ['Gerar descrições', 'Pular por enquanto'],
+      requires_action: 'catalog_services_descriptions_offer',
     }
   }
 
@@ -312,10 +332,14 @@ export function determineNextStep(
     )
   ) {
     const serviceOpts = buildServiceSelectableOptions(serviceExamples)
+    const names = bookingServices.map((s) => s?.name).filter(Boolean) as string[]
+    const message =
+      names.length > 0
+        ? `Você informou: **${names.join('**, **')}**. Está certo? Quer adicionar mais? (pode selecionar abaixo ou digitar outros)`
+        : 'Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nSelecione os que você oferece ou adicione outros abaixo:'
     return {
       step: 'booking_services_list',
-      message:
-        `Beleza. Pra eu montar a parte de **agendamento**, preciso saber o que o cliente pode marcar.\n\nSelecione os que você oferece ou adicione outros abaixo:`,
+      message,
       selectable_options: serviceOpts,
       requires_action: 'booking_services_list',
     }

@@ -63,6 +63,8 @@ export interface BusinessModelExtraction {
   allow_sequence_booking?: boolean
   /** Serviços que podem ser combinados em sequência (quando allow_sequence_booking). */
   sequence_eligible_services?: string[]
+  /** Informações relevantes que não couberam em slots — para FAQ (pergunta/resposta breve). */
+  faq?: Array<{ question: string; answer: string }>
 }
 
 function normalizeServiceName(value: string): string {
@@ -305,11 +307,16 @@ export async function extractBusinessModelWithAI(
   }
 
   try {
-    const prompt = `Você é um assistente especializado em extração de informações estruturadas sobre um negócio. Analise a mensagem abaixo e extraia APENAS as informações que o usuário informou explicitamente (ou que sejam inequívocas no texto).
+    const prompt = `Você é um assistente especializado em extração de informações estruturadas sobre um negócio. Analise a mensagem abaixo e extraia TODAS as informações úteis: preencha todos os slots possíveis a partir do texto e NÃO despreze informação.
 
 Dados já coletados: ${JSON.stringify(currentData)}
 
 Mensagem do usuário: "${message}"
+
+REGRAS GERAIS:
+- Preencha todos os campos que puder inferir do texto (tipo, nome, serviços, horários, staff, etc.).
+- Se alguma informação for relevante para o negócio mas NÃO couber nos campos (serviços, horário, staff, etc.), coloque em "faq" como pares pergunta/resposta breve (ex.: informação sobre forma de pagamento, política, localização específica).
+- O cliente pode escrever de qualquer forma (primeira mensagem "coringa"); interprete e estruture tudo que for útil.
 
 INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
 
@@ -359,9 +366,11 @@ INSTRUÇÕES DE EXTRAÇÃO INTELIGENTE:
    - Frases como "quero um assistente de agendamento" devem preencher context="booking" (e não services)
 
 8. COLABORADORES (staff) e MODO (staff_mode):
-   - Se o usuário disser o PRÓPRIO nome (dono/atendente), inclua em staff: [{"name": "Nome"}]. Ex.: "Meu nome é Ronny", "sou o João", "me chamo Maria" -> staff: [{"name":"Ronny"}] (ou João/Maria).
+   - staff.name = SEMPRE nome próprio da pessoa (como ela se chama), NUNCA profissão/cargo/tipo de negócio.
+   - Preencha staff APENAS quando o usuário disser explicitamente o NOME: "Meu nome é Ronny", "sou o João", "me chamo Maria", "pode me chamar de Carla" -> staff: [{"name":"Ronny"}] (ou João/Maria/Carla).
+   - NUNCA coloque em staff.name: profissão ("barbeiro", "dentista", "designer"), tipo de negócio ("um barbeiro", "sou barbeiro"), nem cargo. "Sou barbeiro" ou "tenho uma barbearia" = NÃO preencher staff; use só staff_mode: "solo" se aplicável.
    - Se mencionar colaboradores por nome: "tenho a Carla e a Maria" -> [{"name":"Carla"},{"name":"Maria"}]. Não inventar nomes.
-   - Se a mensagem indicar que a pessoa atende SOZINHA (ex.: "sou barbeiro", "tenho uma barbearia", "só eu atendo", "atendo sozinho", sem mencionar equipe/colaboradores), inclua staff_mode: "solo".
+   - Se a mensagem indicar que a pessoa atende SOZINHA (ex.: "sou barbeiro", "tenho uma barbearia", "só eu atendo", "atendo sozinho", sem mencionar equipe/colaboradores), inclua staff_mode: "solo" e NÃO preencha staff a menos que ela tenha dito o nome próprio.
    - staff_mode: "solo" | "team" (omitir se não der para inferir)
 
 9. TOM DE VOZ (tone_of_voice):
@@ -395,10 +404,11 @@ Retorne APENAS um JSON válido com os campos identificados:
   "context": "booking" | "quote" | "both",
   "tone_of_voice": "formal" | "friendly" | "professional" | "funny",
   "holidays_skipped": true,
-  "holidays_attend": []
+  "holidays_attend": [],
+  "faq": [{"question": "pergunta breve", "answer": "resposta breve"}]
 }
 
-Retorne APENAS o JSON, sem markdown, sem explicações, sem texto adicional.`
+Use "faq" apenas para informações importantes que não cabem nos outros campos (ex.: política de cancelamento, forma de pagamento, endereço, regras). Retorne APENAS o JSON, sem markdown, sem explicações, sem texto adicional.`
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -647,4 +657,116 @@ function extractBusinessModelFallback(
   }
 
   return result
+}
+
+/**
+ * Gera uma descrição curta (1–2 frases) por serviço do catálogo para uso no atendimento.
+ * Doc: catalog_services_descriptions_suggestion — curto, neutro, sem preço, linguagem simples/WhatsApp.
+ */
+export async function generateCatalogServiceDescriptions(
+  serviceNames: string[],
+  businessType?: string
+): Promise<Array<{ name: string; suggested: string }>> {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey || serviceNames.length === 0) {
+    return serviceNames.map((name) => ({ name, suggested: '' }))
+  }
+
+  const list = serviceNames.map((n) => `"${n}"`).join(', ')
+  const prompt = `Você gera descrições curtas para serviços de um negócio, para uso em chat/WhatsApp.
+Negócio: ${businessType || 'geral'}.
+Serviços: ${list}.
+
+Para CADA serviço da lista, gere uma única descrição em 1 ou 2 frases: o que é o serviço, de forma neutra e clara. Sem preço, sem promessas absolutas. Linguagem simples.
+Retorne APENAS um JSON válido no formato: { "descriptions": [ { "name": "Nome do serviço", "suggested": "Descrição aqui." }, ... ] }
+A ordem do array deve ser exatamente a mesma da lista de serviços acima. Um item por serviço.`
+
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'Você retorna apenas JSON válido, sem markdown.' },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 800,
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+      }),
+    })
+    if (!res.ok) return serviceNames.map((name) => ({ name, suggested: '' }))
+    const data = await res.json()
+    const content = (data.choices?.[0]?.message?.content || '{}').trim()
+    const parsed = JSON.parse(content) as { descriptions?: Array<{ name: string; suggested: string }> }
+    const arr = Array.isArray(parsed.descriptions) ? parsed.descriptions : []
+    return serviceNames.map((name) => {
+      const found = arr.find((d) => (d.name || '').trim() === name)
+      return { name, suggested: found?.suggested ? String(found.suggested).trim() : '' }
+    })
+  } catch {
+    return serviceNames.map((name) => ({ name, suggested: '' }))
+  }
+}
+
+/**
+ * Usa IA para decidir se o valor é nome de pessoa ou profissão/cargo/placeholder.
+ * Útil para não pular a pergunta "Qual é o seu nome?" quando staff veio preenchido com "barbeiro", "um barbeiro", etc.
+ */
+export async function isLikelyPersonName(
+  value: string,
+  context?: { business_type?: string }
+): Promise<boolean> {
+  const v = (value || '').trim()
+  if (v.length < 2) return false
+
+  const openaiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiKey) return false
+
+  try {
+    const prompt = `Contexto: onboarding de negócio. Tipo de negócio: ${context?.business_type || 'não informado'}.
+
+O campo "staff" tem um valor que pode ser nome de pessoa OU profissão/cargo/tipo de negócio que veio da mensagem do usuário.
+
+Valor a avaliar: "${v}"
+
+É um NOME DE PESSOA (como a pessoa se chama) ou é profissão/cargo/placeholder (ex.: barbeiro, dentista, um barbeiro, design de sobrancelhas)?
+
+Regras:
+- Nomes próprios (João, Maria, Ronny, Carla, Cadu, Ana Silva) = true
+- Profissão ou cargo (barbeiro, dentista, um barbeiro, designer, consultor) = false
+- Tipo de negócio como "nome" (design de sobrancelhas, cabeleireiro) = false
+- "um barbeiro", "o barbeiro", "a dentista" = false
+
+Retorne APENAS um JSON: { "is_person_name": true ou false }`
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'Você classifica se um valor é nome de pessoa ou não. Retorne apenas JSON.' },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 20,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+      }),
+    })
+    if (!res.ok) return false
+    const data = await res.json()
+    const content = (data.choices?.[0]?.message?.content || '{}').trim()
+    const parsed = JSON.parse(content) as { is_person_name?: boolean }
+    return parsed.is_person_name === true
+  } catch {
+    return false
+  }
 }
