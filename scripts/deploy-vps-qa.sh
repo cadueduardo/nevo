@@ -29,7 +29,13 @@ npm ci
 echo ""
 
 echo "[deploy-vps-qa] 3/4 npm run build..."
-npm run build
+export CI=1
+export NEXT_TELEMETRY_DISABLED=1
+# Reduz picos de memoria no build do Next em VPS menores.
+export NEXT_PRIVATE_BUILD_WORKER=1
+NODE_MAX_OLD_SPACE_SIZE="${NODE_MAX_OLD_SPACE_SIZE:-2048}"
+export NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}"
+npx next build --no-lint
 echo ""
 
 echo "[deploy-vps-qa] 4/4 Reiniciando: ${RESTART_CMD}"

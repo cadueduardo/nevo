@@ -533,7 +533,15 @@ serve(async (req) => {
           content: finalMessage,
           created_at: nowIso,
           action_options: result.action_options,
-          service_multi_select: (result.state as SimulatorState).service_selection_multi ?? false,
+          service_multi_select: (() => {
+            const byState = (result.state as SimulatorState).service_selection_multi ?? false
+            if (byState) return true
+            const hasMultipleOptions = Array.isArray(result.action_options) && result.action_options.length >= 2
+            const msg = String(result.message || "").toLowerCase()
+            const hintsMultiSelect =
+              /mais de um|mais de uma|sequ[eê]ncia|pode escolher|pode selecionar/.test(msg)
+            return hasMultipleOptions && hintsMultiSelect
+          })(),
         },
       ],
     }
@@ -544,4 +552,3 @@ serve(async (req) => {
     return json({ error: error?.message || error?.toString() || "Erro desconhecido" }, 500)
   }
 })
-

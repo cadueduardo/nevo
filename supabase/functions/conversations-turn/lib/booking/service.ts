@@ -40,11 +40,16 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
   } = ctx
 
   const isDigitOnlyEarly = /^[1-9]\d*$/.test(text.trim())
-  const lastCompletedBooking =
+  const lastCompletedFromNextState =
     Array.isArray(nextState.completed_bookings) && nextState.completed_bookings.length > 0
       ? nextState.completed_bookings[nextState.completed_bookings.length - 1]
       : undefined
-  const referenceBooking = nextState.last_booking || lastCompletedBooking
+  const lastCompletedFromState =
+    Array.isArray(state.completed_bookings) && state.completed_bookings.length > 0
+      ? state.completed_bookings[state.completed_bookings.length - 1]
+      : undefined
+  const referenceBooking =
+    nextState.last_booking || state.last_booking || lastCompletedFromNextState || lastCompletedFromState
   const inferredTemplateChoice = parseTemplateChoice(text, state.last_template_options || undefined)
 
   // Fallback defensivo: se o estado perdeu pending_template_choice, mas o cliente escolheu
@@ -107,6 +112,41 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
   }
 
   if (!nextState.slots.service) {
+    // 0) Texto livre baseado nas opcoes exibidas no multi-select (robusto mesmo com catalogo parcial).
+    const normalizedInput = normalizeText(text)
+    const presentedOptions =
+      state.service_selection_multi &&
+      Array.isArray(state.last_service_options) &&
+      state.last_service_options.length > 0
+        ? state.last_service_options.filter((opt) => normalizeText(opt) !== normalizeText("Quero agendar uma visita"))
+        : []
+    const selectedByPresentedText = presentedOptions.filter((opt) =>
+      normalizedInput.includes(normalizeText(opt))
+    )
+    if (selectedByPresentedText.length >= 1) {
+      const unique = Array.from(new Set(selectedByPresentedText))
+      nextState.slots.service = unique.join(", ")
+      nextState.last_service_options = undefined
+      nextState.slots.date = undefined
+      nextState.slots.time = undefined
+      nextState.slots.time_period = undefined
+      nextState.pending_date_confirmation = undefined
+      nextState.last_time_options = undefined
+      nextState.last_time_options_date = undefined
+      nextState.last_time_options_staff = undefined
+      nextState.just_identified_service = true
+      const staffName = nextState.slots.staff_name || getStaffList(config)[0]?.name
+      const schedule = staffName ? getScheduleForStaff(config, staffName) : null
+      const days = schedule?.days_of_week || []
+      const dayOpts = buildStaffDayOptions(days)
+      if (!nextState.slots.staff_name && staffName) nextState.slots.staff_name = staffName
+      return buildResult(
+        `Entendi, ${nextState.slots.service}. Em qual dia voce gostaria de agendar? (ex: Hoje, Amanha ou dia da semana)`,
+        nextState,
+        toNumberedOptions(dayOpts)
+      )
+    }
+
     // 1) Texto livre: "corte e barba" → múltiplos serviços (allow_sequence_booking)
     const sequenceServices = config.allow_sequence_booking ? getSequenceServicesFromText(config, text) : []
     if (sequenceServices.length >= 1) {
@@ -359,23 +399,56 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
   if (nextState.pending_template_choice) {
     const templateOpts = state.last_template_options || []
     const choice = parseTemplateChoice(text, templateOpts.length > 0 ? templateOpts : undefined)
-    const last = nextState.last_booking
+    const last = nextState.last_booking || referenceBooking
     if (choice && last) {
       nextState.pending_template_choice = false
       nextState.last_template_options = undefined
       if (choice === "same_next") {
-        const defaultService = nextState.slots.service || nextState.pending_default_service || last.service
-        const serviceList = buildServiceOptions(config.services || [])
-        const numberedServiceOpts = serviceList.map((o, i) => `${i + 1} - ${o}`)
-        nextState.pending_second_service_choice = true
         const firstName = last.attendee_name || "o primeiro"
         const secondName = nextState.slots.attendee_name || "ele"
-        const defaultLabel = defaultService === "visita" ? "visita" : defaultService
-        const question =
-          defaultService
-            ? `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. O dele tambem vai ser ${defaultLabel}? Ou prefere trocar o servico:`
-            : `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. Qual servico?`
-        return buildResult(question, nextState, numberedServiceOpts)
+        const defaultService = nextState.slots.service || nextState.pending_default_service || last.service
+        if (defaultService) nextState.slots.service = defaultService
+        if (last.date) nextState.slots.date = last.date
+        if (last.staff_name) nextState.slots.staff_name = last.staff_name
+
+        if (last.date && last.staff_name && defaultService) {
+          const secondDuration = getServicesTotalDuration(config, defaultService)
+          const firstDuration = getServicesTotalDuration(config, last.service) ?? 30
+          const firstEndMins = toMinutes(last.time) + firstDuration
+          const firstEndTime = fromMinutes(firstEndMins)
+          const nextSlot = getNextAvailableSlot(
+            last.date,
+            config,
+            nextState.booked_slots,
+            last.staff_name,
+            firstEndTime,
+            secondDuration ?? undefined
+          )
+          if (nextSlot) {
+            nextState.slots.time = nextSlot
+            const confirmOpts = [
+              `1 - Sim, ${nextSlot}`,
+              "2 - Outro horario no mesmo dia",
+              "3 - Outro dia",
+              ...(getOtherStaffOptions(config, last.staff_name).length > 0 ? ["4 - Trocar colaborador"] : []),
+            ]
+            nextState.last_confirm_options = confirmOpts
+            return buildResult(
+              `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. Sugeri ${nextSlot} em ${formatDatePt(last.date)}. Posso confirmar?`,
+              nextState,
+              confirmOpts
+            )
+          }
+          const hasOtherStaff = getOtherStaffOptions(config, last.staff_name).length > 0
+          const msg = hasOtherStaff
+            ? "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia ou trocar colaborador?"
+            : "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia?"
+          return buildResult(msg, nextState, [
+            "1 - Outro dia",
+            ...(hasOtherStaff ? ["2 - Trocar colaborador"] : []),
+          ])
+        }
+        return buildResult("Qual dia voce prefere?", nextState)
       }
       if (choice === "same_day") {
         if (last.date) nextState.slots.date = last.date
