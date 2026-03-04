@@ -220,7 +220,9 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     if (!name) name = text.trim()
     // Não re-perguntar quando já temos resposta: só re-perguntar se estiver vazio ou for intenção explícita de agendar (ex.: "quero agendar")
     if (!name || isExplicitBookingIntent(text)) {
-      return buildResult(`${buildMultiBookingIntro()} De quem sera o primeiro agendamento?`, nextState)
+      const isNextBooking = (nextState.completed_bookings?.length ?? 0) > 0
+      const whoPrompt = isNextBooking ? "De quem sera o proximo agendamento?" : "De quem sera o primeiro agendamento?"
+      return buildResult(`${buildMultiBookingIntro()} ${whoPrompt}`, nextState)
     }
     nextState.slots.attendee_name = name
     if (!nextState.slots.customer_name) nextState.slots.customer_name = name

@@ -80,6 +80,33 @@ export async function handleBookingModeMessage(context: SimulatorHandlerContext)
   const { text, config, nextState, history, senderDisplayName, isFirst } = context
   const cordial = getCordialPrefix(config, isFirst)
 
+  // Agendamento duplo: quando estamos esperando o nome do próximo agendamento ("De quem será o próximo agendamento?")
+  // e o usuário responde com um nome (ex: "Davi"), extrair o nome e seguir no fluxo de booking. Evita perder o contexto
+  // e responder "Pode me dar mais detalhes?" em vez de continuar o agendamento em sequência.
+  if (nextState.pending_attendee_name) {
+    const trimmed = text.trim()
+    const looksLikeName =
+      trimmed.length >= 2 &&
+      trimmed.length <= 200 &&
+      !isExplicitBookingIntent(text) &&
+      !isGreeting(text)
+    if (looksLikeName) {
+      const lastAssistant =
+        nextState.last_prompt ||
+        (history.length > 0 ? history.filter((m) => m.role === "assistant").pop()?.content : "") ||
+        ""
+      const name = await extractAttendeeNameForMultiBooking(text, { lastAssistantMessage: lastAssistant })
+      if (name) {
+        nextState.pending_attendee_name = false
+        nextState.slots = { ...nextState.slots, attendee_name: name, quote_answers: nextState.slots?.quote_answers || {} }
+        if (!nextState.slots.customer_name) nextState.slots.customer_name = name
+        nextState.pending_additional_booking = true
+        const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
+        return buildResult(result.message, result.state, result.action_options)
+      }
+    }
+  }
+
   if (isPriceQuestion(text)) {
     const serviceName = findServiceFromText(text, config.services || [])
     const svc = getServiceWithPrice(config.services || [], serviceName)
@@ -179,6 +206,40 @@ export async function processSimulatorMessage(
   }
 
   const isFirst = isFirstMessage(state)
+  // Hard-guard para multiagendamento:
+  // se o turno anterior pediu o nome do primeiro/proximo agendamento, a resposta atual
+  // precisa entrar direto no booking (evita cair em fallback/qualificacao generica).
+  const lastAssistantForAttendee =
+    nextState.last_prompt ||
+    (history.length > 0 ? history.filter((m) => m.role === "assistant").pop()?.content : "") ||
+    ""
+  const lastAssistantNormForAttendee = normalizeText(String(lastAssistantForAttendee || ""))
+  const askedForAttendeeNameHardGuard =
+    /(?:de\s+quem\s+)?sera(o)?\s+o\s+(?:primeiro|proximo)\s+agendamento/i.test(lastAssistantNormForAttendee) ||
+    ((/\bde\s+quem\b/.test(lastAssistantNormForAttendee) || /\bqual\b.*\bnome\b/.test(lastAssistantNormForAttendee)) &&
+      /\bagendamento\b/.test(lastAssistantNormForAttendee))
+  const plausibleAttendeeAnswer =
+    text.trim().length >= 2 &&
+    text.trim().length <= 200 &&
+    !isExplicitBookingIntent(text) &&
+    !isGreeting(text)
+  if ((nextState.pending_attendee_name || askedForAttendeeNameHardGuard) && plausibleAttendeeAnswer) {
+    nextState.mode = "booking"
+    nextState.step = undefined
+    nextState.pending_attendee_name = true
+    nextState.pending_additional_booking = true
+    nextState.pending_additional_count = Math.max(1, nextState.pending_additional_count ?? 1)
+    if (nextState.expected_additional_count == null) nextState.expected_additional_count = nextState.pending_additional_count
+    return await handleBookingModeMessage({
+      text,
+      config,
+      nextState,
+      history,
+      senderDisplayName,
+      isFirst,
+    })
+  }
+
   const minOrchestratorConfidence = 0.5
   let orchestratorCached: FlowOrchestratorOutput | null | undefined = undefined
   const getOrchestrator = async (): Promise<FlowOrchestratorOutput | null> => {
@@ -770,6 +831,7 @@ export async function processSimulatorMessage(
   const askedForAttendeeName =
     /(?:de\s+quem\s+)?sera(o)?\s+o\s+(?:primeiro|proximo)\s+agendamento/i.test(lastAssistantText) ||
     (/\b(?:primeiro|proximo)\b/.test(lastAssistantText) && /\bagendamento\b/.test(lastAssistantText))
+  const isAttendeeNameTurn = Boolean(nextState.pending_attendee_name) || askedForAttendeeName
   const trimmed = text.trim()
   const isPlausibleAnswer =
     trimmed.length >= 2 &&
@@ -792,6 +854,7 @@ export async function processSimulatorMessage(
     config.lead_policy?.reject_unlisted_services &&
     (config.services || []).length > 0 &&
     !nextState.slots.service &&
+    !isAttendeeNameTurn &&
     !isGreeting(text) &&
     !isFirst
   ) {
@@ -837,6 +900,7 @@ export async function processSimulatorMessage(
   // Isso previne que o bot tente agendar serviÃ§os que nÃ£o existem
   if (nextState.mode === "booking" &&
       !nextState.slots.service &&
+      !isAttendeeNameTurn &&
       config.lead_policy?.reject_unlisted_services &&
       (config.services || []).length > 0 &&
       !isGreeting(text)) {
