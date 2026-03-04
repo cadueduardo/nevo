@@ -68,6 +68,6 @@ export function getNextAvailableSlot(
   const availability = getMockAvailability(dateIso, schedule, bookedSlots, staffName, serviceDurationMinutes)
   if (!availability.available.length) return null
   if (!afterTime) return availability.available[0]
-  const next = availability.available.find((slot) => slot > afterTime)
+  const next = availability.available.find((slot) => slot >= afterTime)
   return next || null
 }

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { normalizeText } from "./utils.ts"
+import { normalizeText, toMinutes, fromMinutes } from "./utils.ts"
 import type { SimulatorState, SimulatorResult } from "./types.ts"
 
 export function createSimulatorState(): SimulatorState {
@@ -38,18 +38,35 @@ export function resetSlotsForNextBooking(state: SimulatorState): SimulatorState[
   }
 }
 
+/**
+ * Adiciona um agendamento aos blocos ocupados.
+ * Se durationMinutes e intervalMinutes forem passados, bloqueia todos os slots
+ * no intervalo [time, time+duration) (ex.: 09:00 com 60 min e intervalo 30 = bloqueia 09:00 e 09:30).
+ */
 export function addBookedSlot(
   booked: Record<string, Record<string, string[]>> | undefined,
   staffName: string | undefined,
   date?: string,
-  time?: string
+  time?: string,
+  durationMinutes?: number | null,
+  intervalMinutes?: number
 ): Record<string, Record<string, string[]>> {
   if (!date || !time) return booked || {}
   const key = staffName ? normalizeText(staffName) : "default"
   const next = { ...(booked || {}) }
   const staffSlots = next[key] || {}
   const list = Array.isArray(staffSlots[date]) ? [...staffSlots[date]] : []
-  if (!list.includes(time)) list.push(time)
+  const interval = intervalMinutes ?? 30
+  if (durationMinutes != null && durationMinutes > 0 && interval > 0) {
+    const startMins = toMinutes(time)
+    const endMins = startMins + durationMinutes
+    for (let m = startMins; m < endMins; m += interval) {
+      const slot = fromMinutes(m)
+      if (!list.includes(slot)) list.push(slot)
+    }
+  } else {
+    if (!list.includes(time)) list.push(time)
+  }
   staffSlots[date] = list
   next[key] = staffSlots
   return next

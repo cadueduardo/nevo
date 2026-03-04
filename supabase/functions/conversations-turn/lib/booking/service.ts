@@ -13,6 +13,8 @@ import {
   getMockAvailability,
   isBusinessClosedForToday,
   normalizeText,
+  toMinutes,
+  fromMinutes,
 } from "../utils.ts"
 import { getNextAvailableSlot, buildStaffDayOptions } from "../staff.ts"
 import { getServicesTotalDuration, findServiceFromText } from "../services.ts"
@@ -242,7 +244,8 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       const optsText = hasOtherStaff
         ? "Prefere o proximo horario, outro horario no mesmo dia, outro dia ou trocar colaborador?"
         : "Prefere o proximo horario, outro horario no mesmo dia ou outro dia?"
-      return buildResult(`Certo, para ${name}. Quer agendar tambem em ${dateLabel}${staffLabel}? ${optsText}`, nextState, options)
+      const msg = `Quer agendar o ${name} na sequencia apos o seu atendimento? O proximo horario esta disponivel. ${optsText}`
+      return buildResult(msg, nextState, options)
     }
     const staffList = getStaffList(config)
     if (staffList.length > 1) {
@@ -280,8 +283,18 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       nextState.slots.service = resolved === "Quero agendar uma visita" ? "visita" : resolved
       const last = nextState.last_booking
       if (last?.date && last?.staff_name) {
-        const serviceDuration = getServicesTotalDuration(config, nextState.slots.service)
-        const nextSlot = getNextAvailableSlot(last.date, config, nextState.booked_slots, last.staff_name, last.time, serviceDuration)
+        const secondDuration = getServicesTotalDuration(config, nextState.slots.service)
+        const firstDuration = getServicesTotalDuration(config, last.service) ?? 30
+        const firstEndMins = toMinutes(last.time) + firstDuration
+        const firstEndTime = fromMinutes(firstEndMins)
+        const nextSlot = getNextAvailableSlot(
+          last.date,
+          config,
+          nextState.booked_slots,
+          last.staff_name,
+          firstEndTime,
+          secondDuration ?? undefined
+        )
         if (nextSlot) {
           nextState.slots.date = last.date
           nextState.slots.time = nextSlot

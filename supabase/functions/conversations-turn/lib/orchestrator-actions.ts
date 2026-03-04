@@ -204,6 +204,18 @@ export async function handleQualificationRejectedOrchestratorAction(
         return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
       }
       const prompt = buildServicePrompt(config, text)
+      const canSequence = config.allow_sequence_booking
+      const sequenceList =
+        (config.sequence_eligible_services?.length ?? 0) > 0
+          ? config.sequence_eligible_services!
+          : (config.services || []).map((s) => s.name).filter(Boolean)
+      if (canSequence && sequenceList.length > 0) {
+        nextState.service_selection_multi = true
+        const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
+        nextState.last_service_options = sequenceOpts
+        return buildResult(prompt.message, nextState, sequenceOpts)
+      }
+      nextState.service_selection_multi = false
       nextState.last_service_options = buildServiceOptions(config.services || [])
       return buildResult(prompt.message, nextState, prompt.action_options)
     },
@@ -384,6 +396,18 @@ export async function handleQualificationOrchestratorAction(
         return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
       }
       const prompt = buildServicePrompt(config, text)
+      const canSequence = config.allow_sequence_booking
+      const sequenceList =
+        (config.sequence_eligible_services?.length ?? 0) > 0
+          ? config.sequence_eligible_services!
+          : (config.services || []).map((s) => s.name).filter(Boolean)
+      if (canSequence && sequenceList.length > 0) {
+        nextState.service_selection_multi = true
+        const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
+        nextState.last_service_options = sequenceOpts
+        return buildResult(prompt.message, nextState, sequenceOpts)
+      }
+      nextState.service_selection_multi = false
       nextState.last_service_options = buildServiceOptions(config.services || [])
       return buildResult(prompt.message, nextState, prompt.action_options)
     },
@@ -482,6 +506,18 @@ export async function handleFirstMessageOrchestratorAction(
         return resolveBooking(config, text, nextState, history, senderDisplayName)
       }
       const prompt = buildServicePrompt(config, text, { attendee_name: nextState.slots.attendee_name })
+      const canSequence = config.allow_sequence_booking
+      const sequenceList =
+        (config.sequence_eligible_services?.length ?? 0) > 0
+          ? config.sequence_eligible_services!
+          : (config.services || []).map((s) => s.name).filter(Boolean)
+      if (canSequence && sequenceList.length > 0) {
+        nextState.service_selection_multi = true
+        const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
+        nextState.last_service_options = sequenceOpts
+        return buildResult(prompt.message, nextState, sequenceOpts)
+      }
+      nextState.service_selection_multi = false
       nextState.last_service_options = buildServiceOptions(config.services || [])
       return buildResult(prompt.message, nextState, prompt.action_options)
     },

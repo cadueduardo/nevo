@@ -56,11 +56,16 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
     } else if (nextState.pending_default_service_locked && nextState.slots.service) {
       nextState.pending_default_service = nextState.slots.service
     }
+    const firstDuration = getServicesTotalDuration(config, nextState.slots.service)
+    const firstSchedule = getScheduleForStaff(config, nextState.slots.staff_name)
+    const intervalMins = firstSchedule?.interval_minutes ?? 30
     nextState.booked_slots = addBookedSlot(
       nextState.booked_slots,
       nextState.slots.staff_name,
       nextState.slots.date,
-      nextState.slots.time
+      nextState.slots.time,
+      firstDuration ?? undefined,
+      intervalMins
     )
     nextState.completed_bookings?.push({
       attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
@@ -272,11 +277,16 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
         if (nextState.pending_default_service_locked && completedService) {
           nextState.pending_default_service = completedService
         }
+        const completedDuration = getServicesTotalDuration(config, completedService)
+        const completedSchedule = getScheduleForStaff(config, nextState.slots.staff_name)
+        const completedInterval = completedSchedule?.interval_minutes ?? 30
         nextState.booked_slots = addBookedSlot(
           nextState.booked_slots,
           nextState.slots.staff_name,
           completedDate,
-          completedTime
+          completedTime,
+          completedDuration ?? undefined,
+          completedInterval
         )
         nextState.completed_bookings?.push({
           attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
@@ -310,7 +320,17 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
           ["Confirmar agendamento"]
         )
       }
-      nextState.booked_slots = addBookedSlot(nextState.booked_slots, nextState.slots.staff_name, dateIso, time)
+      const slotDuration = getServicesTotalDuration(config, nextState.slots.service)
+      const slotSchedule = getScheduleForStaff(config, nextState.slots.staff_name)
+      const slotInterval = slotSchedule?.interval_minutes ?? 30
+      nextState.booked_slots = addBookedSlot(
+        nextState.booked_slots,
+        nextState.slots.staff_name,
+        dateIso,
+        time,
+        slotDuration ?? undefined,
+        slotInterval
+      )
       if (!nextState.completed_bookings) nextState.completed_bookings = []
       nextState.completed_bookings.push({
         attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,

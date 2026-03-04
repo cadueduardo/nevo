@@ -26,11 +26,16 @@ export async function handleConfirmation(ctx: BookingContext): Promise<Simulator
     isConfirm &&
     bookingComplete
   ) {
+    const confirmDuration = getServicesTotalDuration(config, nextState.slots.service)
+    const confirmSchedule = getScheduleForStaff(config, nextState.slots.staff_name)
+    const confirmInterval = confirmSchedule?.interval_minutes ?? 30
     nextState.booked_slots = addBookedSlot(
       nextState.booked_slots,
       nextState.slots.staff_name,
       nextState.slots.date,
-      nextState.slots.time
+      nextState.slots.time,
+      confirmDuration ?? undefined,
+      confirmInterval
     )
     if (!nextState.completed_bookings) nextState.completed_bookings = []
     nextState.completed_bookings.push({

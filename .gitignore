@@ -29,6 +29,9 @@ yarn-error.log*
 .env
 .env.qa
 
+# VPS connect config (contem host/user; nao commitar)
+scripts/vps-connect.config.ps1
+
 # supabase temp
 supabase/.temp/
 
