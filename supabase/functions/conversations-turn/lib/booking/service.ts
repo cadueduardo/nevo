@@ -17,7 +17,7 @@ import {
   fromMinutes,
 } from "../utils.ts"
 import { getNextAvailableSlot, buildStaffDayOptions } from "../staff.ts"
-import { getServicesTotalDuration, findServiceFromText } from "../services.ts"
+import { getServicesTotalDuration, getServicesTotalDurationOrFallback, findServiceFromText } from "../services.ts"
 import { getSequenceServicesFromText } from "../anytime-handlers.ts"
 import { isVisitRequest, looksLikeAttendeeName, isExplicitBookingIntent } from "../detection.ts"
 import { extractAttendeeNameForMultiBooking } from "../ai.ts"
@@ -97,10 +97,10 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     if (referenceBooking.staff_name) nextState.slots.staff_name = referenceBooking.staff_name
 
     if (referenceBooking.date && referenceBooking.staff_name && defaultService) {
-      const secondDuration = getServicesTotalDuration(config, defaultService)
+      const secondDuration = getServicesTotalDurationOrFallback(config, defaultService)
       const firstDuration =
         (referenceBooking as any)?.duration_minutes ??
-        getServicesTotalDuration(config, referenceBooking.service) ??
+        getServicesTotalDurationOrFallback(config, referenceBooking.service) ??
         30
       const firstEndMins = toMinutes(referenceBooking.time) + firstDuration
       const firstEndTime = fromMinutes(firstEndMins)
@@ -486,10 +486,10 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       const last =
         lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
       if (last?.date && last?.staff_name) {
-        const secondDuration = getServicesTotalDuration(config, nextState.slots.service)
+        const secondDuration = getServicesTotalDurationOrFallback(config, nextState.slots.service)
         const firstDuration =
           (last as any)?.duration_minutes ??
-          getServicesTotalDuration(config, last.service) ??
+          getServicesTotalDurationOrFallback(config, last.service) ??
           30
         const firstEndMins = toMinutes(last.time) + firstDuration
         const firstEndTime = fromMinutes(firstEndMins)
@@ -599,10 +599,10 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
         if (last.staff_name) nextState.slots.staff_name = last.staff_name
 
         if (last.date && last.staff_name && defaultService) {
-          const secondDuration = getServicesTotalDuration(config, defaultService)
+          const secondDuration = getServicesTotalDurationOrFallback(config, defaultService)
           const firstDuration =
             (last as any)?.duration_minutes ??
-            getServicesTotalDuration(config, last.service) ??
+            getServicesTotalDurationOrFallback(config, last.service) ??
             30
           const firstEndMins = toMinutes(last.time) + firstDuration
           const firstEndTime = fromMinutes(firstEndMins)

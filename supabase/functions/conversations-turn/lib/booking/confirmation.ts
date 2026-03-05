@@ -5,7 +5,7 @@ import { buildResult, resetSlotsForNextBooking, addBookedSlot } from "../state.t
 import { buildCalendarLinkForBooking, formatEstablishmentAddress } from "../calendar.ts"
 import { getScheduleForStaff, getStaffList } from "../staff.ts"
 import { getMockAvailability, formatDatePt } from "../utils.ts"
-import { getServicesTotalDuration } from "../services.ts"
+import { getServicesTotalDuration, getServicesTotalDurationOrFallback } from "../services.ts"
 import { resolveOptionByNumber } from "../utils.ts"
 import { isDonePhrase, isConfirmAction, isYes, isNo } from "../detection.ts"
 import type { BookingContext } from "./context.ts"
@@ -82,7 +82,7 @@ export async function handleConfirmation(ctx: BookingContext): Promise<Simulator
     isConfirm &&
     bookingComplete
   ) {
-    const confirmDuration = getServicesTotalDuration(config, nextState.slots.service)
+    const confirmDuration = getServicesTotalDurationOrFallback(config, nextState.slots.service)
     const confirmSchedule = getScheduleForStaff(config, nextState.slots.staff_name)
     const confirmInterval = confirmSchedule?.interval_minutes ?? 30
     nextState.booked_slots = addBookedSlot(

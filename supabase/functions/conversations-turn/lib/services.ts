@@ -155,6 +155,23 @@ export function getServicesTotalDuration(config: SimulatorConfig, serviceStr: st
   return total > 0 ? total : null
 }
 
+/**
+ * Retorna duração total; se não conseguir resolver por serviço, usa fallback por quantidade de serviços.
+ * Ex.: "Corte, Barba" sem durações cadastradas => 2 * 30 = 60.
+ */
+export function getServicesTotalDurationOrFallback(
+  config: SimulatorConfig,
+  serviceStr: string | undefined,
+  fallbackPerServiceMinutes = 30
+): number | null {
+  const total = getServicesTotalDuration(config, serviceStr)
+  if (total != null) return total
+  const names = parseServiceNames(serviceStr)
+  if (names.length === 0) return null
+  const perService = fallbackPerServiceMinutes > 0 ? fallbackPerServiceMinutes : 30
+  return names.length * perService
+}
+
 /** Retorna preço total para um ou vários serviços. MVP: soma dos preços individuais. */
 export function getServicesTotalPrice(
   config: SimulatorConfig,

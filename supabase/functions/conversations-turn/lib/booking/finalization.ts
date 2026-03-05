@@ -22,7 +22,7 @@ import {
   isBusinessClosedForToday,
   MIN_BOOKING_LEAD_MINUTES,
 } from "../utils.ts"
-import { getServicesTotalDuration } from "../services.ts"
+import { getServicesTotalDuration, getServicesTotalDurationOrFallback } from "../services.ts"
 import type { BookingContext } from "./context.ts"
 
 export async function handleFinalization(ctx: BookingContext): Promise<SimulatorResult | null> {
@@ -58,7 +58,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
     } else if (nextState.pending_default_service_locked && nextState.slots.service) {
       nextState.pending_default_service = nextState.slots.service
     }
-    const firstDuration = getServicesTotalDuration(config, nextState.slots.service)
+    const firstDuration = getServicesTotalDurationOrFallback(config, nextState.slots.service)
     const firstSchedule = getScheduleForStaff(config, nextState.slots.staff_name)
     const intervalMins = firstSchedule?.interval_minutes ?? 30
     nextState.booked_slots = addBookedSlot(
@@ -293,7 +293,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
         if (nextState.pending_default_service_locked && completedService) {
           nextState.pending_default_service = completedService
         }
-        const completedDuration = getServicesTotalDuration(config, completedService)
+        const completedDuration = getServicesTotalDurationOrFallback(config, completedService)
         const completedSchedule = getScheduleForStaff(config, nextState.slots.staff_name)
         const completedInterval = completedSchedule?.interval_minutes ?? 30
         nextState.booked_slots = addBookedSlot(
@@ -357,7 +357,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
           ["Confirmar agendamento"]
         )
       }
-      const slotDuration = getServicesTotalDuration(config, nextState.slots.service)
+      const slotDuration = getServicesTotalDurationOrFallback(config, nextState.slots.service)
       const slotSchedule = getScheduleForStaff(config, nextState.slots.staff_name)
       const slotInterval = slotSchedule?.interval_minutes ?? 30
       nextState.booked_slots = addBookedSlot(
