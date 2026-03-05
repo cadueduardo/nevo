@@ -50,7 +50,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       ? state.completed_bookings[state.completed_bookings.length - 1]
       : undefined
   const referenceBooking =
-    nextState.last_booking || state.last_booking || lastCompletedFromNextState || lastCompletedFromState
+    lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
   const inferredTemplateChoice = parseTemplateChoice(text, state.last_template_options || undefined)
 
   // Trava definitiva: ao escolher "mesmo dia e colaborador (proximo horario)",
@@ -480,7 +480,8 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       nextState.slots.service = resolvedServiceValue
       nextState.service_selection_multi = false
       nextState.last_service_options = undefined
-      const last = nextState.last_booking
+      const last =
+        lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
       if (last?.date && last?.staff_name) {
         const secondDuration = getServicesTotalDuration(config, nextState.slots.service)
         const firstDuration = getServicesTotalDuration(config, last.service) ?? 30
@@ -548,7 +549,8 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
   if (nextState.pending_template_choice) {
     const templateOpts = state.last_template_options || []
     const choice = parseTemplateChoice(text, templateOpts.length > 0 ? templateOpts : undefined)
-    const last = nextState.last_booking || referenceBooking
+    const last =
+      lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || referenceBooking
     if (choice && last) {
       nextState.pending_template_choice = false
       nextState.last_template_options = undefined
