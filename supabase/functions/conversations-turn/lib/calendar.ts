@@ -3,6 +3,19 @@ import { toMinutes, fromMinutes, formatDatePt } from "./utils.ts"
 import { getServicesTotalDuration } from "./services.ts"
 import type { SimulatorConfig } from "./types.ts"
 
+export function formatEstablishmentAddress(config: SimulatorConfig): string | null {
+  const addr = config.establishment_address
+  if (!addr?.logradouro) return null
+  const parts: string[] = []
+  if (addr.logradouro) parts.push(addr.logradouro)
+  if (addr.numero) parts.push(addr.numero)
+  if (addr.complemento) parts.push(addr.complemento)
+  if (addr.bairro) parts.push(addr.bairro)
+  if (addr.localidade) parts.push(addr.localidade)
+  if (addr.uf) parts.push(addr.uf)
+  return parts.filter(Boolean).join(", ") || null
+}
+
 export function formatIcsDateTime(dateIso: string, time: string): string {
   const [yyyy, mm, dd] = dateIso.split("-")
   const [hh, min] = time.split(":")
@@ -97,7 +110,7 @@ export async function buildFinalBookingMessage(options: {
   const duration = getServicesTotalDuration(config, finalService) || 60
   const summary = `${finalService}${staff}`
   const description = config.business_name ? `Agendamento na ${config.business_name}` : "Agendamento confirmado"
-  const location = config.business_name || undefined
+  const location = formatEstablishmentAddress(config) || config.business_name || undefined
   const calendarIcs =
     dateIso && time
       ? buildCalendarIcs({
@@ -119,4 +132,40 @@ export async function buildFinalBookingMessage(options: {
       calendarUrl
   }
   return { message, calendar_url: calendarUrl }
+}
+
+export async function buildCalendarLinkForBooking(options: {
+  config: SimulatorConfig
+  attendeeName?: string
+  service?: string
+  staffName?: string
+  dateIso?: string
+  time?: string
+}): Promise<{ label: string; calendar_url?: string | null }> {
+  const { config, attendeeName, service, staffName, dateIso, time } = options
+  if (!dateIso || !time) {
+    const label = attendeeName ? `Compromisso ${attendeeName}` : "Compromisso"
+    return { label, calendar_url: null }
+  }
+  const finalService = service || "atendimento"
+  const staff = staffName ? ` com ${staffName}` : ""
+  const duration = getServicesTotalDuration(config, finalService) || 60
+  const summary = attendeeName
+    ? `Compromisso ${attendeeName} - ${finalService}${staff}`
+    : `${finalService}${staff}`
+  const description = config.business_name ? `Agendamento na ${config.business_name}` : "Agendamento confirmado"
+  const location = formatEstablishmentAddress(config) || config.business_name || undefined
+  const calendarIcs = buildCalendarIcs({
+    summary,
+    description,
+    location,
+    dateIso,
+    time,
+    durationMinutes: duration,
+  })
+  const calendarUrl = calendarIcs ? await uploadCalendarIcs(calendarIcs) : null
+  const label = attendeeName
+    ? `Compromisso ${attendeeName}`
+    : `Compromisso ${finalService} (${formatDatePt(dateIso)} às ${time})`
+  return { label, calendar_url: calendarUrl }
 }

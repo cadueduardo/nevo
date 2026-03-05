@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { SimulatorPanel, type SimulatorRole } from '@/features/simulator/components/SimulatorPanel'
 import { cn } from '@/lib/utils'
 import { sendSimulatorMessage, type SimulatorRequest } from '@/lib/simulator/api'
+import { buildSimulatorContextFromBusinessConfig } from '@/lib/simulator/context'
 import { createClient } from '@/lib/supabase/client'
 import { AuthenticatedHeaderUserMenu } from '@/components/shared/AuthenticatedHeaderUserMenu'
 import Link from 'next/link'
@@ -1142,34 +1143,19 @@ export function LandingChat() {
       actor_type: simulatorRole === 'owner' ? 'owner' : 'client',
       ...(simulatorTenantId && { tenant_id: simulatorTenantId }),
       ...(simulatorAgentId && { agent_id: simulatorAgentId }),
-      context: {
-        business_name: onboardingData.business_name,
-        business_type: onboardingData.business_type,
-        context_mode: onboardingData.context,
-        establishment_address: onboardingData.establishment_address,
-        tone:
-          onboardingData.tone_of_voice === 'formal'
-            ? 'formal'
-            : onboardingData.tone_of_voice === 'friendly'
-              ? 'amigavel'
-              : onboardingData.tone_of_voice === 'professional'
-                ? 'profissional'
-                : onboardingData.tone_of_voice === 'funny'
-                  ? 'engracado'
-                  : onboardingData.tone,
-        services: onboardingData.services,
-        when_client_asks_price_no_value: onboardingData.when_client_asks_price_no_value || 'offer_handoff_or_booking',
-        schedule: onboardingData.schedule,
-        staff: onboardingData.staff,
-        dynamic_variables: onboardingData.dynamic_variables,
-        target_audience: onboardingData.target_audience,
-        interaction_style: onboardingData.interaction_style,
-        lead_policy: onboardingData.lead_policy,
-        holidays_attend: onboardingData.holidays_attend,
-        closure_periods: onboardingData.closure_periods,
-        allow_sequence_booking: onboardingData.allow_sequence_booking,
-        sequence_eligible_services: onboardingData.sequence_eligible_services,
-      },
+      context: buildSimulatorContextFromBusinessConfig({
+        businessName: onboardingData.business_name,
+        businessConfig: {
+          ...onboardingData,
+          context_mode: onboardingData.context,
+          when_client_asks_price_no_value:
+            onboardingData.when_client_asks_price_no_value || 'offer_handoff_or_booking',
+          services: onboardingData.services,
+          booking_services: onboardingData.booking_services ?? onboardingData.services,
+          catalog_services: onboardingData.catalog_services ?? onboardingData.services,
+        },
+        tone: onboardingData.tone_of_voice ?? onboardingData.tone,
+      }),
     }),
     [onboardingData, sessionId, simulatorSessionId, simulatorConversationId, simulatorTenantId, simulatorAgentId, simulatorRole]
   )

@@ -2,7 +2,7 @@
 /** Handler: multi-booking após completo, prompts (!service/!date/!time), validação date+time, addBookedSlot, buildFinalBookingMessage, fallback. */
 import type { SimulatorResult } from "../types.ts"
 import { buildResult, resetSlotsForNextBooking, addBookedSlot } from "../state.ts"
-import { buildFinalBookingMessage } from "../calendar.ts"
+import { formatEstablishmentAddress } from "../calendar.ts"
 import {
   buildServicePrompt,
   buildServiceOptions,
@@ -40,9 +40,11 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
     explicitService,
   } = ctx
 
-  if (bookingComplete && (interpretedHasAdditional || (nextState.pending_additional_count || 0) > 0)) {
-    let extraCount = interpretedCount && interpretedCount > 0 ? interpretedCount : 0
-    if (!extraCount && interpretedHasAdditional) extraCount = 1
+  // Captura apenas novos pedidos adicionais detectados neste turno.
+  // Quando ja estamos no fluxo de adicionais (wasAdditionalPending), a logica principal
+  // de decremento/fechamento acontece no bloco mais abaixo.
+  if (bookingComplete && interpretedHasAdditional && !wasAdditionalPending) {
+    let extraCount = interpretedCount && interpretedCount > 0 ? interpretedCount : 1
     nextState.last_booking = {
       attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
       service: nextState.slots.service,
@@ -73,6 +75,8 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
       date: nextState.slots.date,
       time: nextState.slots.time,
       staff_name: nextState.slots.staff_name,
+      customer_phone: nextState.slots.customer_phone,
+      customer_email: nextState.slots.customer_email,
     })
     nextState.pending_additional_count = extraCount
     nextState.pending_additional_booking = extraCount > 0
@@ -80,6 +84,10 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
       nextState.expected_additional_count = extraCount
     }
     nextState.slots = resetSlotsForNextBooking(nextState)
+    // Para multiatendimento, cada pessoa deve informar o proprio contato.
+    nextState.slots.customer_phone = undefined
+    nextState.slots.customer_email = undefined
+    nextState.contact_preference = undefined
     nextState.pending_attendee_name = true
     return buildResult(
       extraCount > 0 ? buildAdditionalBookingAfterCompletePrompt() : buildSingleAdditionalPrompt(),
@@ -264,6 +272,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
         (nextState.pending_additional_count || 0) > 0 ||
         (nextState.expected_additional_count || 0) > 0
       ) {
+        const completedCountBeforePush = nextState.completed_bookings?.length || 0
         const completedService = nextState.slots.service
         const completedDate = nextState.slots.date
         const completedTime = nextState.slots.time
@@ -294,16 +303,33 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
           date: completedDate,
           time: completedTime,
           staff_name: nextState.slots.staff_name,
+          customer_phone: nextState.slots.customer_phone,
+          customer_email: nextState.slots.customer_email,
         })
         nextState.pending_additional_booking = false
-        if ((nextState.pending_additional_count || 0) > 0) {
+        // pending_additional_count representa quantas pessoas adicionais faltam apos o primeiro.
+        // Portanto, nao decrementa no primeiro agendamento (quando ainda nao havia bookings concluidos).
+        if (completedCountBeforePush > 0 && (nextState.pending_additional_count || 0) > 0) {
           nextState.pending_additional_count = Math.max(0, (nextState.pending_additional_count || 0) - 1)
         }
         const expectedTotal =
           (nextState.expected_additional_count || 0) > 0 ? (nextState.expected_additional_count || 0) + 1 : 0
         const completedCount = nextState.completed_bookings?.length || 0
-        if ((nextState.pending_additional_count || 0) > 0 || (expectedTotal > 0 && completedCount < expectedTotal)) {
+        const pendingAdditionalCount = nextState.pending_additional_count
+        const shouldAskMoreByPending =
+          typeof pendingAdditionalCount === "number"
+            ? pendingAdditionalCount > 0
+            : false
+        const shouldAskMoreByExpectedFallback =
+          pendingAdditionalCount === undefined &&
+          expectedTotal > 0 &&
+          completedCount < expectedTotal
+        if (shouldAskMoreByPending || shouldAskMoreByExpectedFallback) {
           nextState.slots = resetSlotsForNextBooking(nextState)
+          // Para multiatendimento, cada pessoa deve informar o proprio contato.
+          nextState.slots.customer_phone = undefined
+          nextState.slots.customer_email = undefined
+          nextState.contact_preference = undefined
           nextState.pending_attendee_name = true
           return buildResult(
             `Perfeito! Agendei ${completedService} para ${formatDatePt(
@@ -314,8 +340,10 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
         }
         nextState.pending_final_confirmation = true
         const summary = buildMultiBookingSummary(nextState.completed_bookings || [])
+        const address = formatEstablishmentAddress(config)
+        const addressLine = address ? `\n\nEndereco: ${address}` : ""
         return buildResult(
-          `${summary}\n\nPrecisa de mais alguma coisa?`,
+          `${summary}${addressLine}\n\nDeseja confirmar esses agendamentos?`,
           nextState,
           ["Confirmar agendamento"]
         )
@@ -338,17 +366,19 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
         date: dateIso,
         time,
         staff_name: nextState.slots.staff_name,
+        customer_phone: nextState.slots.customer_phone,
+        customer_email: nextState.slots.customer_email,
       })
-      const finalResult = await buildFinalBookingMessage({
-        config,
-        service: nextState.slots.service,
-        staffName: nextState.slots.staff_name,
-        dateIso,
-        time,
-      })
-      nextState.final_thanks_sent = true
+      const address = formatEstablishmentAddress(config)
+      const serviceLabel = nextState.slots.service || "atendimento"
+      const whereLine = address ? `\nEndereco: ${address}` : ""
+      nextState.pending_calendar_offer = true
       nextState.slots = resetSlotsForNextBooking(nextState)
-      return buildResult(finalResult.message, nextState)
+      return buildResult(
+        `Perfeito! Seu agendamento de ${serviceLabel} ficou confirmado para ${formatDatePt(dateIso)} as ${time}.${whereLine}\n\nGostaria de adicionar este compromisso no seu calendario?`,
+        nextState,
+        ["Adicionar no calendario", "Nao, obrigado"]
+      )
     }
 
     const next = availability.available.find((slot) => slot > time) || availability.available[0]

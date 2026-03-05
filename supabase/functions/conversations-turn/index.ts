@@ -440,6 +440,9 @@ serve(async (req) => {
       ? `${sessionExpiryWarning}\n\n${rewritten.message}`
       : rewritten.message
 
+    const extraAssistantMessages = Array.isArray((result.state as SimulatorState)?.outgoing_assistant_messages)
+      ? ((result.state as SimulatorState).outgoing_assistant_messages || [])
+      : []
     const nowIso = new Date().toISOString()
 
     await supabaseAdmin.from("conversation_messages").insert([
@@ -463,10 +466,27 @@ serve(async (req) => {
           action_options: result.action_options || null,
         },
       },
+      ...extraAssistantMessages
+        .filter((m) => typeof m?.content === "string" && m.content.trim().length > 0)
+        .map((m) => ({
+          tenant_id: tenant.id,
+          conversation_id: conversation.id,
+          role: "assistant",
+          content_text: m.content,
+          metadata: {
+            channel: channelType,
+            tone: config.tone,
+            action_options: m.action_options || null,
+          },
+        })),
     ])
 
     // Remover flag temporÃ¡ria do estado antes de salvar
-    const { _isFirstMessage, ...stateToSave } = result.state as SimulatorState & { _isFirstMessage?: boolean }
+    const { _isFirstMessage, outgoing_assistant_messages, ...stateToSave } = result.state as SimulatorState & {
+      _isFirstMessage?: boolean
+      outgoing_assistant_messages?: Array<{ content: string; action_options?: string[]; service_multi_select?: boolean }>
+    }
+    void outgoing_assistant_messages
     
     const contextUpdate: Record<string, unknown> = {
       ...(conversation.context || {}),
@@ -534,15 +554,50 @@ serve(async (req) => {
           created_at: nowIso,
           action_options: result.action_options,
           service_multi_select: (() => {
-            const byState = (result.state as SimulatorState).service_selection_multi ?? false
-            if (byState) return true
-            const hasMultipleOptions = Array.isArray(result.action_options) && result.action_options.length >= 2
-            const msg = String(result.message || "").toLowerCase()
-            const hintsMultiSelect =
-              /mais de um|mais de uma|sequ[eê]ncia|pode escolher|pode selecionar/.test(msg)
-            return hasMultipleOptions && hintsMultiSelect
+            const state = result.state as SimulatorState
+            const isServiceStep =
+              (state.service_selection_multi ?? false) &&
+              !state.slots?.service
+            if (!isServiceStep) return false
+
+            const normalizeOption = (v: string) =>
+              String(v || "")
+                .replace(/^\d+\s*-\s*/, "")
+                .trim()
+                .toLowerCase()
+
+            const actionOptions = Array.isArray(result.action_options)
+              ? result.action_options.map(normalizeOption).filter(Boolean)
+              : []
+            const serviceOptions = Array.isArray(state.last_service_options)
+              ? state.last_service_options.map(normalizeOption).filter(Boolean)
+              : []
+            if (actionOptions.length === 0 || serviceOptions.length === 0) return false
+            if (!actionOptions.every((opt) => serviceOptions.includes(opt))) return false
+
+            const catalogServiceOptions = [
+              ...(config.services || []).map((s) => String(s?.name || "")),
+              ...(config.sequence_eligible_services || []).map((s) => String(s || "")),
+              "Quero agendar uma visita",
+              "visita",
+            ]
+              .map(normalizeOption)
+              .filter(Boolean)
+            if (catalogServiceOptions.length === 0) return false
+
+            // Blindagem final: se as opcoes nao forem do catalogo de servicos, nao renderizar multi-select.
+            return actionOptions.every((opt) => catalogServiceOptions.includes(opt))
           })(),
         },
+        ...extraAssistantMessages
+          .filter((m) => typeof m?.content === "string" && m.content.trim().length > 0)
+          .map((m) => ({
+            role: "assistant" as const,
+            content: m.content,
+            created_at: nowIso,
+            action_options: m.action_options,
+            service_multi_select: Boolean(m.service_multi_select),
+          })),
       ],
     }
 

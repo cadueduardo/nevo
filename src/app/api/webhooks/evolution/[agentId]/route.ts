@@ -208,68 +208,76 @@ export async function POST(
     return new NextResponse('Erro ao processar mensagem', { status: 503 })
   }
 
-  let replyText = 'Desculpe, tive um problema ao processar. Pode repetir?'
+  let replyTexts: string[] = ['Desculpe, tive um problema ao processar. Pode repetir?']
   if (turnResponse.ok) {
     try {
       const data = (await turnResponse.json()) as {
         messages?: Array<{ content?: string; action_options?: string[]; service_multi_select?: boolean }>
       }
-      const lastMsg = Array.isArray(data.messages) ? data.messages[data.messages.length - 1] : null
-      if (lastMsg?.content) {
-        replyText = lastMsg.content
-        const opts = lastMsg.action_options
-        if (Array.isArray(opts) && opts.length > 0) {
-          const hasNumbering = opts.some((opt) => /^\d+\s*-\s+/.test(opt))
-          const isMulti = Boolean(lastMsg.service_multi_select)
-          const optsLabel = isMulti
-            ? '\n\n_Opções múltiplas (responda com números separados por vírgula, ex.: 1,2):_\n'
-            : opts.length === 1
-              ? '\n\n_Opção:_\n'
-              : hasNumbering
-                ? '\n\n_Opções (responda com número ou texto):_\n'
-                : '\n\n_Opções (responda com texto):_\n'
-          const optsText = opts.join('\n')
-          const withOpts = replyText + optsLabel + optsText
-          if (withOpts.length <= 4096) replyText = withOpts
-        }
-      }
+      const list = Array.isArray(data.messages) ? data.messages : []
+      const normalized = list
+        .map((msg) => {
+          const content = typeof msg?.content === 'string' ? msg.content : ''
+          if (!content.trim()) return null
+          const opts = msg.action_options
+          let final = content
+          if (Array.isArray(opts) && opts.length > 0) {
+            const hasNumbering = opts.some((opt) => /^\d+\s*-\s+/.test(opt))
+            const isMulti = Boolean(msg.service_multi_select)
+            const optsLabel = isMulti
+              ? '\n\n_Opções múltiplas (responda com números separados por vírgula, ex.: 1,2):_\n'
+              : opts.length === 1
+                ? '\n\n_Opção:_\n'
+                : hasNumbering
+                  ? '\n\n_Opções (responda com número ou texto):_\n'
+                  : '\n\n_Opções (responda com texto):_\n'
+            const optsText = opts.join('\n')
+            const withOpts = content + optsLabel + optsText
+            if (withOpts.length <= 4096) final = withOpts
+          }
+          return final
+        })
+        .filter((v): v is string => Boolean(v))
+      if (normalized.length > 0) replyTexts = normalized
     } catch {
-      // keep default replyText
+      // keep default replyTexts
     }
   } else {
     console.error('[webhooks/evolution] conversations-turn não OK:', turnResponse.status, await turnResponse.text())
   }
 
   const evolutionSendUrls = baseCandidates.map((b) => `${b}/message/sendText/${instance}`)
-  let sent = false
-  let sendError = ''
-  for (const evolutionSendUrl of evolutionSendUrls) {
-    try {
-      const evoRes = await fetch(evolutionSendUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: apiKey,
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          number: numberForEvolution,
-          text: replyText,
-        }),
-      })
-      if (evoRes.ok) {
-        sent = true
-        break
+  for (const replyText of replyTexts) {
+    let sent = false
+    let sendError = ''
+    for (const evolutionSendUrl of evolutionSendUrls) {
+      try {
+        const evoRes = await fetch(evolutionSendUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: apiKey,
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            number: numberForEvolution,
+            text: replyText,
+          }),
+        })
+        if (evoRes.ok) {
+          sent = true
+          break
+        }
+        const errText = await evoRes.text()
+        sendError = `${evoRes.status} ${evolutionSendUrl} ${errText}`
+      } catch (e) {
+        sendError = `${evolutionSendUrl} ${e instanceof Error ? e.message : String(e)}`
       }
-      const errText = await evoRes.text()
-      sendError = `${evoRes.status} ${evolutionSendUrl} ${errText}`
-    } catch (e) {
-      sendError = `${evolutionSendUrl} ${e instanceof Error ? e.message : String(e)}`
     }
-  }
-  if (!sent) {
-    console.error('[webhooks/evolution] Erro ao enviar via Evolution:', sendError)
-    return new NextResponse('Erro ao enviar resposta', { status: 502 })
+    if (!sent) {
+      console.error('[webhooks/evolution] Erro ao enviar via Evolution:', sendError)
+      return new NextResponse('Erro ao enviar resposta', { status: 502 })
+    }
   }
 
   return new NextResponse(null, { status: 200 })

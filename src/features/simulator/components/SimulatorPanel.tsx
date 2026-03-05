@@ -34,15 +34,6 @@ export function SimulatorPanel({
   focusTrigger,
 }: SimulatorPanelProps) {
   const endRef = useRef<HTMLDivElement>(null)
-  const shouldForceMultiSelectByText = (content: string, options?: string[]): boolean => {
-    if (!Array.isArray(options) || options.length < 2) return false
-    const normalized = String(content || "").toLowerCase()
-    return (
-      normalized.includes("pode escolher mais de um") ||
-      normalized.includes("escolher mais de um") ||
-      normalized.includes("mais de um")
-    )
-  }
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -97,10 +88,7 @@ export function SimulatorPanel({
             content={message.content}
             timestamp={message.timestamp}
             actionOptions={message.actionOptions}
-            actionOptionsMultiSelect={
-              Boolean(message.serviceMultiSelect) ||
-              shouldForceMultiSelectByText(message.content, message.actionOptions)
-            }
+            actionOptionsMultiSelect={Boolean(message.serviceMultiSelect)}
             selectableOptions={message.selectableOptions}
             onActionClick={(action) => onSend(action)}
           />

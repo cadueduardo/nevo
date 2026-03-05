@@ -3964,7 +3964,9 @@ async function processMessage(
         .filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s))
     }
 
-    if (wantsContinue) {
+    // "Confirmar seleção" do frontend envia "select_holidays:..." (com ou sem datas).
+    // Nesse caso, devemos concluir o passo sem exigir texto "continuar".
+    if (wantsContinue || selectMatch) {
       const merged = { ...collectedData, holidays_attend: selectedDates, holidays_skipped: true }
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_select', merged))
       return {

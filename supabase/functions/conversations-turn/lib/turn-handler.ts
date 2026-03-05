@@ -294,7 +294,7 @@ export async function processSimulatorMessage(
         nextState.slots = { ...nextState.slots, attendee_name: name, quote_answers: nextState.slots?.quote_answers || {} }
         if (!nextState.slots.customer_name) nextState.slots.customer_name = name
         nextState.pending_additional_booking = true
-        nextState.pending_additional_count = Math.max(1, nextState.pending_additional_count ?? 2)
+        nextState.pending_additional_count = Math.max(1, nextState.pending_additional_count ?? 1)
         if (nextState.expected_additional_count == null) nextState.expected_additional_count = nextState.pending_additional_count
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
         return buildResult(result.message, result.state, result.action_options)
@@ -531,8 +531,8 @@ export async function processSimulatorMessage(
       nextState.step = undefined
       nextState.pending_additional_booking = true
       nextState.pending_attendee_name = true
-      nextState.pending_additional_count = 2
-      nextState.expected_additional_count = 2
+      nextState.pending_additional_count = 1
+      nextState.expected_additional_count = 1
       return buildResult(`${buildMultiBookingIntro()} De quem serÃ¡ o primeiro agendamento?`, nextState)
     }
 
@@ -815,7 +815,7 @@ export async function processSimulatorMessage(
     nextState.mode = "booking"
     nextState.pending_attendee_name = true
     nextState.pending_additional_booking = true
-    nextState.pending_additional_count = Math.max(1, nextState.pending_additional_count ?? 2)
+    nextState.pending_additional_count = Math.max(1, nextState.pending_additional_count ?? 1)
     if (nextState.expected_additional_count === undefined) nextState.expected_additional_count = nextState.pending_additional_count
   }
 

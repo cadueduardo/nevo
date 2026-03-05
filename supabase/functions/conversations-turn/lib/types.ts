@@ -119,8 +119,22 @@ export interface SimulatorState {
   pending_default_service_locked?: boolean
   expected_additional_count?: number
   pending_final_confirmation?: boolean
+  pending_calendar_offer?: boolean
   final_thanks_sent?: boolean
-  completed_bookings?: Array<{ attendee_name?: string; service?: string; date?: string; time?: string }>
+  completed_bookings?: Array<{
+    attendee_name?: string
+    service?: string
+    date?: string
+    time?: string
+    staff_name?: string
+    customer_phone?: string
+    customer_email?: string
+  }>
+  outgoing_assistant_messages?: Array<{
+    content: string
+    action_options?: string[]
+    service_multi_select?: boolean
+  }>
   last_booking?: { attendee_name?: string; service?: string; date?: string; time?: string; staff_name?: string }
   pending_contact_field?: "name" | "phone" | "email" | "contact_preference"
   contact_preference?: "phone" | "email" | "both"

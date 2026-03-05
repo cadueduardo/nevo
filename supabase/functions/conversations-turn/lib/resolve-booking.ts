@@ -74,8 +74,17 @@ export async function resolveBooking(
   const lastAssistantMsg =
     state.last_prompt ||
     (history.length > 0 ? history.filter((m) => m.role === "assistant").pop()?.content : undefined)
+  const hasPendingServiceChoice =
+    Array.isArray(state.last_service_options) &&
+    state.last_service_options.length > 0 &&
+    !state.pending_template_choice &&
+    !state.pending_second_service_choice &&
+    !nextState.pending_attendee_name
+
   const waitingFor = nextState.pending_attendee_name
     ? "attendee_name"
+    : hasPendingServiceChoice
+      ? "service"
     : !nextState.slots.service
       ? "service"
       : !nextState.slots.date

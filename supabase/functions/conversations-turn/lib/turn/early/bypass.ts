@@ -32,8 +32,8 @@ export async function runBypassSteps(ctx: TurnPipelineContext): Promise<Simulato
       nextState.step = undefined
       nextState.pending_additional_booking = true
       nextState.pending_attendee_name = true
-      nextState.pending_additional_count = 2
-      nextState.expected_additional_count = 2
+      nextState.pending_additional_count = 1
+      nextState.expected_additional_count = 1
       return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
     }
   }

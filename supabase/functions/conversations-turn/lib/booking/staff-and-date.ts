@@ -95,6 +95,17 @@ export async function handleStaffAndDate(ctx: BookingContext): Promise<Simulator
     }
   }
 
+  // Se estamos aguardando data e o cliente informar uma data nova (ex: "amanha"),
+  // ela deve sobrescrever qualquer data anterior para evitar loop em "outro dia".
+  if (waitingFor === "date") {
+    const explicitDateInput = parseDateOrWeekday(text)
+    if (explicitDateInput) {
+      nextState.slots.date = undefined
+      nextState.slots.time = undefined
+      nextState.pending_date_confirmation = undefined
+    }
+  }
+
   if (state.pending_date_confirmation) {
     const pendingDate = state.pending_date_confirmation
     const pendingDateLabel = formatDatePt(pendingDate)
@@ -309,10 +320,11 @@ export async function handleStaffAndDate(ctx: BookingContext): Promise<Simulator
         date === getTodayIsoBusinessTz()
       ) {
         nextState.slots.date = undefined
+        const dayOptions = buildStaffDayOptions(schedule?.days_of_week || [])
         return buildResult(
-          "Encerramos nossas atividades por hoje. Quer agendar para outro dia? Escolha abaixo o melhor dia para voce.",
+          "Nosso expediente de hoje ja encerrou. Quer agendar para amanha ou outro dia?",
           nextState,
-          getOtherDayOptions(schedule)
+          dayOptions.length > 0 ? toNumberedOptions(dayOptions) : ["1 - Amanha", "2 - Outro dia"]
         )
       }
       if (usedWeekday && !state.pending_date_confirmation) {

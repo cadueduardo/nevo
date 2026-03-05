@@ -123,7 +123,7 @@ export function getServiceDurationMinutes(config: SimulatorConfig, serviceName?:
 export function parseServiceNames(serviceStr: string | undefined): string[] {
   if (!serviceStr?.trim()) return []
   return serviceStr
-    .split(/[,+]/)
+    .split(/\s+e\s+|[,+;/]/i)
     .map((s) => s.trim())
     .filter(Boolean)
 }

@@ -5,6 +5,7 @@ import {
   getAppBootstrapByAgent,
   type AppBootstrapByAgentResult,
 } from '@/lib/app/bootstrap'
+import { buildSimulatorContextFromBusinessConfig } from '@/lib/simulator/context'
 
 /**
  * POST /api/app/simulator
@@ -71,44 +72,15 @@ export async function POST(req: NextRequest) {
       : bootstrap.tenant_setting
     const businessName = bootstrapWithAgent?.agent?.name ?? tenant.name
     const bc = tenant_setting.business_config as Record<string, unknown>
-    const bookingServices = Array.isArray(bc.booking_services)
-      ? bc.booking_services
-      : Array.isArray(bc.services)
-        ? bc.services
-        : []
-    const catalogServices = Array.isArray(bc.catalog_services)
-      ? bc.catalog_services
-      : bookingServices
-    const context = {
-      business_name: businessName,
-      business_type: bc.business_type ?? undefined,
-      context_mode: bc.context_mode ?? 'booking',
-      establishment_address: bc.establishment_address ?? undefined,
+    const context = buildSimulatorContextFromBusinessConfig({
+      businessName,
+      businessConfig: {
+        ...bc,
+        when_client_asks_price_no_value:
+          tenant_setting.when_client_asks_price_no_value ?? 'offer_handoff_or_booking',
+      },
       tone: tenant_setting.tone ?? undefined,
-      catalog_services: catalogServices,
-      booking_services: bookingServices,
-      services: bookingServices,
-      when_client_asks_price_no_value: tenant_setting.when_client_asks_price_no_value ?? 'offer_handoff_or_booking',
-      schedule: bc.schedule ?? undefined,
-      staff: Array.isArray(bc.staff) ? bc.staff : [],
-      dynamic_variables: Array.isArray(bc.dynamic_variables) ? bc.dynamic_variables : [],
-      holidays_attend: Array.isArray(bc.holidays_attend) ? bc.holidays_attend : [],
-      closure_periods: Array.isArray(bc.closure_periods) ? bc.closure_periods : [],
-      allow_sequence_booking: Boolean(bc.allow_sequence_booking),
-      sequence_eligible_services: Array.isArray(bc.sequence_eligible_services) ? bc.sequence_eligible_services : [],
-      target_audience:
-        typeof bc.target_audience === 'object' && bc.target_audience !== null
-          ? bc.target_audience
-          : undefined,
-      interaction_style:
-        bc.interaction_style === 'numbered_options' ||
-        bc.interaction_style === 'conversational' ||
-        bc.interaction_style === 'hybrid'
-          ? bc.interaction_style
-          : 'hybrid',
-      branding:
-        typeof bc.branding === 'object' && bc.branding !== null ? bc.branding : undefined,
-    }
+    })
 
     const sessionId = `app-${user.id}-${tenant.id}`
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL

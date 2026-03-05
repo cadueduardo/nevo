@@ -2,10 +2,9 @@
 /** Handler: confirmação final e opções último confirm (outro horário, outro dia, trocar colaborador). */
 import type { SimulatorResult } from "../types.ts"
 import { buildResult, resetSlotsForNextBooking, addBookedSlot } from "../state.ts"
-import { buildFinalBookingMessage } from "../calendar.ts"
-import { buildFinalThanksMessage } from "../builders.ts"
+import { buildCalendarLinkForBooking, formatEstablishmentAddress } from "../calendar.ts"
 import { getScheduleForStaff, getStaffList } from "../staff.ts"
-import { getMockAvailability } from "../utils.ts"
+import { getMockAvailability, formatDatePt } from "../utils.ts"
 import { getServicesTotalDuration } from "../services.ts"
 import { resolveOptionByNumber } from "../utils.ts"
 import { isDonePhrase, isConfirmAction, isYes, isNo } from "../detection.ts"
@@ -13,6 +12,55 @@ import type { BookingContext } from "./context.ts"
 
 export async function handleConfirmation(ctx: BookingContext): Promise<SimulatorResult | null> {
   const { config, text, state, nextState, toNumberedOptions, bookingComplete } = ctx
+
+  if (state.pending_calendar_offer) {
+    const picked = Array.isArray(state.last_action_options)
+      ? resolveOptionByNumber(text, state.last_action_options)
+      : null
+    const norm = String(text || "").toLowerCase()
+    const wantsCalendar =
+      (picked ? /adicionar.*calend/.test(picked.toLowerCase()) : false) ||
+      /adicionar.*calend|quero.*calend|sim\b|^1$/.test(norm)
+    const doesntWantCalendar =
+      (picked ? /nao|não/.test(picked.toLowerCase()) : false) ||
+      /^2$/.test(norm) ||
+      isNo(text)
+    if (wantsCalendar) {
+      const bookings = (nextState.completed_bookings || []).filter((b) => b?.date && b?.time)
+      const linkLines: string[] = []
+      for (const b of bookings) {
+        const link = await buildCalendarLinkForBooking({
+          config,
+          attendeeName: (b as any).attendee_name,
+          service: (b as any).service,
+          staffName: (b as any).staff_name,
+          dateIso: (b as any).date,
+          time: (b as any).time,
+        })
+        if (link.calendar_url) {
+          linkLines.push(`${link.label}: ${link.calendar_url}`)
+        }
+      }
+      nextState.pending_calendar_offer = false
+      nextState.final_thanks_sent = true
+      nextState.last_action_options = undefined
+      nextState.outgoing_assistant_messages = linkLines.map((line) => ({ content: line }))
+      if (linkLines.length > 0) {
+        return buildResult("Perfeito! Seguem os links para adicionar no calendario:", nextState)
+      }
+      return buildResult("Nao consegui gerar os links de calendario agora. Posso te ajudar com algo mais?", nextState)
+    }
+    if (doesntWantCalendar) {
+      nextState.pending_calendar_offer = false
+      nextState.final_thanks_sent = true
+      return buildResult("Perfeito! Se precisar de algo mais, estou a disposicao.", nextState)
+    }
+    return buildResult(
+      "Deseja adicionar no calendario?",
+      nextState,
+      ["Adicionar no calendario", "Nao, obrigado"]
+    )
+  }
 
   const isConfirm =
     isDonePhrase(text) ||
@@ -44,35 +92,21 @@ export async function handleConfirmation(ctx: BookingContext): Promise<Simulator
       date: nextState.slots.date,
       time: nextState.slots.time,
       staff_name: nextState.slots.staff_name,
+      customer_phone: nextState.slots.customer_phone,
+      customer_email: nextState.slots.customer_email,
     })
-    const finalResult = await buildFinalBookingMessage({
-      config,
-      service: nextState.slots.service,
-      staffName: nextState.slots.staff_name,
-      dateIso: nextState.slots.date,
-      time: nextState.slots.time,
-    })
-    nextState.final_thanks_sent = true
+    const dateLabel = nextState.slots.date ? formatDatePt(nextState.slots.date) : ""
+    const timeLabel = nextState.slots.time || ""
+    const serviceLabel = nextState.slots.service || "atendimento"
+    const address = formatEstablishmentAddress(config)
+    const addressLine = address ? `\nEndereco: ${address}` : ""
+    nextState.pending_calendar_offer = true
     nextState.slots = resetSlotsForNextBooking(nextState)
-    return buildResult(finalResult.message, nextState)
-  }
-
-  const isConfirmShort =
-    isDonePhrase(text) ||
-    (text.trim() === "1" && Array.isArray(state.last_confirm_options) && state.last_confirm_options.length > 0)
-  if (
-    !state.pending_template_choice &&
-    !state.pending_second_service_choice &&
-    !state.pending_final_confirmation &&
-    !state.final_thanks_sent &&
-    isConfirmShort
-  ) {
-    const bookings = nextState.completed_bookings || []
-    if (bookings.length > 0) {
-      nextState.final_thanks_sent = true
-      nextState.completed_bookings = []
-      return buildResult(buildFinalThanksMessage(config.business_name, bookings), nextState)
-    }
+    return buildResult(
+      `Perfeito! Seu agendamento de ${serviceLabel} ficou confirmado para ${dateLabel} as ${timeLabel}.${addressLine}\n\nGostaria de adicionar este compromisso no seu calendario?`,
+      nextState,
+      ["Adicionar no calendario", "Nao, obrigado"]
+    )
   }
 
   if (state.pending_final_confirmation) {
@@ -80,7 +114,14 @@ export async function handleConfirmation(ctx: BookingContext): Promise<Simulator
       nextState.pending_final_confirmation = false
       nextState.pending_additional_booking = false
       nextState.pending_additional_count = 0
-      return buildResult("Perfeito! Agendamentos confirmados. Precisa de mais alguma coisa?", nextState)
+      nextState.pending_calendar_offer = true
+      const address = formatEstablishmentAddress(config)
+      const addressLine = address ? `\nEndereco: ${address}` : ""
+      return buildResult(
+        `Perfeito! Agendamentos confirmados com sucesso.${addressLine}\n\nGostaria de adicionar os compromissos no seu calendario?`,
+        nextState,
+        ["Adicionar no calendario", "Nao, obrigado"]
+      )
     }
     if (isNo(text)) {
       nextState.pending_final_confirmation = false
