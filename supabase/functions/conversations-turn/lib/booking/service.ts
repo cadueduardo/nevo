@@ -98,7 +98,10 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
 
     if (referenceBooking.date && referenceBooking.staff_name && defaultService) {
       const secondDuration = getServicesTotalDuration(config, defaultService)
-      const firstDuration = getServicesTotalDuration(config, referenceBooking.service) ?? 30
+      const firstDuration =
+        (referenceBooking as any)?.duration_minutes ??
+        getServicesTotalDuration(config, referenceBooking.service) ??
+        30
       const firstEndMins = toMinutes(referenceBooking.time) + firstDuration
       const firstEndTime = fromMinutes(firstEndMins)
       const nextSlot = getNextAvailableSlot(
@@ -484,7 +487,10 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
         lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
       if (last?.date && last?.staff_name) {
         const secondDuration = getServicesTotalDuration(config, nextState.slots.service)
-        const firstDuration = getServicesTotalDuration(config, last.service) ?? 30
+        const firstDuration =
+          (last as any)?.duration_minutes ??
+          getServicesTotalDuration(config, last.service) ??
+          30
         const firstEndMins = toMinutes(last.time) + firstDuration
         const firstEndTime = fromMinutes(firstEndMins)
         const nextSlot = getNextAvailableSlot(
@@ -594,7 +600,10 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
 
         if (last.date && last.staff_name && defaultService) {
           const secondDuration = getServicesTotalDuration(config, defaultService)
-          const firstDuration = getServicesTotalDuration(config, last.service) ?? 30
+          const firstDuration =
+            (last as any)?.duration_minutes ??
+            getServicesTotalDuration(config, last.service) ??
+            30
           const firstEndMins = toMinutes(last.time) + firstDuration
           const firstEndTime = fromMinutes(firstEndMins)
           const nextSlot = getNextAvailableSlot(

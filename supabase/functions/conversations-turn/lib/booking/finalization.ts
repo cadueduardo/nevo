@@ -72,6 +72,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
     nextState.completed_bookings?.push({
       attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
       service: nextState.slots.service,
+      duration_minutes: firstDuration ?? undefined,
       date: nextState.slots.date,
       time: nextState.slots.time,
       staff_name: nextState.slots.staff_name,
@@ -306,6 +307,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
         nextState.completed_bookings?.push({
           attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
           service: completedService,
+          duration_minutes: completedDuration ?? undefined,
           date: completedDate,
           time: completedTime,
           staff_name: nextState.slots.staff_name,
@@ -370,6 +372,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
       nextState.completed_bookings.push({
         attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
         service: nextState.slots.service,
+        duration_minutes: slotDuration ?? undefined,
         date: dateIso,
         time,
         staff_name: nextState.slots.staff_name,

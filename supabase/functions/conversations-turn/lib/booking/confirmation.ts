@@ -97,6 +97,7 @@ export async function handleConfirmation(ctx: BookingContext): Promise<Simulator
     nextState.completed_bookings.push({
       attendee_name: nextState.slots.attendee_name || nextState.slots.customer_name,
       service: nextState.slots.service,
+      duration_minutes: confirmDuration ?? undefined,
       date: nextState.slots.date,
       time: nextState.slots.time,
       staff_name: nextState.slots.staff_name,

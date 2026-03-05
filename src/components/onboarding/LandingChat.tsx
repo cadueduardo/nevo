@@ -1204,21 +1204,45 @@ export function LandingChat() {
     }
   }
 
-  const handleSimulatorReset = () => {
+  const handleSimulatorReset = async () => {
+    const currentConversationId = simulatorConversationId
     setSimulatorMessages([])
     setIsSimulatorLoading(false)
     setSimulatorConversationId(null)
     if (sessionId) {
       setSimulatorSessionId(`${sessionId}:sim:${Date.now()}`)
     }
+
+    // Blindagem: encerra também a conversa no backend para não reaproveitar estado antigo.
+    if (!currentConversationId) return
+    try {
+      await sendSimulatorMessage({
+        ...simulatorRequestBase,
+        conversation_id: currentConversationId,
+        message: 'reiniciar conversa',
+      })
+    } catch {
+      // Não bloquear UX do reset local caso o backend falhe.
+    }
   }
 
-  const handleSimulatorRoleChange = (newRole: SimulatorRole) => {
+  const handleSimulatorRoleChange = async (newRole: SimulatorRole) => {
+    const currentConversationId = simulatorConversationId
     setSimulatorRole(newRole)
     setSimulatorMessages([])
     setSimulatorConversationId(null)
     if (sessionId) {
       setSimulatorSessionId(`${sessionId}:sim:${Date.now()}`)
+    }
+    if (!currentConversationId) return
+    try {
+      await sendSimulatorMessage({
+        ...simulatorRequestBase,
+        conversation_id: currentConversationId,
+        message: 'reiniciar conversa',
+      })
+    } catch {
+      // Não bloquear troca de perfil por falha de rede.
     }
   }
 

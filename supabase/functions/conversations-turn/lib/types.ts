@@ -124,6 +124,7 @@ export interface SimulatorState {
   completed_bookings?: Array<{
     attendee_name?: string
     service?: string
+    duration_minutes?: number
     date?: string
     time?: string
     staff_name?: string
