@@ -174,6 +174,7 @@ export function LandingChat() {
   const [connectPairingCode, setConnectPairingCode] = useState<string | null>(null)
   const [pendingAuthIntent, setPendingAuthIntent] = useState<'connect_whatsapp' | null>(null)
   const connectPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const restoredSessionRef = useRef<string | null>(null)
   const supabase = useMemo(() => createClient(), [])
   const retriedCompletedSessionRef = useRef(false)
   const migrationCompletedRef = useRef(false)
@@ -278,10 +279,12 @@ export function LandingChat() {
   // Restaurar sessão após F5: buscar do Supabase e re-hidratar estado
   useEffect(() => {
     if (!sessionId || !supabase) return
+    if (restoredSessionRef.current === sessionId) return
     let cancelled = false
     restoreOnboardingSession(supabase, sessionId).then(({ session, messages: stored }) => {
       if (cancelled) return
       if (!session || stored.length === 0) return
+      restoredSessionRef.current = sessionId
 
       setCurrentStep(session.current_step as OnboardingStep)
       setOnboardingData((session.collected_data as Record<string, any>) || {})
@@ -684,6 +687,7 @@ export function LandingChat() {
   const resetOnboarding = () => {
     clearSessionId()
     const freshSessionId = getOrCreateSessionId()
+    restoredSessionRef.current = null
     setSessionId(freshSessionId)
     setMessages([])
     setCurrentStep('welcome')
