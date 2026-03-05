@@ -19,7 +19,7 @@ export async function handleContact(ctx: BookingContext): Promise<SimulatorResul
       nextState.pending_contact_field = undefined
     } else if (state.pending_contact_field === "contact_preference") {
       const completedCount = (nextState.completed_bookings?.length ?? state.completed_bookings?.length ?? 0)
-      const isAdditionalAttendee = completedCount > 0 || Boolean(nextState.pending_additional_booking)
+      const isAdditionalAttendee = completedCount > 0
       const prefOptions = isAdditionalAttendee
         ? ["So celular", "So email", "Celular e email", "Pular (usar contato do titular)"]
         : ["So celular", "So email", "Celular e email"]

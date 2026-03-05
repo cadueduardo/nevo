@@ -253,7 +253,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
       if (!pref) {
         nextState.pending_contact_field = "contact_preference"
         const isAdditionalAttendee =
-          (nextState.completed_bookings?.length || 0) > 0 || Boolean(nextState.pending_additional_booking)
+          (nextState.completed_bookings?.length || 0) > 0
         const contactOptions = isAdditionalAttendee
           ? ["So celular", "So email", "Celular e email", "Pular (usar contato do titular)"]
           : ["So celular", "So email", "Celular e email"]
