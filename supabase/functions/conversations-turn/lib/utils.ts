@@ -355,7 +355,9 @@ export function getMockAvailability(
 ) {
   const start = schedule?.start_time || "09:00"
   const end = schedule?.end_time || "18:00"
-  const interval = serviceDurationMinutes || schedule?.interval_minutes || 60
+  const interval = schedule?.interval_minutes || 30
+  const duration = serviceDurationMinutes && serviceDurationMinutes > 0 ? serviceDurationMinutes : interval
+  const endMins = toMinutes(end)
   let slots = applyBreaks(buildDailySlots(start, end, interval), schedule?.breaks || [])
   const { time: nowTime } = getNowInBusinessTz(now)
   if (isTodayInBusinessTz(dateIso, now)) {
@@ -364,14 +366,25 @@ export function getMockAvailability(
     const minAllowed = nowMins + minLead
     slots = slots.filter((slot) => toMinutes(slot) > minAllowed)
   }
+  const slotSet = new Set(slots)
   const occupied = new Set<string>()
   const staffKey = staffName ? normalizeText(staffName) : "default"
   const alreadyBooked = bookedSlots?.[staffKey]?.[dateIso] || []
   alreadyBooked.forEach((t) => {
-    if (slots.includes(t)) occupied.add(t)
+    if (slotSet.has(t)) occupied.add(t)
+  })
+  const requiredSteps = Math.max(1, Math.ceil(duration / interval))
+  const available = slots.filter((slot) => {
+    const startMins = toMinutes(slot)
+    if (startMins + duration > endMins) return false
+    for (let step = 0; step < requiredSteps; step += 1) {
+      const stepSlot = fromMinutes(startMins + step * interval)
+      if (!slotSet.has(stepSlot) || occupied.has(stepSlot)) return false
+    }
+    return true
   })
   return {
-    available: slots.filter((slot) => !occupied.has(slot)),
+    available,
     occupied: Array.from(occupied),
   }
 }
