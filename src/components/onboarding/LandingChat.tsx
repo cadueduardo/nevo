@@ -824,10 +824,10 @@ export function LandingChat() {
             if (pendingAuthIntent === 'connect_whatsapp') {
               setPendingAuthIntent(null)
               setAuthChoicePending(true)
-              setConnectFlowState('awaiting_phone')
-              appendAssistant(
-                'Conta criada e login concluído ✅\n\nAgora vamos conectar seu WhatsApp. Me confirme o número com DDI/DDD (ex: 5511999999999).'
-              )
+              setConnectFlowState('idle')
+              appendAssistant('Conta criada e login concluído ✅\n\nO que você prefere fazer agora?', {
+                actionOptions: ['Simular atendimento', 'Conectar meu WhatsApp agora', 'Continuar no painel'],
+              })
             } else {
               appendAssistant('Conta criada! O que você prefere fazer agora?', {
                 actionOptions: ['Acessar minha área', 'Simular atendimento'],
@@ -892,10 +892,10 @@ export function LandingChat() {
       if (pendingAuthIntent === 'connect_whatsapp') {
         setPendingAuthIntent(null)
         setAuthChoicePending(true)
-        setConnectFlowState('awaiting_phone')
-        appendAssistant(
-          'Login concluído ✅\n\nAgora vamos conectar seu WhatsApp. Me confirme o número com DDI/DDD (ex: 5511999999999).'
-        )
+        setConnectFlowState('idle')
+        appendAssistant('Login concluído ✅\n\nO que você prefere fazer agora?', {
+          actionOptions: ['Simular atendimento', 'Conectar meu WhatsApp agora', 'Continuar no painel'],
+        })
         return
       }
       setAuthChoicePending(false)
