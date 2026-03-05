@@ -128,7 +128,9 @@ serve(async (req) => {
       return json({ error: "tenant sem agente configurado; agent_id obrigatorio para conversation/channel" }, 400)
     }
 
-    if (!config.services?.length || !hasAnyConfiguredPrice(config.services)) {
+    // Sempre mescla com agent_setting/tenant_setting para completar campos faltantes
+    // (ex.: duration_minutes ausente no contexto vindo do simulador).
+    {
       const servicesFromSettings = await loadServicesFromSettings(supabaseAdmin, tenant.id, agentId)
       if (servicesFromSettings.length > 0) {
         config.services = mergeServicesPreferIncoming(config.services || [], servicesFromSettings)
@@ -482,11 +484,18 @@ serve(async (req) => {
     ])
 
     // Remover flag temporÃ¡ria do estado antes de salvar
-    const { _isFirstMessage, outgoing_assistant_messages, ...stateToSave } = result.state as SimulatorState & {
+    const {
+      _isFirstMessage,
+      outgoing_assistant_messages,
+      outbound_notifications,
+      ...stateToSave
+    } = result.state as SimulatorState & {
       _isFirstMessage?: boolean
       outgoing_assistant_messages?: Array<{ content: string; action_options?: string[]; service_multi_select?: boolean }>
+      outbound_notifications?: Array<{ phone: string; content: string }>
     }
     void outgoing_assistant_messages
+    void outbound_notifications
     
     const contextUpdate: Record<string, unknown> = {
       ...(conversation.context || {}),
@@ -597,8 +606,13 @@ serve(async (req) => {
             created_at: nowIso,
             action_options: m.action_options,
             service_multi_select: Boolean(m.service_multi_select),
-          })),
+        })),
       ],
+      outbound_notifications: Array.isArray((result.state as SimulatorState)?.outbound_notifications)
+        ? ((result.state as SimulatorState).outbound_notifications || []).filter(
+            (n) => typeof n?.phone === "string" && n.phone.trim() && typeof n?.content === "string" && n.content.trim()
+          )
+        : undefined,
     }
 
     return json(response)

@@ -1,5 +1,5 @@
 // @ts-nocheck
-/** Handler: pending_contact_field (nome, preferência, telefone, email); extração de email/telefone do texto. */
+/** Handler: pending_contact_field (nome, preferencia, telefone, email); extracao de email/telefone do texto. */
 import type { SimulatorResult } from "../types.ts"
 import { buildResult } from "../state.ts"
 import { resolveOptionByNumber, parseEmail, parsePhone } from "../utils.ts"
@@ -7,7 +7,7 @@ import { extractContactPreferenceFromText } from "../ai.ts"
 import type { BookingContext } from "./context.ts"
 
 export async function handleContact(ctx: BookingContext): Promise<SimulatorResult | null> {
-  const { config, text, state, nextState, history } = ctx
+  const { text, state, nextState, history } = ctx
 
   if (state.pending_contact_field) {
     if (state.pending_contact_field === "name") {
@@ -18,16 +18,23 @@ export async function handleContact(ctx: BookingContext): Promise<SimulatorResul
       nextState.slots.customer_name = name
       nextState.pending_contact_field = undefined
     } else if (state.pending_contact_field === "contact_preference") {
-      const prefOptions = ["Só celular", "Só email", "Celular e email"]
+      const completedCount = (nextState.completed_bookings?.length ?? state.completed_bookings?.length ?? 0)
+      const isAdditionalAttendee = completedCount > 0 || Boolean(nextState.pending_additional_booking)
+      const prefOptions = isAdditionalAttendee
+        ? ["So celular", "So email", "Celular e email", "Pular (usar contato do titular)"]
+        : ["So celular", "So email", "Celular e email"]
       const prefInput = resolveOptionByNumber(text, prefOptions) || text
       const t = prefInput.toLowerCase().trim()
-      let pref: "phone" | "email" | "both" | null = null
-      if (/(s[oó]|apenas)\s*celular|celular\s*(apenas|mesmo)|celular\s+\d/.test(t)) pref = "phone"
-      else if (/(s[oó]|apenas)\s*email|email\s*apenas/.test(t)) pref = "email"
+      let pref: "phone" | "email" | "both" | "skip_primary" | null = null
+      if (/(so|apenas)\s*celular|celular\s*(apenas|mesmo)|celular\s+\d/.test(t)) pref = "phone"
+      else if (/(so|apenas)\s*email|email\s*apenas/.test(t)) pref = "email"
       else if (/(ambos|celular\s*e\s*email|os\s*dois)/.test(t)) pref = "both"
+      else if (/pular|titular|responsavel|usar contato/.test(t)) pref = "skip_primary"
       if (!pref) {
-        pref = await extractContactPreferenceFromText(prefInput, history)
+        const aiPref = await extractContactPreferenceFromText(prefInput, history)
+        if (aiPref === "phone" || aiPref === "email" || aiPref === "both") pref = aiPref
       }
+
       if (pref === "phone") {
         nextState.contact_preference = "phone"
         nextState.pending_contact_field = undefined
@@ -59,9 +66,16 @@ export async function handleContact(ctx: BookingContext): Promise<SimulatorResul
         }
         nextState.pending_contact_field = "phone"
         return buildResult("Qual seu celular com DDD?", nextState)
+      } else if (pref === "skip_primary" && isAdditionalAttendee) {
+        nextState.contact_preference = "skip_primary"
+        nextState.pending_contact_field = undefined
+        nextState.slots.customer_phone = undefined
+        nextState.slots.customer_email = undefined
       } else {
         return buildResult(
-          "Como prefere ser contatado? Escolha: Só celular, Só email ou Celular e email.",
+          isAdditionalAttendee
+            ? "Como prefere ser contatado? Escolha: So celular, So email, Celular e email ou Pular (usar contato do titular)."
+            : "Como prefere ser contatado? Escolha: So celular, So email ou Celular e email.",
           nextState,
           prefOptions
         )

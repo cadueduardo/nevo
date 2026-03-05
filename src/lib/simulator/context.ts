@@ -73,11 +73,23 @@ function normalizeServices(value: unknown): ServiceItem[] {
       if (!item || typeof item !== 'object') return null
       const v = item as Record<string, unknown>
       if (typeof v.name !== 'string' || !v.name.trim()) return null
+      const duration =
+        typeof v.duration_minutes === 'number'
+          ? v.duration_minutes
+          : typeof v.duration_minutes === 'string'
+            ? Number(v.duration_minutes)
+            : undefined
+      const basePrice =
+        typeof v.base_price === 'number'
+          ? v.base_price
+          : typeof v.base_price === 'string'
+            ? Number(v.base_price)
+            : undefined
       return {
         name: v.name.trim(),
         description: typeof v.description === 'string' ? v.description : undefined,
-        duration_minutes: typeof v.duration_minutes === 'number' ? v.duration_minutes : undefined,
-        base_price: typeof v.base_price === 'number' ? v.base_price : undefined,
+        duration_minutes: Number.isFinite(duration) ? duration : undefined,
+        base_price: Number.isFinite(basePrice) ? basePrice : undefined,
       } as ServiceItem
     })
     .filter((item): item is ServiceItem => Boolean(item))

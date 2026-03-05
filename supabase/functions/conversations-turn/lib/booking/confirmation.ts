@@ -27,8 +27,16 @@ export async function handleConfirmation(ctx: BookingContext): Promise<Simulator
       isNo(text)
     if (wantsCalendar) {
       const bookings = (nextState.completed_bookings || []).filter((b) => b?.date && b?.time)
+      const primaryPhoneRaw = String((bookings[0] as any)?.customer_phone || "")
+      const primaryPhone = primaryPhoneRaw.replace(/\D+/g, "")
+      const shareWithPrimary = bookings.filter((b, idx) => {
+        if (idx === 0) return true
+        const delivery = String((b as any)?.contact_delivery || "own")
+        const phone = String((b as any)?.customer_phone || "").replace(/\D+/g, "")
+        return delivery !== "own" || !phone || phone === primaryPhone
+      })
       const linkLines: string[] = []
-      for (const b of bookings) {
+      for (const b of shareWithPrimary) {
         const link = await buildCalendarLinkForBooking({
           config,
           attendeeName: (b as any).attendee_name,
@@ -115,10 +123,48 @@ export async function handleConfirmation(ctx: BookingContext): Promise<Simulator
       nextState.pending_additional_booking = false
       nextState.pending_additional_count = 0
       nextState.pending_calendar_offer = true
+      const bookings = nextState.completed_bookings || []
+      const primaryPhoneRaw = String((bookings[0] as any)?.customer_phone || "")
+      const primaryPhone = primaryPhoneRaw.replace(/\D+/g, "")
+      const outboundNotifications: Array<{ phone: string; content: string }> = []
       const address = formatEstablishmentAddress(config)
+      for (let i = 1; i < bookings.length; i += 1) {
+        const b = bookings[i] as any
+        const attendeeName = String(b?.attendee_name || "cliente").trim()
+        const phoneRaw = String(b?.customer_phone || "").trim()
+        const phone = phoneRaw.replace(/\D+/g, "")
+        const delivery = String(b?.contact_delivery || "own")
+        if (delivery !== "own" || !phone || phone === primaryPhone) continue
+        const link = await buildCalendarLinkForBooking({
+          config,
+          attendeeName: attendeeName || "cliente",
+          service: b?.service,
+          staffName: b?.staff_name,
+          dateIso: b?.date,
+          time: b?.time,
+        })
+        const serviceLabel = String(b?.service || "seu atendimento")
+        const dateLabel = b?.date ? formatDatePt(b.date) : ""
+        const timeLabel = b?.time ? ` as ${b.time}` : ""
+        const addressLine = address ? `\nEndereco: ${address}` : ""
+        const calendarLine = link?.calendar_url ? `\nAdicionar no calendario: ${link.calendar_url}` : ""
+        outboundNotifications.push({
+          phone: phoneRaw,
+          content:
+            `Ola ${attendeeName}! Seu agendamento de ${serviceLabel} foi confirmado para ${dateLabel}${timeLabel}.${addressLine}${calendarLine}`,
+        })
+      }
+      nextState.outbound_notifications = outboundNotifications
       const addressLine = address ? `\nEndereco: ${address}` : ""
+      const hasAdditional = bookings.length > 1
+      const extraNotifyLine =
+        hasAdditional && outboundNotifications.length > 0
+          ? `\nEnviei a confirmacao dos outros agendamentos para ${outboundNotifications.length} contato(s) via WhatsApp.`
+          : hasAdditional
+            ? `\nOs demais agendamentos ficaram centralizados neste mesmo contato.`
+            : ""
       return buildResult(
-        `Perfeito! Agendamentos confirmados com sucesso.${addressLine}\n\nGostaria de adicionar os compromissos no seu calendario?`,
+        `Perfeito! Agendamentos confirmados com sucesso.${addressLine}${extraNotifyLine}\n\nGostaria de adicionar os compromissos no seu calendario?`,
         nextState,
         ["Adicionar no calendario", "Nao, obrigado"]
       )

@@ -129,15 +129,20 @@ export interface SimulatorState {
     staff_name?: string
     customer_phone?: string
     customer_email?: string
+    contact_delivery?: "own" | "primary"
   }>
   outgoing_assistant_messages?: Array<{
     content: string
     action_options?: string[]
     service_multi_select?: boolean
   }>
+  outbound_notifications?: Array<{
+    phone: string
+    content: string
+  }>
   last_booking?: { attendee_name?: string; service?: string; date?: string; time?: string; staff_name?: string }
   pending_contact_field?: "name" | "phone" | "email" | "contact_preference"
-  contact_preference?: "phone" | "email" | "both"
+  contact_preference?: "phone" | "email" | "both" | "skip_primary"
   last_prompt?: string
   last_time_options?: string[]
   last_time_options_date?: string
@@ -256,6 +261,10 @@ export interface ConversationTurnResponse {
     action_options?: string[]
     /** Quando true, o cliente (simulador/WhatsApp) deve exibir action_options como multi-select (checkboxes) para escolher mais de um serviço em sequência. */
     service_multi_select?: boolean
+  }>
+  outbound_notifications?: Array<{
+    phone: string
+    content: string
   }>
 }
 

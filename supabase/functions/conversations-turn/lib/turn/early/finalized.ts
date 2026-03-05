@@ -12,6 +12,10 @@ import { answerWithContextualAI } from "../../ai.ts"
 export async function runFinalizedStep(ctx: TurnPipelineContext): Promise<SimulatorResult | null> {
   const { text, config, nextState, history } = ctx
 
+  // Enquanto houver uma ação pendente de fechamento (ex.: adicionar no calendário),
+  // este step não deve interceptar a resposta do cliente.
+  if (nextState.pending_calendar_offer || nextState.pending_final_confirmation) return null
+
   if (!isFinalizedState(nextState)) return null
 
   const msg = normalizeText(text)

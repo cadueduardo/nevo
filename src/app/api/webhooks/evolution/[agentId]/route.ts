@@ -209,10 +209,12 @@ export async function POST(
   }
 
   let replyTexts: string[] = ['Desculpe, tive um problema ao processar. Pode repetir?']
+  let outboundNotifications: Array<{ phone: string; content: string }> = []
   if (turnResponse.ok) {
     try {
       const data = (await turnResponse.json()) as {
         messages?: Array<{ content?: string; action_options?: string[]; service_multi_select?: boolean }>
+        outbound_notifications?: Array<{ phone?: string; content?: string }>
       }
       const list = Array.isArray(data.messages) ? data.messages : []
       const normalized = list
@@ -239,6 +241,12 @@ export async function POST(
         })
         .filter((v): v is string => Boolean(v))
       if (normalized.length > 0) replyTexts = normalized
+      outboundNotifications = Array.isArray(data.outbound_notifications)
+        ? data.outbound_notifications
+            .filter((n) => typeof n?.phone === 'string' && typeof n?.content === 'string')
+            .map((n) => ({ phone: String(n.phone || '').trim(), content: String(n.content || '').trim() }))
+            .filter((n) => n.phone.length > 0 && n.content.length > 0)
+        : []
     } catch {
       // keep default replyTexts
     }
@@ -277,6 +285,51 @@ export async function POST(
     if (!sent) {
       console.error('[webhooks/evolution] Erro ao enviar via Evolution:', sendError)
       return new NextResponse('Erro ao enviar resposta', { status: 502 })
+    }
+  }
+
+  const normalizeEvolutionNumber = (phone: string): string =>
+    phone
+      .replace(/^whatsapp:/, '')
+      .replace(/@s\.whatsapp\.net$/, '')
+      .replace(/\D+/g, '')
+  const sentKeys = new Set<string>()
+  for (const notification of outboundNotifications) {
+    const targetNumber = normalizeEvolutionNumber(notification.phone)
+    const content = notification.content.trim()
+    if (!targetNumber || !content) continue
+    const dedupeKey = `${targetNumber}::${content}`
+    if (sentKeys.has(dedupeKey)) continue
+    sentKeys.add(dedupeKey)
+
+    let sent = false
+    let sendError = ''
+    for (const evolutionSendUrl of evolutionSendUrls) {
+      try {
+        const evoRes = await fetch(evolutionSendUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: apiKey,
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            number: targetNumber,
+            text: content,
+          }),
+        })
+        if (evoRes.ok) {
+          sent = true
+          break
+        }
+        const errText = await evoRes.text()
+        sendError = `${evoRes.status} ${evolutionSendUrl} ${errText}`
+      } catch (e) {
+        sendError = `${evolutionSendUrl} ${e instanceof Error ? e.message : String(e)}`
+      }
+    }
+    if (!sent) {
+      console.error('[webhooks/evolution] Erro ao enviar notificacao outbound:', sendError)
     }
   }
 

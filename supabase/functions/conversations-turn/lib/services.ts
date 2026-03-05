@@ -112,10 +112,24 @@ export function getServiceWithPrice(
 
 export function getServiceDurationMinutes(config: SimulatorConfig, serviceName?: string): number | null {
   if (!serviceName) return null
-  const match = (config.services || []).find((s) => normalizeText(s.name || "") === normalizeText(serviceName))
+  const services = config.services || []
+  const normalizedService = normalizeText(serviceName)
+  let match = services.find((s) => normalizeText(s.name || "") === normalizedService)
+  if (!match) {
+    const fuzzy = findServiceFromText(serviceName, services)
+    if (fuzzy) {
+      match = services.find((s) => normalizeText(s.name || "") === normalizeText(fuzzy))
+    }
+  }
   if (!match) return null
-  const minutes = match.duration_minutes
-  if (!minutes || Number.isNaN(minutes) || minutes < 5 || minutes > 600) return null
+  const rawMinutes = (match as any).duration_minutes
+  const minutes =
+    typeof rawMinutes === "number"
+      ? rawMinutes
+      : typeof rawMinutes === "string"
+        ? Number(rawMinutes)
+        : NaN
+  if (!Number.isFinite(minutes) || minutes < 5 || minutes > 600) return null
   return minutes
 }
 

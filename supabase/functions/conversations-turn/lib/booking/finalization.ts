@@ -77,6 +77,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
       staff_name: nextState.slots.staff_name,
       customer_phone: nextState.slots.customer_phone,
       customer_email: nextState.slots.customer_email,
+      contact_delivery: "own",
     })
     nextState.pending_additional_count = extraCount
     nextState.pending_additional_booking = extraCount > 0
@@ -251,10 +252,15 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
       const pref = nextState.contact_preference ?? state.contact_preference
       if (!pref) {
         nextState.pending_contact_field = "contact_preference"
+        const isAdditionalAttendee =
+          (nextState.completed_bookings?.length || 0) > 0 || Boolean(nextState.pending_additional_booking)
+        const contactOptions = isAdditionalAttendee
+          ? ["So celular", "So email", "Celular e email", "Pular (usar contato do titular)"]
+          : ["So celular", "So email", "Celular e email"]
         return buildResult(
           "Como prefere ser contatado para confirmar o agendamento?",
           nextState,
-          ["Só celular", "Só email", "Celular e email"]
+          contactOptions
         )
       }
       const needsPhone = pref === "phone" || pref === "both"
@@ -305,6 +311,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
           staff_name: nextState.slots.staff_name,
           customer_phone: nextState.slots.customer_phone,
           customer_email: nextState.slots.customer_email,
+          contact_delivery: pref === "skip_primary" ? "primary" : "own",
         })
         nextState.pending_additional_booking = false
         // pending_additional_count representa quantas pessoas adicionais faltam apos o primeiro.
@@ -368,6 +375,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
         staff_name: nextState.slots.staff_name,
         customer_phone: nextState.slots.customer_phone,
         customer_email: nextState.slots.customer_email,
+        contact_delivery: pref === "skip_primary" ? "primary" : "own",
       })
       const address = formatEstablishmentAddress(config)
       const serviceLabel = nextState.slots.service || "atendimento"

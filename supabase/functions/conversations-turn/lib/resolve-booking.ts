@@ -39,8 +39,17 @@ export async function resolveBooking(
   const pref = nextState.contact_preference ?? state.contact_preference ?? "both"
   const hasPhone = Boolean(nextState.slots.customer_phone)
   const hasEmail = Boolean(nextState.slots.customer_email)
+  const primaryContactFromCompleted = (nextState.completed_bookings || []).some(
+    (b) => Boolean((b as any).customer_phone || (b as any).customer_email)
+  )
   const contactOk =
-    pref === "phone" ? hasPhone : pref === "email" ? hasEmail : hasPhone && hasEmail
+    pref === "phone"
+      ? hasPhone
+      : pref === "email"
+        ? hasEmail
+        : pref === "skip_primary"
+          ? primaryContactFromCompleted
+          : hasPhone && hasEmail
   const bookingComplete =
     Boolean(nextState.slots.service) &&
     Boolean(nextState.slots.date) &&
