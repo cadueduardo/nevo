@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import { normalizeText } from "./utils.ts"
 import type { SimulatorState } from "./types.ts"
 
@@ -6,17 +6,19 @@ export function isGreeting(text: string): boolean {
   const msg = normalizeText(text)
   const cleaned = msg.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim()
   const words = cleaned ? cleaned.split(" ").filter(w => w.length > 0) : []
-  if (words.length > 3) return false
+  if (words.length > 6) return false
   const greetingPatterns = [
-    /^(oi|ola|olá|oii)$/,
+    /^(oi|oii|oa|ola|opa|fala|salve)$/,
     /^(bom dia)$/,
     /^(boa tarde)$/,
     /^(boa noite)$/,
-    /^(e ai|e aí)$/,
+    /^(e ai)$/,
+    /^(oi|oii|oa|ola|opa|fala|salve)\s+(tudo bem|tudo certo|tranquilo|suave|beleza|como ta|como e que ta)$/,
+    /^(bom dia|boa tarde|boa noite)\s+(tudo bem|tudo certo)?$/,
+    /^(e ai)\s+(como e que ta|como ta|tudo bem|tudo certo|suave|beleza)$/,
+    /^(tudo bem|tudo certo|tranquilo|suave|beleza)$/,
   ]
-  const isOnlyGreeting = greetingPatterns.some(pattern => pattern.test(cleaned))
-  if (words.length > 1 && !isOnlyGreeting) return false
-  return isOnlyGreeting
+  return greetingPatterns.some(pattern => pattern.test(cleaned))
 }
 
 export function isWhoAreYou(text: string): boolean {
