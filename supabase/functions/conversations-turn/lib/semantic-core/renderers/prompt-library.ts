@@ -91,8 +91,13 @@ export function buildNextAttendeePrompt(plan: SemanticPostConfirmationPlan): str
     plan.suggested_next_time && plan.suggested_next_date
       ? `Posso te sugerir ${plan.suggested_next_time} em ${plan.suggested_next_date} para seguir na sequencia.`
       : ""
+  if (plan.next_attendee_name && plan.should_offer_sequence_template) {
+    const base = buildSequenceOfferQuestion(plan.next_attendee_name)
+    return suggestionLine ? `${base} ${suggestionLine}` : base
+  }
   if (plan.next_attendee_name) {
-    return `Vamos seguir com o proximo agendamento. Agora vou preparar o atendimento de ${plan.next_attendee_name}.${suggestionLine ? ` ${suggestionLine}` : ""}`
+    const base = `Vamos seguir com o proximo agendamento de ${plan.next_attendee_name}. Qual servico voce gostaria de agendar? Pode escolher mais de um.`
+    return suggestionLine ? `${base} ${suggestionLine}` : base
   }
   return `Vamos seguir com o proximo agendamento. Qual e o nome da proxima pessoa?${suggestionLine ? ` ${suggestionLine}` : ""}`
 }
