@@ -1043,5 +1043,9 @@ Fonte:
   - fila dinamica de pessoas inferidas
   - promocao do atendido atual a partir da fila
   - continuidade do multiagendamento apos confirmacao
+- cobertura expandida para:
+  - sequencia respeitando duracao total dos servicos
+  - bloqueio de publico incompatível
+  - confirmacao de publico ambiguo
 - execucao local depende de `deno test`, que ainda nao esta disponivel neste ambiente
 

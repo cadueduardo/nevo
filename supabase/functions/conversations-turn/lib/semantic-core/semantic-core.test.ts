@@ -2,6 +2,8 @@
 import { buildBusinessBrain } from "./business-brain.ts"
 import { buildDynamicPeopleQueue, deriveBookingContext } from "./booking-context.ts"
 import { buildPostConfirmationPlan } from "./booking-lifecycle.ts"
+import { planSequentialBooking } from "./sequence-planner.ts"
+import { applySemanticPolicies } from "./policy-layer.ts"
 
 function assertEquals(actual: unknown, expected: unknown, message?: string) {
   const actualJson = JSON.stringify(actual)
@@ -175,4 +177,91 @@ Deno.test("buildPostConfirmationPlan advances to next inferred attendee without 
   assertEquals(plan.next_attendee_name, "Davi")
   assertEquals(plan.remaining_queue, ["Davi"])
   assertEquals(plan.should_offer_sequence_template, true)
+})
+
+Deno.test("planSequentialBooking respects total duration before suggesting next slot", () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+  const state = createBaseState({
+    booked_slots: {
+      cadu: {
+        "2026-03-09": ["09:00", "09:30"],
+      },
+    },
+  })
+  const anchorBooking = {
+    attendee_name: "Carlos",
+    service: "Corte, Barba",
+    service_names: ["Corte", "Barba"],
+    duration_minutes: 60,
+    date: "2026-03-09",
+    time: "09:00",
+    staff_name: "Cadu",
+  }
+
+  const suggestion = planSequentialBooking(brain as any, state as any, anchorBooking as any, "Corte")
+  assertEquals(suggestion.available, true)
+  assertEquals(suggestion.suggested_time, "10:00")
+  assertEquals(suggestion.suggested_staff_name, "Cadu")
+})
+
+Deno.test("applySemanticPolicies blocks incompatible audience requests", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState(),
+  }
+  const snapshot = {
+    intents: { primary: "booking", secondary: [], booking: true, confidence: 0.9 },
+    entities: {
+      people: [{ relation: "esposa", audience_hint: "woman" }],
+      attendee_names: [],
+      services: [{ name: "Corte", normalized_name: "corte" }],
+      date: null,
+      time: null,
+    },
+    signals: {
+      includes_self: false,
+      additional_count: 0,
+      sequence_request: false,
+    },
+    risks: { ambiguities: [] },
+    meta: { raw_user_message: "quero agendar um corte feminino para minha esposa" },
+  }
+
+  const policy = applySemanticPolicies(snapshot as any, context as any)
+  assertEquals(policy.should_clarify, true)
+  assertEquals(policy.adjusted_snapshot.risks.audience.blocked, true)
+})
+
+Deno.test("applySemanticPolicies asks clarification for ambiguous audience fit", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState(),
+  }
+  const snapshot = {
+    intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.9 },
+    entities: {
+      people: [{ includes_self: true, relation: "self", audience_hint: "unknown" }],
+      attendee_names: [],
+      services: [{ name: "Corte", normalized_name: "corte" }],
+      date: null,
+      time: null,
+    },
+    signals: {
+      includes_self: true,
+      additional_count: 1,
+      sequence_request: false,
+    },
+    risks: { ambiguities: [] },
+    meta: { raw_user_message: "quero agendar pra mim e meu irmao" },
+  }
+
+  const policy = applySemanticPolicies(snapshot as any, context as any)
+  assertEquals(policy.should_clarify, false)
+  assertEquals(policy.adjusted_snapshot.risks.audience.requires_confirmation, true)
 })
