@@ -596,3 +596,112 @@ Tipos definidos nesta etapa:
 - [x] contratos centrais iniciais criados
 - [ ] revisar contratos apos o primeiro builder do business brain
 - [ ] revisar contratos apos o primeiro interpreter semantico
+
+## Mapeamento inicial `SimulatorConfig` -> `BusinessBrain`
+
+Arquivo:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/business-brain.ts`
+
+### Campos consolidados
+
+#### Identidade do negocio
+
+- `business_name`
+- `business_type`
+- `tone`
+- `establishment_address`
+
+#### FAQ e conhecimento informativo
+
+- `faq[]`
+  - entram somente itens com pergunta e resposta validas
+
+#### Servicos operacionais
+
+Fonte:
+
+- prioriza `booking_services`
+- fallback para `services`
+
+Campos consolidados por servico:
+
+- `name`
+- `normalized_name`
+- `description`
+- `duration_minutes`
+- `base_price`
+- `sequence_eligible`
+
+#### Equipe
+
+Fonte:
+
+- `staff[]`
+
+Campos consolidados por colaborador:
+
+- `name`
+- `normalized_name`
+- `use_business_schedule`
+- `schedule`
+
+#### Agenda do negocio
+
+Fonte:
+
+- `schedule`
+
+Campos consolidados:
+
+- `days_of_week`
+- `start_time`
+- `end_time`
+- `breaks`
+- `interval_minutes`
+- `min_booking_lead_minutes`
+
+#### Publico atendido
+
+Fonte:
+
+- `target_audience.mode`
+- `target_audience.modes`
+- `target_audience.note`
+- `target_audience.kids_age_min`
+
+Campos consolidados:
+
+- `modes`
+- `note`
+- `kids_age_min`
+
+#### Politicas operacionais
+
+Fonte:
+
+- `lead_policy.reject_unlisted_services`
+- `allow_sequence_booking`
+- `interaction_style`
+
+Campos consolidados:
+
+- `reject_unlisted_services`
+- `sequence_enabled`
+- `interaction_style`
+
+#### Calendario especial
+
+Fonte:
+
+- `holidays_attend`
+- `closure_periods`
+
+### Criterio de aceite do builder inicial
+
+- [x] dados do onboarding consolidados em um contexto operacional unico
+- [x] normalizacao de nomes de servico e equipe
+- [x] prioridade de `booking_services` sobre `services`
+- [x] elegibilidade de sequencia derivada no proprio builder
+- [ ] integrar esse builder ao runtime do novo semantic core
+- [ ] validar se ha campos adicionais do onboarding que ainda nao entraram no brain
