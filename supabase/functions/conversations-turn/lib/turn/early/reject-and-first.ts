@@ -55,20 +55,22 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
 
   if (isFirst && !nextState.mode && !nextState.step) {
     const greeting = getGreetingMessage(config)
+    if (isExplicitBookingIntent(text)) {
+      const handled = await resolveBooking(config, text, nextState, history, senderDisplayName)
+      if (handled) return handled
+    }
     const orchestrator = await getOrchestrator()
     const hasConfidentOrchestrator = orchestrator && (orchestrator.confidence ?? 0) >= minOrchestratorConfidence
-    if (isExplicitBookingIntent(text) || hasConfidentOrchestrator) {
-      const handled = hasConfidentOrchestrator
-        ? await handleFirstMessageOrchestratorAction(orchestrator, {
-            text,
-            config,
-            nextState,
-            history,
-            senderDisplayName,
-            isFirst,
-            resolveBooking,
-          })
-        : await resolveBooking(config, text, nextState, history, senderDisplayName)
+    if (hasConfidentOrchestrator) {
+      const handled = await handleFirstMessageOrchestratorAction(orchestrator, {
+        text,
+        config,
+        nextState,
+        history,
+        senderDisplayName,
+        isFirst,
+        resolveBooking,
+      })
       if (handled) return handled
     }
     const timeFromFirstMsg = parseTime(text)

@@ -58,7 +58,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
   const hasServicePromptContext =
     Array.isArray(state.last_service_options) &&
     state.last_service_options.length > 0 &&
-    /qual[\s\w]*servico/.test(lastAssistantNorm)
+    /(qual|que)[\s\w]*servico/.test(lastAssistantNorm)
   const awaitingSequenceServiceChoice =
     Boolean(nextState.pending_second_service_choice) ||
     Boolean(
