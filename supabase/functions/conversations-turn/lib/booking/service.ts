@@ -55,16 +55,19 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
   const lastAssistantNorm = normalizeText(String(lastAssistantMsg || ""))
   const completedCount =
     (nextState.completed_bookings?.length ?? state.completed_bookings?.length ?? 0)
+  const hasServicePromptContext =
+    Array.isArray(state.last_service_options) &&
+    state.last_service_options.length > 0 &&
+    /qual[\s\w]*servico/.test(lastAssistantNorm)
   const awaitingSequenceServiceChoice =
     Boolean(nextState.pending_second_service_choice) ||
     Boolean(
       referenceBooking &&
       completedCount > 0 &&
       nextState.slots.attendee_name &&
-      !nextState.slots.service &&
       !nextState.slots.date &&
       !nextState.slots.time &&
-      /qual[\s\w]*servico/.test(lastAssistantNorm)
+      hasServicePromptContext
     )
 
   // Trava definitiva: ao escolher "mesmo dia e colaborador (proximo horario)",
