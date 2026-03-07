@@ -28,18 +28,18 @@ export interface DerivedBookingContext {
 }
 
 function inferPeopleQueue(snapshot: TurnSemanticSnapshot): string[] {
-  const names = Array.isArray(snapshot.attendee_names) ? snapshot.attendee_names.filter(Boolean) : []
+  const names = Array.isArray(snapshot.entities.attendee_names) ? snapshot.entities.attendee_names.filter(Boolean) : []
   return Array.from(new Set(names))
 }
 
 function inferSlotUpdates(snapshot: TurnSemanticSnapshot) {
-  const firstService = snapshot.service_candidates?.[0]?.name
-  const firstAttendee = snapshot.attendee_names?.[0]
+  const firstService = snapshot.entities.services?.[0]?.name
+  const firstAttendee = snapshot.entities.attendee_names?.[0]
   return {
     attendee_name: firstAttendee,
     service: firstService,
-    date: snapshot.date_candidate?.iso_date || undefined,
-    time: snapshot.time_candidate?.hhmm || undefined,
+    date: snapshot.entities.date?.iso_date || undefined,
+    time: snapshot.entities.time?.hhmm || undefined,
   }
 }
 
@@ -49,10 +49,10 @@ export function deriveBookingContext(
 ): DerivedBookingContext {
   const peopleQueue = inferPeopleQueue(snapshot)
   const slotUpdates = inferSlotUpdates(snapshot)
-  const hasAttendee = Boolean(snapshot.attendee_names?.length || context.state.slots?.attendee_name)
-  const hasService = Boolean(snapshot.service_candidates?.length || context.state.slots?.service)
-  const hasDate = Boolean(snapshot.date_candidate?.iso_date || context.state.slots?.date)
-  const hasTime = Boolean(snapshot.time_candidate?.hhmm || context.state.slots?.time)
+  const hasAttendee = Boolean(snapshot.entities.attendee_names?.length || context.state.slots?.attendee_name)
+  const hasService = Boolean(snapshot.entities.services?.length || context.state.slots?.service)
+  const hasDate = Boolean(snapshot.entities.date?.iso_date || context.state.slots?.date)
+  const hasTime = Boolean(snapshot.entities.time?.hhmm || context.state.slots?.time)
   const hasContact = Boolean(
     context.state.contact_preference || context.state.slots?.customer_phone || context.state.slots?.customer_email
   )
@@ -73,10 +73,10 @@ export function deriveBookingContext(
       : undefined) ||
     context.state.last_booking ||
     undefined
-  const shouldOfferSequenceTemplate = Boolean(snapshot.sequence_request && hasCompletedBookings)
+  const shouldOfferSequenceTemplate = Boolean(snapshot.signals.sequence_request && hasCompletedBookings)
 
   let missingStep: DerivedBookingContext["missing_step"] = "confirm"
-  if (snapshot.audience_risk?.requires_confirmation) missingStep = "audience"
+  if (snapshot.risks.audience?.requires_confirmation) missingStep = "audience"
   else if (!hasAttendee) missingStep = "attendee"
   else if (!hasService) missingStep = "service"
   else if (shouldOfferSequenceTemplate) missingStep = "date"

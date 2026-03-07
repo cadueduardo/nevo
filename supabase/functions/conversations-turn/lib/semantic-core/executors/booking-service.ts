@@ -14,7 +14,7 @@ export function executeBookingService(
   context: SemanticTurnContext
 ): SemanticExecutorResult {
   const booking = deriveBookingContext(snapshot, context)
-  const selectedServices = snapshot.service_candidates?.map((service) => service.name).filter(Boolean) || []
+  const selectedServices = snapshot.entities.services?.map((service) => service.name).filter(Boolean) || []
   const serviceValue = selectedServices.length > 0 ? selectedServices.join(", ") : decision.slot_updates?.service
   const multiSelect = Boolean(context.business_brain.policies.sequence_enabled)
 

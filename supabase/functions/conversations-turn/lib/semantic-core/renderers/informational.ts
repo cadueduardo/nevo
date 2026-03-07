@@ -16,6 +16,11 @@ export function renderInformational(semantic: SemanticRuntimeResult): RenderedSe
   const businessName = brain.business_name
 
   switch (decision.action) {
+    case "ask_clarification":
+      return {
+        message: decision.next_question || buildFallbackClarificationMessage(),
+        action_options: ["Quero agendar", "Quero tirar uma duvida"],
+      }
     case "reply_identity":
       return {
         message: buildIdentityMessage(businessName),

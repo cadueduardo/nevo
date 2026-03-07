@@ -10,7 +10,7 @@ export function executeBookingDate(
   decision: SemanticDecisionResult,
   snapshot: TurnSemanticSnapshot
 ): SemanticExecutorResult {
-  const isoDate = snapshot.date_candidate?.iso_date || decision.slot_updates?.date
+  const isoDate = snapshot.entities.date?.iso_date || decision.slot_updates?.date
   return buildExecutorResult({
     executor: "booking-date",
     decision,
@@ -20,7 +20,7 @@ export function executeBookingDate(
     },
     metadata: {
       iso_date: isoDate || null,
-      raw_text: snapshot.date_candidate?.raw_text || null,
+      raw_text: snapshot.entities.date?.raw_text || null,
     },
   })
 }

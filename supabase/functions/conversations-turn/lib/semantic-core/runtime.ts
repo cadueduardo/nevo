@@ -3,6 +3,7 @@ import type { SimulatorConfig, SimulatorState } from "../types.ts"
 import { buildBusinessBrain } from "./business-brain.ts"
 import { decideNextSemanticAction } from "./decision-engine.ts"
 import { executeSemanticDecision } from "./executors/index.ts"
+import { applySemanticPolicies } from "./policy-layer.ts"
 import { buildTurnSemanticSnapshot } from "./turn-semantics.ts"
 import type {
   BusinessBrain,
@@ -55,13 +56,27 @@ export async function runSemanticCoreTurn(input: SemanticRuntimeInput): Promise<
   }
 
   const snapshot = await buildTurnSemanticSnapshot(input.message, context)
-  const decision = decideNextSemanticAction(snapshot, context)
-  const execution = executeSemanticDecision(decision, snapshot, context)
+  const policy = applySemanticPolicies(snapshot, context)
+  const decision = policy.should_clarify
+    ? {
+        action: "ask_clarification",
+        reason: policy.clarification_reason || "policy_clarification_required",
+        confidence: policy.adjusted_snapshot.intents.confidence,
+        next_question: policy.clarification_prompt || "clarify_intent",
+        channel_hints: {
+          prefer_numbered_options: false,
+          prefer_multi_select: false,
+        },
+      }
+    : decideNextSemanticAction(policy.adjusted_snapshot, context)
+  const execution = policy.should_clarify
+    ? null
+    : executeSemanticDecision(decision, policy.adjusted_snapshot, context)
 
   return {
     business_brain: businessBrain,
     context,
-    snapshot,
+    snapshot: policy.adjusted_snapshot,
     decision,
     execution,
   }

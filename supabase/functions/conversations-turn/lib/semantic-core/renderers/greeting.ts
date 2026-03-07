@@ -6,7 +6,7 @@ import type { RenderedSemanticMessage } from "./shared.ts"
 
 function buildGreetingFallback(semantic: SemanticRuntimeResult): string {
   const contactName = semantic.context.sender_display_name?.trim()
-  const message = semantic.snapshot.raw_user_message || ""
+  const message = semantic.snapshot.meta.raw_user_message || ""
   const informal = /\b(opa|fala|salve|e ai|suave|tranquilo|man)\b/.test(message.toLowerCase())
   return buildGreetingFallbackMessage(semantic.business_brain.business_name, contactName, informal)
 }
@@ -14,7 +14,7 @@ function buildGreetingFallback(semantic: SemanticRuntimeResult): string {
 export async function renderGreeting(semantic: SemanticRuntimeResult): Promise<RenderedSemanticMessage> {
   const aiGreeting = await generateAdaptiveGreetingWithAI(
     semantic.business_brain.raw_config,
-    semantic.snapshot.raw_user_message,
+    semantic.snapshot.meta.raw_user_message,
     semantic.context.history,
     semantic.context.sender_display_name
   )

@@ -113,27 +113,48 @@ export interface SemanticAudienceRisk {
   inferred_fit?: boolean | null
 }
 
-export interface TurnSemanticSnapshot {
-  primary_intent: SemanticPrimaryIntent
-  secondary_intents: SemanticSecondaryIntent[]
-  booking_intent: boolean
+export interface SemanticIntentsSnapshot {
+  primary: SemanticPrimaryIntent
+  secondary: SemanticSecondaryIntent[]
+  booking: boolean
   confidence: number
-  includes_self: boolean
+}
+
+export interface SemanticEntitiesSnapshot {
   people: SemanticPersonCandidate[]
   attendee_names: string[]
+  services: SemanticServiceCandidate[]
+  date?: SemanticDateCandidate | null
+  time?: SemanticTimeCandidate | null
+}
+
+export interface SemanticSignalsSnapshot {
+  includes_self: boolean
   additional_count: number
-  service_candidates: SemanticServiceCandidate[]
-  date_candidate?: SemanticDateCandidate | null
-  time_candidate?: SemanticTimeCandidate | null
   sequence_request?: boolean
   availability_check?: boolean
-  audience_risk?: SemanticAudienceRisk
-  ambiguities: string[]
   next_question_hint?: string
+}
+
+export interface SemanticRisksSnapshot {
+  audience?: SemanticAudienceRisk
+  ambiguities: string[]
+}
+
+export interface SemanticMetaSnapshot {
   raw_user_message: string
 }
 
+export interface TurnSemanticSnapshot {
+  intents: SemanticIntentsSnapshot
+  entities: SemanticEntitiesSnapshot
+  signals: SemanticSignalsSnapshot
+  risks: SemanticRisksSnapshot
+  meta: SemanticMetaSnapshot
+}
+
 export type SemanticDecisionAction =
+  | "ask_clarification"
   | "reply_greeting"
   | "reply_identity"
   | "reply_faq"
@@ -164,6 +185,13 @@ export interface SemanticDecisionResult {
     prefer_numbered_options?: boolean
     prefer_multi_select?: boolean
   }
+}
+
+export interface SemanticPolicyOutcome {
+  should_clarify: boolean
+  clarification_reason?: string
+  clarification_prompt?: string
+  adjusted_snapshot: TurnSemanticSnapshot
 }
 
 export interface SemanticCompletedBookingDraft {

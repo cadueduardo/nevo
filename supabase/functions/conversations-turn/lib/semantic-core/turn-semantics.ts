@@ -261,33 +261,43 @@ export async function buildTurnSemanticSnapshot(
   const nextQuestionHint = inferNextQuestionHint(primaryIntent, people, serviceCandidates, audienceRisk, slots)
 
   return {
-    primary_intent: primaryIntent,
-    secondary_intents: secondaryIntents,
-    booking_intent: primaryIntent === "booking" || primaryIntent === "booking_sequence",
-    confidence:
-      typeof flow?.confidence === "number"
-        ? Math.max(0, Math.min(1, flow.confidence))
-        : bookingRequest?.booking_intent
-          ? 0.8
-          : primaryIntent === "fallback"
-            ? 0.35
-            : 0.6,
-    includes_self: bookingRequest?.includes_self === true,
-    people,
-    attendee_names: Array.from(new Set(people.map((person) => person.name).filter(Boolean))),
-    additional_count: bookingRequest?.additional_count ?? 0,
-    service_candidates: serviceCandidates,
-    date_candidate: slots?.date
-      ? { raw_text: trimmedMessage, iso_date: slots.date, weekday: undefined, confidence: 0.8 }
-      : null,
-    time_candidate: slots?.time
-      ? { raw_text: trimmedMessage, hhmm: slots.time, confidence: 0.8 }
-      : null,
-    sequence_request: inferSequenceRequest(trimmedMessage, bookingRequest),
-    availability_check: slots?.needs_availability_check === true || isAvailabilityQuestion(trimmedMessage),
-    audience_risk: audienceRisk,
-    ambiguities,
-    next_question_hint: nextQuestionHint,
-    raw_user_message: trimmedMessage,
+    intents: {
+      primary: primaryIntent,
+      secondary: secondaryIntents,
+      booking: primaryIntent === "booking" || primaryIntent === "booking_sequence",
+      confidence:
+        typeof flow?.confidence === "number"
+          ? Math.max(0, Math.min(1, flow.confidence))
+          : bookingRequest?.booking_intent
+            ? 0.8
+            : primaryIntent === "fallback"
+              ? 0.35
+              : 0.6,
+    },
+    entities: {
+      people,
+      attendee_names: Array.from(new Set(people.map((person) => person.name).filter(Boolean))),
+      services: serviceCandidates,
+      date: slots?.date
+        ? { raw_text: trimmedMessage, iso_date: slots.date, weekday: undefined, confidence: 0.8 }
+        : null,
+      time: slots?.time
+        ? { raw_text: trimmedMessage, hhmm: slots.time, confidence: 0.8 }
+        : null,
+    },
+    signals: {
+      includes_self: bookingRequest?.includes_self === true,
+      additional_count: bookingRequest?.additional_count ?? 0,
+      sequence_request: inferSequenceRequest(trimmedMessage, bookingRequest),
+      availability_check: slots?.needs_availability_check === true || isAvailabilityQuestion(trimmedMessage),
+      next_question_hint: nextQuestionHint,
+    },
+    risks: {
+      audience: audienceRisk,
+      ambiguities,
+    },
+    meta: {
+      raw_user_message: trimmedMessage,
+    },
   }
 }

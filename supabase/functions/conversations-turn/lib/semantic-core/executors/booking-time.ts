@@ -10,7 +10,7 @@ export function executeBookingTime(
   decision: SemanticDecisionResult,
   snapshot: TurnSemanticSnapshot
 ): SemanticExecutorResult {
-  const hhmm = snapshot.time_candidate?.hhmm || decision.slot_updates?.time
+  const hhmm = snapshot.entities.time?.hhmm || decision.slot_updates?.time
   return buildExecutorResult({
     executor: "booking-time",
     decision,

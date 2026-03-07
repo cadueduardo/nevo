@@ -24,16 +24,16 @@ function getAttendeeName(semantic: SemanticRuntimeResult): string | undefined {
 function getServiceNames(semantic: SemanticRuntimeResult): string[] {
   return (
     semantic.execution?.metadata?.service_names ||
-    semantic.snapshot.service_candidates.map((service) => service.name)
+    semantic.snapshot.entities.services.map((service) => service.name)
   )
 }
 
 function getDate(semantic: SemanticRuntimeResult): string | undefined {
-  return semantic.execution?.metadata?.date || semantic.snapshot.date_candidate?.iso_date
+  return semantic.execution?.metadata?.date || semantic.snapshot.entities.date?.iso_date
 }
 
 function getTime(semantic: SemanticRuntimeResult): string | undefined {
-  return semantic.execution?.metadata?.time || semantic.snapshot.time_candidate?.hhmm
+  return semantic.execution?.metadata?.time || semantic.snapshot.entities.time?.hhmm
 }
 
 export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemanticMessage {

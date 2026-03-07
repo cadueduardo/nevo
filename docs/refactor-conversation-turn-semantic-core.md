@@ -124,26 +124,33 @@ Regra:
 
 Objeto unico gerado por turno via IA + validacoes.
 
-Campos previstos:
+Estrutura alvo:
 
-- `primary_intent`
-- `secondary_intents`
-- `booking_intent`
-- `faq_intent`
-- `pricing_intent`
-- `identity_intent`
-- `people`
-- `includes_self`
-- `attendee_names`
-- `additional_count`
-- `service_candidates`
-- `date_candidate`
-- `time_candidate`
-- `sequence_request`
-- `audience_risk`
-- `ambiguities`
-- `next_question_hint`
-- `confidence`
+- `intents`
+- `entities`
+- `signals`
+- `risks`
+- `meta`
+
+Campos atuais:
+
+- `intents.primary`
+- `intents.secondary`
+- `intents.booking`
+- `intents.confidence`
+- `entities.people`
+- `entities.attendee_names`
+- `entities.services`
+- `entities.date`
+- `entities.time`
+- `signals.includes_self`
+- `signals.additional_count`
+- `signals.sequence_request`
+- `signals.availability_check`
+- `signals.next_question_hint`
+- `risks.audience`
+- `risks.ambiguities`
+- `meta.raw_user_message`
 
 Regra:
 
@@ -192,6 +199,39 @@ Campos previstos:
 Regra:
 
 - somente essa camada decide a proxima acao do turno
+- ela deve ser modular, para nao virar o novo monolito
+
+Estrutura alvo:
+
+- `decision-engine/greeting.ts`
+- `decision-engine/informational.ts`
+- `decision-engine/booking.ts`
+- `decision-engine/fallback.ts`
+- `decision-engine/index.ts`
+
+Estado atual:
+
+- essa divisao modular ja existe no semantic core
+- `decision-engine.ts` agora e apenas um re-export para o dispatcher modular
+
+## 4.1 `policy_layer`
+
+Camada entre:
+
+- `turn_semantic_snapshot`
+- `decision_engine`
+
+Responsavel por:
+
+- confidence guard
+- enforcement de politicas de publico
+- futuras regras de compliance e lead policy
+
+Estado atual:
+
+- `semantic-core/policy-layer.ts` ja existe
+- hoje aplica `confidence guard`
+- quando a confianca e baixa, o runtime gera `ask_clarification` em vez de cair em `handoff_fallback`
 
 ## 5. `executors`
 

@@ -14,6 +14,9 @@ export async function renderSemanticSimulatorResult(
   let rendered: RenderedSemanticMessage
 
   switch (semantic.decision.action) {
+    case "ask_clarification":
+      rendered = renderInformational(semantic)
+      break
     case "reply_greeting":
       rendered = await renderGreeting(semantic)
       break

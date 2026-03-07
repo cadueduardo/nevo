@@ -13,7 +13,7 @@ function getServiceNames(
   decision: SemanticDecisionResult,
   context: SemanticTurnContext
 ): string[] {
-  const fromSnapshot = snapshot.service_candidates?.map((service) => service.name).filter(Boolean) || []
+  const fromSnapshot = snapshot.entities.services?.map((service) => service.name).filter(Boolean) || []
   if (fromSnapshot.length > 0) return fromSnapshot
   const serviceValue = decision.slot_updates?.service || context.state.slots?.service
   if (!serviceValue) return []
@@ -32,11 +32,11 @@ export function buildCompletedBookingDraft(
   const serviceValue = serviceNames.join(", ") || decision.slot_updates?.service || context.state.slots?.service
   const attendeeName =
     decision.slot_updates?.attendee_name ||
-    snapshot.attendee_names?.[0] ||
+    snapshot.entities.attendee_names?.[0] ||
     context.state.slots?.attendee_name ||
     context.state.slots?.customer_name
-  const date = decision.slot_updates?.date || snapshot.date_candidate?.iso_date || context.state.slots?.date
-  const time = decision.slot_updates?.time || snapshot.time_candidate?.hhmm || context.state.slots?.time
+  const date = decision.slot_updates?.date || snapshot.entities.date?.iso_date || context.state.slots?.date
+  const time = decision.slot_updates?.time || snapshot.entities.time?.hhmm || context.state.slots?.time
   const staffName = context.state.slots?.staff_name
   const durationMinutes = serviceValue
     ? getServicesTotalDurationOrFallback(context.business_brain.raw_config, serviceValue)
@@ -64,8 +64,8 @@ export function buildPostConfirmationPlan(
     ? context.state.pending_attendee_queue.filter(Boolean)
     : []
   const inferredTotal =
-    snapshot.additional_count && snapshot.additional_count > 0
-      ? snapshot.additional_count + (snapshot.includes_self ? 1 : 0)
+    snapshot.signals.additional_count && snapshot.signals.additional_count > 0
+      ? snapshot.signals.additional_count + (snapshot.signals.includes_self ? 1 : 0)
       : undefined
   return {
     has_more_people: remainingQueue.length > 0 || (context.state.pending_additional_count || 0) > 0,
