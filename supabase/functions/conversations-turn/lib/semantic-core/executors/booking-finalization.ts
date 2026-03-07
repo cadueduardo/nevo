@@ -58,7 +58,7 @@ export function executeBookingFinalization(
       ),
       pending_second_service_choice: false,
       pending_final_confirmation: !postConfirmationPlan.has_more_people,
-      pending_calendar_offer: !postConfirmationPlan.has_more_people,
+      pending_calendar_offer: Boolean(postConfirmationPlan.should_offer_calendar),
       last_confirm_options: postConfirmationPlan.has_more_people
         ? postConfirmationPlan.next_action_options
         : ["Confirmar agendamento"],
@@ -67,6 +67,7 @@ export function executeBookingFinalization(
         : undefined,
       service_selection_multi: false,
       contact_preference: postConfirmationPlan.has_more_people ? undefined : context.state.contact_preference,
+      outbound_notifications: postConfirmationPlan.outbound_notifications,
       slots: nextSlots,
     },
     metadata: {

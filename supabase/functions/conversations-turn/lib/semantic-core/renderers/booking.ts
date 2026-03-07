@@ -101,6 +101,10 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
         const lines = [buildBookingConfirmedMessage(confirmed)]
         if (postPlan?.has_more_people) {
           lines.push(buildNextAttendeePrompt(postPlan))
+        } else if ((postPlan?.outbound_notifications || []).length > 0) {
+          lines.push(
+            `Enviei a confirmacao dos outros agendamentos para ${(postPlan.outbound_notifications || []).length} contato(s) via WhatsApp.`
+          )
         }
         return {
           message: lines.join("\n\n"),

@@ -3,9 +3,12 @@ import { getServicesTotalDurationOrFallback } from "../services.ts"
 import { getOtherStaffOptions } from "../staff.ts"
 import { planSequentialBooking } from "./sequence-planner.ts"
 import { buildDynamicPeopleQueue, shiftCurrentAttendeeFromQueue } from "./booking-context.ts"
+import { formatEstablishmentAddress } from "../calendar.ts"
+import { formatDatePt } from "../utils.ts"
 import type {
   SemanticCompletedBookingDraft,
   SemanticDecisionResult,
+  SemanticOutboundNotificationDraft,
   SemanticPostConfirmationPlan,
   SemanticTurnContext,
   TurnSemanticSnapshot,
@@ -107,6 +110,34 @@ export function buildPostConfirmationPlan(
     inferredTotal || 0,
     existingCompleted + 1 + remainingQueue.length
   ) || undefined
+  const allBookings = [
+    ...(Array.isArray(context.state.completed_bookings) ? context.state.completed_bookings : []),
+    ...(completedBooking ? [completedBooking] : []),
+  ]
+  const address = formatEstablishmentAddress(context.business_brain.raw_config)
+  const primaryPhone = String((allBookings[0] as any)?.customer_phone || "").replace(/\D+/g, "")
+  const outboundNotifications: SemanticOutboundNotificationDraft[] = []
+  const calendarTargets: string[] = []
+  for (let i = 0; i < allBookings.length; i += 1) {
+    const booking = allBookings[i] as any
+    const attendeeName = String(booking?.attendee_name || "").trim()
+    const delivery = String(booking?.contact_delivery || "own")
+    const phoneRaw = String(booking?.customer_phone || "").trim()
+    const phone = phoneRaw.replace(/\D+/g, "")
+    if (i === 0 || delivery !== "own" || !phone || phone === primaryPhone) {
+      if (attendeeName) calendarTargets.push(attendeeName)
+      continue
+    }
+    const serviceLabel = String(booking?.service || "seu atendimento")
+    const dateLabel = booking?.date ? formatDatePt(booking.date) : ""
+    const timeLabel = booking?.time ? ` as ${booking.time}` : ""
+    const addressLine = address ? `\nEndereco: ${address}` : ""
+    outboundNotifications.push({
+      attendee_name: attendeeName || undefined,
+      phone: phoneRaw || undefined,
+      content: `Ola ${attendeeName || "cliente"}! Seu agendamento de ${serviceLabel} foi confirmado para ${dateLabel}${timeLabel}.${addressLine}`,
+    })
+  }
   return {
     has_more_people: remainingQueue.length > 0 || (context.state.pending_additional_count || 0) > 0,
     next_attendee_name: remainingQueue[0],
@@ -118,5 +149,8 @@ export function buildPostConfirmationPlan(
     suggested_next_date: sequenceSuggestion?.suggested_date,
     suggested_next_time: sequenceSuggestion?.suggested_time,
     suggested_next_staff_name: sequenceSuggestion?.suggested_staff_name,
+    should_offer_calendar: !remainingQueue.length,
+    outbound_notifications: outboundNotifications,
+    calendar_targets: calendarTargets,
   }
 }

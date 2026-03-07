@@ -1024,3 +1024,11 @@ Fonte:
 - o atendido atual e removido da fila ao ser assumido
 - a continuidade do multiagendamento reaproveita essa fila sem re-perguntar nomes ja citados
 
+
+- finalizacao multipla agora gera metadados estruturados de calendario e notificacoes`r
+- post_confirmation_plan passa a carregar:
+  - should_offer_calendar
+  - outbound_notifications
+  - calendar_targets
+- isso prepara a migracao do pos-confirmacao real sem espalhar essa logica de novo pelo legado
+

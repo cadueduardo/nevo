@@ -220,6 +220,15 @@ export interface SemanticPostConfirmationPlan {
   suggested_next_date?: string
   suggested_next_time?: string
   suggested_next_staff_name?: string
+  should_offer_calendar?: boolean
+  outbound_notifications?: SemanticOutboundNotificationDraft[]
+  calendar_targets?: string[]
+}
+
+export interface SemanticOutboundNotificationDraft {
+  attendee_name?: string
+  phone?: string
+  content?: string
 }
 
 export interface SemanticExecutorResult {
