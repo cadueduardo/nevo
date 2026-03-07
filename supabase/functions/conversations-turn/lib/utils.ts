@@ -196,7 +196,7 @@ export function resolveOptionByNumber(text: string, options: string[]): string |
 
 /** Resolve "1,2", "1 e 2", "1 - 2" etc. para múltiplos itens. Retorna array de labels (sem numeração) ou [] se inválido. */
 export function resolveMultipleOptionsByNumber(text: string, options: string[]): string[] {
-  const t = text.trim()
+  const t = text.trim().replace(/(?<=\d)\.(?=\d)/g, ",")
   const raw = t
     .split(/[\s,;]+|\be\b/)
     .map((s) => s.replace(/^[-\s]+|[-\s]+$/g, "").trim())

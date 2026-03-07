@@ -79,7 +79,7 @@ export function tryResolveNumericMultipleServiceSelection(
   incomingText: string,
   state: SimulatorState
 ): string | null {
-  if (!/^\s*\d+(?:\s*[,;eE]\s*|\s+e\s+|\s+)\d+/.test(incomingText.trim())) return null
+  if (!/^\s*\d+(?:\s*[,.;eE]\s*|\s+e\s+|\s+)\d+/.test(incomingText.trim())) return null
   const serviceOptions = (state.last_service_options || []).map((s) => String(s || "").trim()).filter(Boolean)
   if (serviceOptions.length === 0) return null
   const selected = resolveMultipleOptionsByNumber(incomingText, serviceOptions)
