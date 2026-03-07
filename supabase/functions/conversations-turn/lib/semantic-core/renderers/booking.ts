@@ -69,10 +69,12 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
     case "ask_date":
       return {
         message: buildDateQuestion(),
+        action_options: execution?.action_options,
       }
     case "ask_time":
       return {
         message: buildTimeQuestion(),
+        action_options: execution?.action_options,
       }
     case "ask_contact":
       return {
