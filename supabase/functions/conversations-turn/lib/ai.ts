@@ -173,6 +173,76 @@ Responda diretamente ao cliente (apenas o texto da resposta, sem prefixos):`
   }
 }
 
+export async function generateAdaptiveGreetingWithAI(
+  config: SimulatorConfig,
+  message: string,
+  history: Array<{ role: string; content: string }> = [],
+  senderDisplayName?: string
+): Promise<string | null> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!apiKey) return null
+
+  const businessName = config.business_name || "a empresa"
+  const primaryStaff = Array.isArray(config.staff) && config.staff.length > 0 ? config.staff[0]?.name : undefined
+  const assistantLabel = primaryStaff?.trim() || "assistente virtual"
+  const contactName = senderDisplayName?.trim() || null
+  const historyText =
+    history.length > 0
+      ? history
+          .slice(-4)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : "(sem historico)"
+
+  const systemPrompt = `Voce escreve a PRIMEIRA resposta de atendimento via WhatsApp.
+Negocio: ${businessName}
+Quem atende: ${assistantLabel}
+Contato do WhatsApp: ${contactName || "desconhecido"}
+
+Regras:
+- Responda em portugues do Brasil.
+- Espelhe o TOM do cliente: informal com informal, formal com formal.
+- Se houver saudacao ("oi", "e ai", "boa tarde", etc.), responda a saudacao naturalmente.
+- Se o nome do contato estiver disponivel, voce PODE usa-lo de forma natural, sem exagero.
+- Apresente quem esta falando usando o nome de quem atende quando disponivel.
+- Se o cliente sinalizar interesse em agendar, conduza suavemente para o agendamento.
+- Se o cliente so cumprimentar ou puxar assunto, responda educadamente e abra espaco para ajudar.
+- Nao invente promessas, horarios ou servicos fora do contexto.
+- Responda em 1 ou 2 frases, no maximo 240 caracteres.`
+
+  const userPrompt = `Historico recente:
+${historyText}
+
+Mensagem do cliente: "${message}"
+
+Gere a resposta inicial do WhatsApp:`
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 140,
+        temperature: 0.7,
+      }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    return content || null
+  } catch {
+    return null
+  }
+}
+
 export async function interpretFlowWithAI(
   message: string,
   history: Array<{ role: string; content: string }>,

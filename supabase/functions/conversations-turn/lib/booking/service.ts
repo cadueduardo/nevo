@@ -51,6 +51,11 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       : undefined
   const referenceBooking =
     lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
+  const anchorBooking =
+    lastCompletedFromNextState ||
+    lastCompletedFromState ||
+    nextState.last_booking ||
+    state.last_booking
   const inferredTemplateChoice = parseTemplateChoice(text, state.last_template_options || undefined)
   const lastAssistantNorm = normalizeText(String(lastAssistantMsg || ""))
   const completedCount =
@@ -239,19 +244,25 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       nextState.slots.service = resolvedServiceValue
       nextState.service_selection_multi = false
       nextState.last_service_options = undefined
-      const last =
-        lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
-      const lastStaffName = last?.staff_name || nextState.slots.staff_name || getStaffList(config)[0]?.name
-      if (last?.date && lastStaffName) {
+      const last = anchorBooking
+      const lastDate = last?.date || nextState.last_booking?.date || state.last_booking?.date
+      const lastTime = last?.time || nextState.last_booking?.time || state.last_booking?.time
+      const lastStaffName =
+        last?.staff_name ||
+        nextState.last_booking?.staff_name ||
+        state.last_booking?.staff_name ||
+        nextState.slots.staff_name ||
+        getStaffList(config)[0]?.name
+      if (lastDate && lastTime && lastStaffName) {
         const secondDuration = getServicesTotalDurationOrFallback(config, nextState.slots.service)
         const firstDuration =
           (last as any)?.duration_minutes ??
           getServicesTotalDurationOrFallback(config, last.service) ??
           30
-        const firstEndMins = toMinutes(last.time) + firstDuration
+        const firstEndMins = toMinutes(lastTime) + firstDuration
         const firstEndTime = fromMinutes(firstEndMins)
         const nextSlot = getNextAvailableSlot(
-          last.date,
+          lastDate,
           config,
           nextState.booked_slots,
           lastStaffName,
@@ -259,7 +270,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
           secondDuration ?? undefined
         )
         if (nextSlot) {
-          nextState.slots.date = last.date
+          nextState.slots.date = lastDate
           nextState.slots.time = nextSlot
           nextState.slots.staff_name = lastStaffName
           const firstName = last.attendee_name || "o primeiro"
@@ -273,7 +284,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
           ]
           nextState.last_confirm_options = confirmOpts
           return buildResult(
-            `Otimo, vamos agendar ${nextState.slots.attendee_name || "ele"} em seguida ao ${firstName}. Sugeri ${nextSlot} em ${formatDatePt(last.date)}. Posso confirmar?`,
+            `Otimo, vamos agendar ${nextState.slots.attendee_name || "ele"} em seguida ao ${firstName}. Sugeri ${nextSlot} em ${formatDatePt(lastDate)}. Posso confirmar?`,
             nextState,
             confirmOpts
           )
@@ -615,22 +626,30 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
           )
         }
         if (defaultService) nextState.slots.service = defaultService
-        if (last.date) nextState.slots.date = last.date
-        if (last.staff_name) nextState.slots.staff_name = last.staff_name
+        const lastDate = last.date || nextState.last_booking?.date || state.last_booking?.date
+        const lastTime = last.time || nextState.last_booking?.time || state.last_booking?.time
+        const lastStaffName =
+          last.staff_name ||
+          nextState.last_booking?.staff_name ||
+          state.last_booking?.staff_name ||
+          nextState.slots.staff_name ||
+          getStaffList(config)[0]?.name
+        if (lastDate) nextState.slots.date = lastDate
+        if (lastStaffName) nextState.slots.staff_name = lastStaffName
 
-        if (last.date && last.staff_name && defaultService) {
+        if (lastDate && lastTime && lastStaffName && defaultService) {
           const secondDuration = getServicesTotalDurationOrFallback(config, defaultService)
           const firstDuration =
             (last as any)?.duration_minutes ??
             getServicesTotalDurationOrFallback(config, last.service) ??
             30
-          const firstEndMins = toMinutes(last.time) + firstDuration
+          const firstEndMins = toMinutes(lastTime) + firstDuration
           const firstEndTime = fromMinutes(firstEndMins)
           const nextSlot = getNextAvailableSlot(
-            last.date,
+            lastDate,
             config,
             nextState.booked_slots,
-            last.staff_name,
+            lastStaffName,
             firstEndTime,
             secondDuration ?? undefined
           )
@@ -640,18 +659,18 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
               `1 - Sim, ${nextSlot}`,
               "2 - Outro horario no mesmo dia",
               "3 - Outro dia",
-              ...(getOtherStaffOptions(config, last.staff_name).length > 0
+              ...(getOtherStaffOptions(config, lastStaffName).length > 0
                 ? ["4 - Mesmo horario com outro colaborador"]
                 : []),
             ]
             nextState.last_confirm_options = confirmOpts
             return buildResult(
-              `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. Sugeri ${nextSlot} em ${formatDatePt(last.date)}. Posso confirmar?`,
+              `Otimo, vamos agendar ${secondName} em seguida ao ${firstName}. Sugeri ${nextSlot} em ${formatDatePt(lastDate)}. Posso confirmar?`,
               nextState,
               confirmOpts
             )
           }
-          const hasOtherStaff = getOtherStaffOptions(config, last.staff_name).length > 0
+          const hasOtherStaff = getOtherStaffOptions(config, lastStaffName).length > 0
           const msg = hasOtherStaff
             ? "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia ou manter esse horario com outro colaborador?"
             : "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia?"

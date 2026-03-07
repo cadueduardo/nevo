@@ -1,5 +1,5 @@
-// @ts-nocheck
-/** Early steps: rejeiÁ„o de serviÁo n„o listado, primeira interaÁ„o (saudaÁ„o), primeira mensagem com IA. */
+Ôªø// @ts-nocheck
+/** Early steps: rejei√ß√£o de servi√ßo n√£o listado, primeira intera√ß√£o (sauda√ß√£o), primeira mensagem com IA. */
 import type { SimulatorResult } from "../../types.ts"
 import type { TurnPipelineContext } from "../../turn-context.ts"
 import { buildResult } from "../../state.ts"
@@ -9,7 +9,12 @@ import { getGreetingMessage, buildClarificationMessage } from "../../builders.ts
 import { isGreeting, isExplicitBookingIntent } from "../../detection.ts"
 import { findServiceFromText, getServicesTotalDuration } from "../../services.ts"
 import { getStaffList, getScheduleForStaff } from "../../staff.ts"
-import { answerWithContextualAI, generateAvailabilityResponseWithAI, interpretBookingRequestWithAI } from "../../ai.ts"
+import {
+  answerWithContextualAI,
+  generateAdaptiveGreetingWithAI,
+  generateAvailabilityResponseWithAI,
+  interpretBookingRequestWithAI,
+} from "../../ai.ts"
 import { classifyServiceMatch } from "../../services.ts"
 import { hasMatchContext } from "../../qualification.ts"
 import { generateRejectionMessageWithAI } from "../../builders.ts"
@@ -25,7 +30,7 @@ function handleQuoteModeMessage(config: import("../../types.ts").SimulatorConfig
   return resolveQuote(config, text, nextState)
 }
 
-/** Retorna resultado se rejeiÁ„o unlisted, primeira saudaÁ„o ou primeira mensagem (IA); sen„o null. */
+/** Retorna resultado se rejei√ß√£o unlisted, primeira sauda√ß√£o ou primeira mensagem (IA); sen√£o null. */
 export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<SimulatorResult | null> {
   const { text, config, nextState, history, senderDisplayName, isFirst, textNorm, minOrchestratorConfidence, getOrchestrator } = ctx
 
@@ -49,13 +54,15 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
   }
 
   if (isFirst && isGreeting(text)) {
-    const aiGreeting = await answerWithContextualAI(config, text, history)
+    const aiGreeting = await generateAdaptiveGreetingWithAI(config, text, history, senderDisplayName)
     if (aiGreeting) return buildResult(aiGreeting, { ...nextState, step: "qualification" }, getEntryActionOptions(config))
     return buildResult(getGreetingMessage(config), { ...nextState, step: "qualification" }, getEntryActionOptions(config))
   }
 
   if (isFirst && !nextState.mode && !nextState.step) {
-    const greeting = getGreetingMessage(config)
+    const greeting =
+      (await generateAdaptiveGreetingWithAI(config, text, history, senderDisplayName)) ||
+      getGreetingMessage(config)
     const bookingRequest = await interpretBookingRequestWithAI(
       text,
       { history, sender_display_name: senderDisplayName },
@@ -153,5 +160,6 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
 
   return null
 }
+
 
 

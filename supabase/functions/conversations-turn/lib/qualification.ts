@@ -102,9 +102,7 @@ export async function enterBookingFromIntent({
   if (shouldEnterMultiFromRequest) {
     let firstAttendee: string | undefined
     let queueNames = [...requestNames]
-    if (bookingRequest?.includes_self && senderDisplayName?.trim()) {
-      firstAttendee = senderDisplayName.trim()
-    } else if (queueNames.length > 0) {
+    if (queueNames.length > 0) {
       firstAttendee = queueNames.shift()
     }
 
