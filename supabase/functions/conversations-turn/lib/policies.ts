@@ -59,8 +59,37 @@ function expectedByMode(mode: AudienceMode): RequestedAudience {
   return null
 }
 
+function getAllowedAudiences(config: SimulatorConfig): Exclude<RequestedAudience, null>[] {
+  const ta = config.target_audience
+  if (!ta) return []
+  const rawModes =
+    Array.isArray(ta.modes) && ta.modes.length > 0
+      ? ta.modes
+      : ta.mode
+        ? [ta.mode]
+        : []
+  return rawModes.filter(
+    (mode): mode is Exclude<RequestedAudience, null> =>
+      mode === "women_only" || mode === "men_only" || mode === "kids_only"
+  )
+}
+
 export function buildTargetAudienceRestrictionMessage(config: SimulatorConfig): string {
   const mode = (config.target_audience?.mode || "all") as AudienceMode
+  const allowed = getAllowedAudiences(config)
+  if (allowed.length > 1) {
+    const business = config.business_name ? ` na ${config.business_name}` : ""
+    const labels = allowed.map((aud) => {
+      if (aud === "men_only") return "homens"
+      if (aud === "women_only") return "mulheres"
+      return "criancas"
+    })
+    const joined =
+      labels.length === 2
+        ? `${labels[0]} e ${labels[1]}`
+        : `${labels.slice(0, -1).join(", ")} e ${labels[labels.length - 1]}`
+    return `Entendi. No momento, atendemos ${joined}${business}. Se quiser, posso te ajudar com um agendamento dentro desse perfil.`
+  }
   if (mode === "custom") {
     const note = config.target_audience?.note?.trim()
     const business = config.business_name ? ` da ${config.business_name}` : ""
@@ -122,15 +151,20 @@ export function shouldBlockByTargetAudience(
   config: SimulatorConfig,
   text: string
 ): boolean {
+  const allowedAudiences = getAllowedAudiences(config)
   const mode = (config.target_audience?.mode || "all") as AudienceMode
   const expected = expectedByMode(mode)
-  if (!expected) return false
+  if (!expected && allowedAudiences.length === 0) return false
 
   // Cliente aceitou a restrição e pede agendamento para o público permitido (ex.: "agendar pra mim e meu filho" em men_only).
   if (textIndicatesBookingForAllowedAudience(config, text)) return false
 
   const requested = inferRequestedAudienceFromText(text)
   if (!requested) return false
+
+  if (allowedAudiences.length > 0) {
+    return !allowedAudiences.includes(requested)
+  }
 
   return requested !== expected
 }
