@@ -166,6 +166,15 @@ export interface SemanticDecisionResult {
   }
 }
 
+export interface SemanticExecutorResult {
+  executor: string
+  state_patch?: Partial<SimulatorState>
+  slot_updates?: Partial<SimulatorState["slots"]>
+  action_options?: string[]
+  prompt_key: string
+  metadata?: Record<string, unknown>
+}
+
 export interface SemanticTurnContext {
   channel: SemanticChannel
   sender_display_name?: string

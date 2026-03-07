@@ -416,6 +416,59 @@ Escopo atual:
 - [ ] impedir perda de contexto em resposta invalida
 - [ ] usar duracao real dos servicos para sequencia
 
+### Implementacao inicial desta fase
+
+Arquivos:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/executors/booking-attendee.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/executors/booking-service.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/executors/booking-date.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/executors/booking-time.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/executors/booking-contact.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/executors/booking-sequence.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/executors/booking-finalization.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/executors/index.ts`
+
+Contrato novo:
+
+- `SemanticExecutorResult`
+
+Responsabilidade:
+
+- cada executor recebe:
+  - `SemanticDecisionResult`
+  - `TurnSemanticSnapshot`
+  - `SemanticTurnContext`
+- e devolve:
+  - `state_patch`
+  - `slot_updates`
+  - `action_options`
+  - `prompt_key`
+  - `metadata`
+
+Principio importante:
+
+- o executor nao decide intencao
+- o executor nao chama IA
+- o executor so aplica a decisao central
+
+### O que esta coberto nesta implementacao inicial
+
+- nome do atendido
+- servico
+- data
+- horario
+- contato
+- template de sequencia
+- confirmacao final
+
+### O que ainda nao foi feito nesta fase
+
+- integrar a execucao com o runtime legado
+- usar duracao real do servico dentro do executor de sequencia
+- conectar renderizacao real por canal
+- cobrir FAQ, quote e cancelamento com executores proprios
+
 ### Checks reais da Fase 6
 
 - [ ] `1,2`
