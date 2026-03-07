@@ -177,7 +177,7 @@ export async function POST(
         body: JSON.stringify({
           number: presenceNumber,
           presence: 'composing',
-          delay: 15000,
+          delay: 2500,
         }),
       })
       if (presenceRes.ok) break
