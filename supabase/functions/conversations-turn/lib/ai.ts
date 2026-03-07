@@ -579,6 +579,18 @@ export async function interpretAdditionalBookingsWithAI(
   text: string,
   context?: { has_completed_booking?: boolean; history?: Array<{ role: string; content: string }> }
 ): Promise<AdditionalBookingsInterpretation | null> {
+  const normalized = normalizeText(text || "")
+  if (normalized) {
+    const explicitMultiplePeople =
+      /\b(pra|para|pro)\s+mim\s+e\s+(pro|pra|para)?\s*meu\s+(filho|irmao|irmão|marido|pai|primo|amigo)\b/.test(normalized) ||
+      /\b(eu)\s+e\s+(meu|minha)\s+(filho|filha|irmao|irmão|irma|irmã|marido|esposa|pai|mae|mãe|primo|prima|amigo|amiga)\b/.test(normalized) ||
+      /\bum\s+pra\s+mim\s+e\s+outro\b/.test(normalized) ||
+      /\bdois\s+agendamentos\b/.test(normalized)
+    if (explicitMultiplePeople) {
+      return { has_additional: true, count: 1, for_whom: null }
+    }
+  }
+
   const openaiKey = Deno.env.get("OPENAI_API_KEY")
   if (!openaiKey) return null
 

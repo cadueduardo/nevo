@@ -6,7 +6,7 @@ import { buildResult } from "../../state.ts"
 import { normalizeText, parseTime, parseDateOrWeekday, addDaysToIsoDate, getTodayIsoBusinessTz } from "../../utils.ts"
 import { getMockAvailability, isWithinSchedule } from "../../utils.ts"
 import { getGreetingMessage, buildClarificationMessage } from "../../builders.ts"
-import { isGreeting } from "../../detection.ts"
+import { isGreeting, isExplicitBookingIntent } from "../../detection.ts"
 import { findServiceFromText, getServicesTotalDuration } from "../../services.ts"
 import { getStaffList, getScheduleForStaff } from "../../staff.ts"
 import { answerWithContextualAI, generateAvailabilityResponseWithAI } from "../../ai.ts"
@@ -55,6 +55,22 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
 
   if (isFirst && !nextState.mode && !nextState.step) {
     const greeting = getGreetingMessage(config)
+    const orchestrator = await getOrchestrator()
+    const hasConfidentOrchestrator = orchestrator && (orchestrator.confidence ?? 0) >= minOrchestratorConfidence
+    if (isExplicitBookingIntent(text) || hasConfidentOrchestrator) {
+      const handled = hasConfidentOrchestrator
+        ? await handleFirstMessageOrchestratorAction(orchestrator, {
+            text,
+            config,
+            nextState,
+            history,
+            senderDisplayName,
+            isFirst,
+            resolveBooking,
+          })
+        : await resolveBooking(config, text, nextState, history, senderDisplayName)
+      if (handled) return handled
+    }
     const timeFromFirstMsg = parseTime(text)
     const dateFromFirstMsg = parseDateOrWeekday(text) || addDaysToIsoDate(getTodayIsoBusinessTz(), 1)
     if (timeFromFirstMsg && dateFromFirstMsg) {
@@ -114,8 +130,6 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
         return handleQuoteModeMessage(config, text, nextState)
       }
     }
-    const orchestrator = await getOrchestrator()
-    const hasConfidentOrchestrator = orchestrator && (orchestrator.confidence ?? 0) >= minOrchestratorConfidence
     if (hasConfidentOrchestrator) {
       const handled = await handleFirstMessageOrchestratorAction(orchestrator, {
         text,

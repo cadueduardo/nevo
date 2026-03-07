@@ -6,8 +6,8 @@ import { buildSimulatorContextFromBusinessConfig } from '@/lib/simulator/context
 function computeTypingDelay(replyTexts: string[]): number {
   const joined = replyTexts.join('\n\n').trim()
   const chars = joined.length
-  const estimated = Math.round(chars * 28)
-  return Math.max(3200, Math.min(6500, estimated))
+  const estimated = Math.round(chars * 22)
+  return Math.max(2200, Math.min(4200, estimated))
 }
 
 /**
@@ -138,7 +138,7 @@ export async function POST(
   // Evolution API: POST /chat/sendPresence/{instance} | doc: https://doc.evolution-api.com/v2/api-reference/chat-controller/send-presence
   const presenceNumber = numberForEvolution
   const typingStartedAt = Date.now()
-  const initialPresenceDelay = 6500
+  const initialPresenceDelay = 4200
   for (const presenceUrl of baseCandidates.map((b) => `${b}/chat/sendPresence/${instance}`)) {
     try {
       const presenceRes = await fetch(presenceUrl, {
