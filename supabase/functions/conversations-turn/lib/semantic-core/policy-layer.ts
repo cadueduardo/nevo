@@ -4,6 +4,12 @@ import type {
   SemanticTurnContext,
   TurnSemanticSnapshot,
 } from "./types.ts"
+import {
+  buildAudienceClarificationMessage,
+  buildTargetAudienceRestrictionMessage,
+  needsAudienceClarification,
+  shouldBlockByTargetAudience,
+} from "../policies.ts"
 
 const BOOKING_CONFIDENCE_THRESHOLD = 0.55
 const GENERAL_CONFIDENCE_THRESHOLD = 0.4
@@ -24,8 +30,53 @@ function buildClarificationPrompt(snapshot: TurnSemanticSnapshot): string {
 
 export function applySemanticPolicies(
   snapshot: TurnSemanticSnapshot,
-  _context: SemanticTurnContext
+  context: SemanticTurnContext
 ): SemanticPolicyOutcome {
+  const rawConfig = context.business_brain.raw_config
+  const message = snapshot.meta.raw_user_message
+
+  if (snapshot.intents.booking) {
+    if (shouldBlockByTargetAudience(rawConfig, message)) {
+      return {
+        should_clarify: true,
+        clarification_reason: "target_audience_blocked",
+        clarification_prompt: buildTargetAudienceRestrictionMessage(rawConfig),
+        adjusted_snapshot: {
+          ...snapshot,
+          risks: {
+            ...snapshot.risks,
+            audience: {
+              requires_confirmation: true,
+              blocked: true,
+              reason: "target_audience_blocked",
+              prompt: buildTargetAudienceRestrictionMessage(rawConfig),
+              inferred_fit: false,
+            },
+          },
+        },
+      }
+    }
+
+    if (needsAudienceClarification(rawConfig, message)) {
+      return {
+        should_clarify: false,
+        adjusted_snapshot: {
+          ...snapshot,
+          risks: {
+            ...snapshot.risks,
+            audience: {
+              requires_confirmation: true,
+              blocked: false,
+              reason: "audience_needs_confirmation",
+              prompt: buildAudienceClarificationMessage(rawConfig),
+              inferred_fit: null,
+            },
+          },
+        },
+      }
+    }
+  }
+
   if (shouldClarifyByConfidence(snapshot)) {
     return {
       should_clarify: true,

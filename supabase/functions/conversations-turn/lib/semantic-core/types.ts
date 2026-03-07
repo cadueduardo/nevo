@@ -109,7 +109,9 @@ export interface SemanticTimeCandidate {
 
 export interface SemanticAudienceRisk {
   requires_confirmation: boolean
+  blocked?: boolean
   reason?: string
+  prompt?: string
   inferred_fit?: boolean | null
 }
 

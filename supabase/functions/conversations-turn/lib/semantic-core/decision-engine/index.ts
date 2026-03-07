@@ -9,6 +9,19 @@ export function decideNextSemanticAction(
   snapshot: TurnSemanticSnapshot,
   context: SemanticTurnContext
 ): SemanticDecisionResult {
+  if (snapshot.risks.audience?.blocked) {
+    return {
+      action: "ask_clarification",
+      reason: snapshot.risks.audience.reason || "target_audience_blocked",
+      confidence: snapshot.intents.confidence,
+      next_question: snapshot.risks.audience.prompt,
+      channel_hints: {
+        prefer_numbered_options: false,
+        prefer_multi_select: false,
+      },
+    }
+  }
+
   if (snapshot.intents.primary === "greeting") {
     return decideGreeting(snapshot, context)
   }

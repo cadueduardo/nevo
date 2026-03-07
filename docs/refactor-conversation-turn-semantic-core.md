@@ -231,6 +231,9 @@ Estado atual:
 
 - `semantic-core/policy-layer.ts` ja existe
 - hoje aplica `confidence guard`
+- ja centraliza enforcement inicial de publico atendido:
+  - bloqueio de publico incompatível
+  - confirmacao de publico ambiguo
 - quando a confianca e baixa, o runtime gera `ask_clarification` em vez de cair em `handoff_fallback`
 
 ## 5. `executors`

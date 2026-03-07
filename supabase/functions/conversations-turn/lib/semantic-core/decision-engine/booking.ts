@@ -20,7 +20,8 @@ export function decideBooking(
       reason: snapshot.risks.audience?.reason || "audience_requires_confirmation",
       confidence: snapshot.intents.confidence,
       action_options: ["Sim, nos encaixamos", "Quero agendar"],
-      next_question: "confirm_audience_fit_before_booking",
+      next_question:
+        snapshot.risks.audience?.prompt || "confirm_audience_fit_before_booking",
       channel_hints: { prefer_numbered_options: true, prefer_multi_select: false },
     }
   }

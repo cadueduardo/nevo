@@ -49,7 +49,7 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
   switch (decision.action) {
     case "ask_audience_confirmation":
       return {
-        message: buildAudienceConfirmationMessage(brain),
+        message: decision.next_question || buildAudienceConfirmationMessage(brain),
         action_options: decision.action_options,
       }
     case "ask_attendee_name":
