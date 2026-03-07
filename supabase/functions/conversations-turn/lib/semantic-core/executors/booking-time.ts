@@ -4,21 +4,19 @@ import type {
   SemanticExecutorResult,
   TurnSemanticSnapshot,
 } from "../types.ts"
+import { buildExecutorResult } from "./shared.ts"
 
 export function executeBookingTime(
   decision: SemanticDecisionResult,
   snapshot: TurnSemanticSnapshot
 ): SemanticExecutorResult {
   const hhmm = snapshot.time_candidate?.hhmm || decision.slot_updates?.time
-  return {
+  return buildExecutorResult({
     executor: "booking-time",
+    decision,
     slot_updates: hhmm ? { time: hhmm } : undefined,
-    state_patch: {
-      last_prompt: decision.next_question || "ask_time_preference",
-    },
-    prompt_key: decision.next_question || "ask_time_preference",
     metadata: {
       time: hhmm || null,
     },
-  }
+  })
 }
