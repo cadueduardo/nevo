@@ -15,6 +15,7 @@ import {
   isServiceDetailQuestion,
   isWhoAreYou,
 } from "../detection.ts"
+import { isAddressQuestion, isScheduleQuestion } from "../informational.ts"
 import { findServicesFromText } from "../services.ts"
 import { normalizeText } from "../utils.ts"
 import type {
@@ -48,6 +49,7 @@ function inferPrimaryIntentFromFlow(
   if (bookingRequest?.booking_intent) return bookingRequest.additional_count > 0 ? "booking_sequence" : "booking"
   if (isGreeting(message)) return "greeting"
   if (isWhoAreYou(message)) return "identity"
+  if (isAddressQuestion(message) || isScheduleQuestion(message)) return "faq"
   if (isPriceQuestion(message)) return "price"
   if (isListServicesQuestion(message)) return "service_list"
   if (isServiceDetailQuestion(message)) return "service_detail"

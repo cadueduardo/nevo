@@ -2,24 +2,31 @@
 import type { SemanticRuntimeResult } from "../runtime.ts"
 import {
   buildFallbackClarificationMessage,
+  buildFaqFallbackMessage,
   buildIdentityMessage,
-  buildPriceGuidanceMessage,
+  buildServicePriceMessage,
   buildServiceDetailMessage,
   buildServiceListMessage,
 } from "./prompt-library.ts"
 import type { RenderedSemanticMessage } from "./shared.ts"
+import { deriveInformationalContext } from "../informational-context.ts"
 
 export function renderInformational(semantic: SemanticRuntimeResult): RenderedSemanticMessage {
-  const brain = semantic.business_brain
+  const info = deriveInformationalContext(semantic.snapshot, semantic.context)
   const decision = semantic.decision
-  const services = brain.services.map((service) => service.name)
-  const businessName = brain.business_name
+  const services = info.service_names
+  const businessName = info.business_name
 
   switch (decision.action) {
     case "ask_clarification":
       return {
         message: decision.next_question || buildFallbackClarificationMessage(),
         action_options: ["Quero agendar", "Quero tirar uma duvida"],
+      }
+    case "reply_faq":
+      return {
+        message: info.answer || buildFaqFallbackMessage(businessName),
+        action_options: ["Quero agendar"],
       }
     case "reply_identity":
       return {
@@ -28,12 +35,12 @@ export function renderInformational(semantic: SemanticRuntimeResult): RenderedSe
       }
     case "reply_price":
       return {
-        message: buildPriceGuidanceMessage(),
+        message: buildServicePriceMessage(info.selected_service_name, info.selected_service_price),
         action_options: services,
       }
     case "reply_service_detail":
       return {
-        message: buildServiceDetailMessage(),
+        message: buildServiceDetailMessage(info.selected_service_name, info.selected_service_description),
         action_options: ["Quero agendar"],
       }
     case "reply_service_list":

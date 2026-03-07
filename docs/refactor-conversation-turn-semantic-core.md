@@ -1032,3 +1032,8 @@ Fonte:
   - calendar_targets
 - isso prepara a migracao do pos-confirmacao real sem espalhar essa logica de novo pelo legado
 
+
+- paridade informacional melhorada no semantic core`r
+- FAQ, endereco, horarios e resumo do proprio agendamento agora reaproveitam a base informativa do legado
+- respostas de preco e detalhe de servico passaram a usar contexto estruturado do business_brain
+

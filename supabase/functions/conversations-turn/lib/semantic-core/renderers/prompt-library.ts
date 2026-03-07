@@ -30,6 +30,10 @@ export function buildIdentityMessage(businessName?: string): string {
   return `Aqui e da ${businessName || "a empresa"}. Vou te ajudar no que precisar.`
 }
 
+export function buildFaqFallbackMessage(businessName?: string): string {
+  return `Posso te ajudar com informacoes sobre ${businessName || "a empresa"} e, se quiser, ja seguimos para o agendamento.`
+}
+
 export function buildServiceListMessage(businessName: string | undefined): string {
   return `Estes sao os servicos disponiveis em ${businessName || "a empresa"}. Qual voce quer agendar?`
 }
@@ -106,8 +110,18 @@ export function buildPriceGuidanceMessage(): string {
   return "Posso te informar os valores certinhos e te ajudar a agendar. Qual servico voce quer consultar?"
 }
 
-export function buildServiceDetailMessage(): string {
+export function buildServiceDetailMessage(serviceName?: string, description?: string): string {
+  if (serviceName && description) {
+    return `${serviceName}: ${description} Se quiser, ja posso seguir com o agendamento.`
+  }
   return "Posso te explicar melhor esse servico e, se quiser, ja seguimos para o agendamento."
+}
+
+export function buildServicePriceMessage(serviceName?: string, basePrice?: number): string {
+  if (serviceName && typeof basePrice === "number") {
+    return `O valor de ${serviceName} e R$ ${basePrice}. Se quiser, ja posso seguir com o agendamento.`
+  }
+  return buildPriceGuidanceMessage()
 }
 
 export function buildFallbackClarificationMessage(): string {

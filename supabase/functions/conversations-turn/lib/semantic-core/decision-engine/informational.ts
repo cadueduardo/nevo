@@ -1,6 +1,7 @@
 // @ts-nocheck
 import type { SemanticDecisionResult, SemanticTurnContext, TurnSemanticSnapshot } from "../types.ts"
 import { deriveBookingContext } from "../booking-context.ts"
+import { deriveInformationalContext } from "../informational-context.ts"
 
 function prefersNumberedOptions(context: SemanticTurnContext): boolean {
   return context.business_brain.policies.interaction_style !== "conversational"
@@ -11,8 +12,17 @@ export function decideInformational(
   context: SemanticTurnContext
 ): SemanticDecisionResult | null {
   const booking = deriveBookingContext(snapshot, context)
+  const informational = deriveInformationalContext(snapshot, context)
 
   switch (snapshot.intents.primary) {
+    case "faq":
+      return {
+        action: "reply_faq",
+        reason: "primary_intent_faq",
+        confidence: snapshot.intents.confidence,
+        next_question: informational.answer ? "answer_faq_with_business_context" : "answer_faq_and_offer_next_step",
+        channel_hints: { prefer_numbered_options: false, prefer_multi_select: false },
+      }
     case "identity":
       return {
         action: "reply_identity",
