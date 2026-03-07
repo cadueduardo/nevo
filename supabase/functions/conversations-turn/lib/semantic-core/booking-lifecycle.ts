@@ -2,6 +2,7 @@
 import { getServicesTotalDurationOrFallback } from "../services.ts"
 import { getOtherStaffOptions } from "../staff.ts"
 import { planSequentialBooking } from "./sequence-planner.ts"
+import { buildDynamicPeopleQueue, shiftCurrentAttendeeFromQueue } from "./booking-context.ts"
 import type {
   SemanticCompletedBookingDraft,
   SemanticDecisionResult,
@@ -63,9 +64,11 @@ export function buildPostConfirmationPlan(
   completedBooking?: SemanticCompletedBookingDraft
 ): SemanticPostConfirmationPlan {
   const existingCompleted = context.state.completed_bookings?.length || 0
-  const remainingQueue = Array.isArray(context.state.pending_attendee_queue)
-    ? context.state.pending_attendee_queue.filter(Boolean)
-    : []
+  const dynamicQueue = buildDynamicPeopleQueue(snapshot, context)
+  const remainingQueue = shiftCurrentAttendeeFromQueue(
+    dynamicQueue,
+    completedBooking?.attendee_name || context.state.slots?.attendee_name
+  )
   const inferredTotal =
     snapshot.signals.additional_count && snapshot.signals.additional_count > 0
       ? snapshot.signals.additional_count + (snapshot.signals.includes_self ? 1 : 0)
@@ -100,11 +103,15 @@ export function buildPostConfirmationPlan(
           defaultNextService
         )
       : undefined
+  const expectedTotalPeople = Math.max(
+    inferredTotal || 0,
+    existingCompleted + 1 + remainingQueue.length
+  ) || undefined
   return {
     has_more_people: remainingQueue.length > 0 || (context.state.pending_additional_count || 0) > 0,
     next_attendee_name: remainingQueue[0],
     remaining_queue: remainingQueue,
-    expected_total_people: inferredTotal,
+    expected_total_people: expectedTotalPeople,
     completed_count_after_confirmation: existingCompleted + 1,
     next_action_options: nextActionOptions,
     should_offer_sequence_template: Boolean(remainingQueue[0]),

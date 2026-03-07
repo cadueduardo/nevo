@@ -38,9 +38,51 @@ export interface DerivedBookingContext {
   missing_step: "audience" | "attendee" | "service" | "date" | "time" | "contact" | "confirm"
 }
 
-function inferPeopleQueue(snapshot: TurnSemanticSnapshot): string[] {
-  const names = Array.isArray(snapshot.entities.attendee_names) ? snapshot.entities.attendee_names.filter(Boolean) : []
-  return Array.from(new Set(names))
+function normalizeName(value?: string): string {
+  return String(value || "").trim().toLowerCase()
+}
+
+function uniqueOrderedNames(values: Array<string | undefined | null>): string[] {
+  const seen = new Set<string>()
+  const ordered: string[] = []
+  for (const value of values) {
+    const trimmed = String(value || "").trim()
+    const normalized = normalizeName(trimmed)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    ordered.push(trimmed)
+  }
+  return ordered
+}
+
+function getCompletedAttendeeNames(context: SemanticTurnContext): string[] {
+  const completed = Array.isArray(context.state.completed_bookings) ? context.state.completed_bookings : []
+  const names = completed.map((booking) => booking?.attendee_name).filter(Boolean)
+  if (context.state.last_booking?.attendee_name) {
+    names.push(context.state.last_booking.attendee_name)
+  }
+  return uniqueOrderedNames(names)
+}
+
+export function shiftCurrentAttendeeFromQueue(queue: string[], currentAttendeeName?: string): string[] {
+  const normalizedCurrent = normalizeName(currentAttendeeName)
+  if (!normalizedCurrent) return queue
+  const firstMatches = normalizeName(queue[0]) === normalizedCurrent
+  if (firstMatches) return queue.slice(1)
+  return queue.filter((name) => normalizeName(name) !== normalizedCurrent)
+}
+
+export function buildDynamicPeopleQueue(
+  snapshot: TurnSemanticSnapshot,
+  context: SemanticTurnContext
+): string[] {
+  const completedNames = new Set(getCompletedAttendeeNames(context).map((name) => normalizeName(name)))
+  const candidates = uniqueOrderedNames([
+    context.state.slots?.attendee_name,
+    ...(Array.isArray(context.state.pending_attendee_queue) ? context.state.pending_attendee_queue : []),
+    ...(Array.isArray(snapshot.entities.attendee_names) ? snapshot.entities.attendee_names : []),
+  ])
+  return candidates.filter((name) => !completedNames.has(normalizeName(name)))
 }
 
 function inferSlotUpdates(snapshot: TurnSemanticSnapshot) {
@@ -58,7 +100,7 @@ export function deriveBookingContext(
   snapshot: TurnSemanticSnapshot,
   context: SemanticTurnContext
 ): DerivedBookingContext {
-  const peopleQueue = inferPeopleQueue(snapshot)
+  const peopleQueue = buildDynamicPeopleQueue(snapshot, context)
   const slotUpdates = inferSlotUpdates(snapshot)
   const templateChoice = parseTemplateChoice(
     snapshot.meta.raw_user_message,
@@ -100,8 +142,11 @@ export function deriveBookingContext(
   const currentAttendeeName =
     slotUpdates.attendee_name ||
     context.state.slots?.attendee_name ||
-    context.state.pending_attendee_queue?.[0] ||
+    peopleQueue[0] ||
     undefined
+  const effectiveQueue = currentAttendeeName
+    ? uniqueOrderedNames([currentAttendeeName, ...peopleQueue])
+    : peopleQueue
   const serviceOptions = context.business_brain.services.map((service) => service.name)
   const contactOptions = isAdditionalBooking
     ? ["So celular", "So email", "Celular e email", "Pular (usar contato do titular)"]
@@ -124,9 +169,9 @@ export function deriveBookingContext(
 
   return {
     template_choice: templateChoice,
-    people_queue: peopleQueue,
+    people_queue: effectiveQueue,
     slot_updates: slotUpdates,
-    has_attendee: hasAttendee,
+    has_attendee: Boolean(currentAttendeeName),
     has_service: hasService,
     has_date: hasDate,
     has_time: hasTime,

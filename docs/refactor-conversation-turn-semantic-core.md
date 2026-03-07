@@ -1018,3 +1018,9 @@ Fonte:
   - pending_calendar_offer
 - isso reduz dependencia do legado na transicao entre um booking concluido e o proximo atendimento
 
+
+- fila dinamica de pessoas inferidas consolidada no semantic core`r
+- nomes ja informados pelo cliente entram em uma fila operacional unica
+- o atendido atual e removido da fila ao ser assumido
+- a continuidade do multiagendamento reaproveita essa fila sem re-perguntar nomes ja citados
+
