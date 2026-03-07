@@ -89,7 +89,10 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
         }
         return {
           message: lines.join("\n\n"),
-          action_options: postPlan?.has_more_people ? ["Continuar agendamento"] : ["Confirmar agendamento"],
+          action_options:
+            postPlan?.has_more_people
+              ? postPlan?.next_action_options || ["Continuar agendamento"]
+              : ["Adicionar no calendario", "Nao, obrigado"],
         }
       }
       return {

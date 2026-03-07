@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { getServicesTotalDurationOrFallback } from "../services.ts"
+import { getOtherStaffOptions } from "../staff.ts"
 import type {
   SemanticCompletedBookingDraft,
   SemanticDecisionResult,
@@ -67,11 +68,30 @@ export function buildPostConfirmationPlan(
     snapshot.signals.additional_count && snapshot.signals.additional_count > 0
       ? snapshot.signals.additional_count + (snapshot.signals.includes_self ? 1 : 0)
       : undefined
+  const anchorBooking =
+    (Array.isArray(context.state.completed_bookings) && context.state.completed_bookings.length > 0
+      ? context.state.completed_bookings[context.state.completed_bookings.length - 1]
+      : undefined) ||
+    context.state.last_booking ||
+    undefined
+  const hasOtherStaff = anchorBooking?.staff_name
+    ? getOtherStaffOptions(context.business_brain.raw_config, anchorBooking.staff_name).length > 0
+    : false
+  const nextActionOptions = remainingQueue.length > 0
+    ? [
+        "Mesmo dia e colaborador (proximo horario)",
+        ...(hasOtherStaff ? ["Mesmo horario com outro colaborador"] : []),
+        "Outro horario no mesmo dia",
+        "Outro dia",
+      ]
+    : undefined
   return {
     has_more_people: remainingQueue.length > 0 || (context.state.pending_additional_count || 0) > 0,
     next_attendee_name: remainingQueue[0],
     remaining_queue: remainingQueue,
     expected_total_people: inferredTotal,
     completed_count_after_confirmation: existingCompleted + 1,
+    next_action_options: nextActionOptions,
+    should_offer_sequence_template: Boolean(remainingQueue[0]),
   }
 }

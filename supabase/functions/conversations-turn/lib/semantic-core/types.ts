@@ -215,6 +215,8 @@ export interface SemanticPostConfirmationPlan {
   remaining_queue: string[]
   expected_total_people?: number
   completed_count_after_confirmation: number
+  next_action_options?: string[]
+  should_offer_sequence_template?: boolean
 }
 
 export interface SemanticExecutorResult {

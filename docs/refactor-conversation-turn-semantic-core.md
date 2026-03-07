@@ -1007,3 +1007,14 @@ Fonte:
 - renderer de booking agora consome completed_booking e post_confirmation_plan`r
 - semantic core passa a renderizar confirmacao e continuidade de multiagendamento com base em metadados estruturados, nao em texto solto
 
+
+- booking-finalization agora atualiza estado real de continuidade no semantic core`r
+- passa a alimentar:
+  - completed_bookings
+  - booked_slots
+  - last_booking
+  - pending_attendee_queue
+  - pending_template_choice
+  - pending_calendar_offer
+- isso reduz dependencia do legado na transicao entre um booking concluido e o proximo atendimento
+
