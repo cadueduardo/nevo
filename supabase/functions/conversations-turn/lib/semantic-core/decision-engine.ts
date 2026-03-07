@@ -4,25 +4,10 @@ import type {
   SemanticTurnContext,
   TurnSemanticSnapshot,
 } from "./types.ts"
+import { deriveBookingContext } from "./booking-context.ts"
 
 function prefersNumberedOptions(context: SemanticTurnContext): boolean {
   return context.business_brain.policies.interaction_style !== "conversational"
-}
-
-function inferPeopleQueue(snapshot: TurnSemanticSnapshot): string[] {
-  const names = Array.isArray(snapshot.attendee_names) ? snapshot.attendee_names.filter(Boolean) : []
-  return Array.from(new Set(names))
-}
-
-function inferSlotUpdates(snapshot: TurnSemanticSnapshot) {
-  const firstService = snapshot.service_candidates?.[0]?.name
-  const firstAttendee = snapshot.attendee_names?.[0]
-  return {
-    attendee_name: firstAttendee,
-    service: firstService,
-    date: snapshot.date_candidate?.iso_date || undefined,
-    time: snapshot.time_candidate?.hhmm || undefined,
-  }
 }
 
 function buildOptions(action: SemanticDecisionResult["action"]): string[] | undefined {
@@ -87,8 +72,7 @@ export function decideNextSemanticAction(
 ): SemanticDecisionResult {
   const interactionStyle = context.business_brain.policies.interaction_style
   const preferNumberedOptions = prefersNumberedOptions(context)
-  const peopleQueue = inferPeopleQueue(snapshot)
-  const slotUpdates = inferSlotUpdates(snapshot)
+  const booking = deriveBookingContext(snapshot, context)
 
   if (snapshot.primary_intent === "greeting") {
     return {
@@ -117,28 +101,28 @@ export function decideNextSemanticAction(
   }
 
   if (snapshot.primary_intent === "price") {
-    return {
-      action: "reply_price",
-      reason: "primary_intent_price",
-      confidence: snapshot.confidence,
-      slot_updates: slotUpdates,
-      next_question: buildNextQuestion("reply_price", context),
-      channel_hints: {
-        prefer_numbered_options: false,
+      return {
+        action: "reply_price",
+        reason: "primary_intent_price",
+        confidence: snapshot.confidence,
+        slot_updates: booking.slot_updates,
+        next_question: buildNextQuestion("reply_price", context),
+        channel_hints: {
+          prefer_numbered_options: false,
         prefer_multi_select: false,
       },
     }
   }
 
   if (snapshot.primary_intent === "service_detail") {
-    return {
-      action: "reply_service_detail",
-      reason: "primary_intent_service_detail",
-      confidence: snapshot.confidence,
-      slot_updates: slotUpdates,
-      next_question: buildNextQuestion("reply_service_detail", context),
-      channel_hints: {
-        prefer_numbered_options: false,
+      return {
+        action: "reply_service_detail",
+        reason: "primary_intent_service_detail",
+        confidence: snapshot.confidence,
+        slot_updates: booking.slot_updates,
+        next_question: buildNextQuestion("reply_service_detail", context),
+        channel_hints: {
+          prefer_numbered_options: false,
         prefer_multi_select: false,
       },
     }
@@ -158,7 +142,7 @@ export function decideNextSemanticAction(
   }
 
   if (snapshot.primary_intent === "booking" || snapshot.primary_intent === "booking_sequence") {
-    if (snapshot.audience_risk?.requires_confirmation) {
+    if (booking.missing_step === "audience") {
       return {
         action: "ask_audience_confirmation",
         reason: snapshot.audience_risk.reason || "audience_requires_confirmation",
@@ -172,12 +156,12 @@ export function decideNextSemanticAction(
       }
     }
 
-    if (!snapshot.attendee_names?.length && !context.state.slots?.attendee_name) {
+    if (booking.missing_step === "attendee") {
       return {
         action: "ask_attendee_name",
         reason: "missing_attendee_name",
         confidence: snapshot.confidence,
-        semantic_people_queue: peopleQueue,
+        semantic_people_queue: booking.people_queue,
         next_question: buildNextQuestion("ask_attendee_name", context),
         channel_hints: {
           prefer_numbered_options: false,
@@ -186,12 +170,12 @@ export function decideNextSemanticAction(
       }
     }
 
-    if (!snapshot.service_candidates?.length && !context.state.slots?.service) {
+    if (booking.missing_step === "service") {
       return {
         action: "ask_service",
         reason: "missing_service_selection",
         confidence: snapshot.confidence,
-        semantic_people_queue: peopleQueue,
+        semantic_people_queue: booking.people_queue,
         next_question: buildNextQuestion("ask_service", context),
         channel_hints: {
           prefer_numbered_options: preferNumberedOptions,
@@ -200,13 +184,13 @@ export function decideNextSemanticAction(
       }
     }
 
-    if (snapshot.sequence_request && context.state.completed_bookings?.length) {
+    if (booking.should_offer_sequence_template) {
       return {
         action: "offer_sequence_template",
         reason: "sequence_requested_or_detected",
         confidence: snapshot.confidence,
-        slot_updates: slotUpdates,
-        semantic_people_queue: peopleQueue,
+        slot_updates: booking.slot_updates,
+        semantic_people_queue: booking.people_queue,
         action_options: buildOptions("offer_sequence_template"),
         next_question: buildNextQuestion("offer_sequence_template", context),
         channel_hints: {
@@ -216,13 +200,13 @@ export function decideNextSemanticAction(
       }
     }
 
-    if (!snapshot.date_candidate?.iso_date && !context.state.slots?.date) {
+    if (booking.missing_step === "date") {
       return {
         action: "ask_date",
         reason: "missing_date_preference",
         confidence: snapshot.confidence,
-        slot_updates: slotUpdates,
-        semantic_people_queue: peopleQueue,
+        slot_updates: booking.slot_updates,
+        semantic_people_queue: booking.people_queue,
         next_question: buildNextQuestion("ask_date", context),
         channel_hints: {
           prefer_numbered_options: interactionStyle !== "conversational",
@@ -231,13 +215,13 @@ export function decideNextSemanticAction(
       }
     }
 
-    if (!snapshot.time_candidate?.hhmm && !context.state.slots?.time) {
+    if (booking.missing_step === "time") {
       return {
         action: "ask_time",
         reason: "missing_time_preference",
         confidence: snapshot.confidence,
-        slot_updates: slotUpdates,
-        semantic_people_queue: peopleQueue,
+        slot_updates: booking.slot_updates,
+        semantic_people_queue: booking.people_queue,
         next_question: buildNextQuestion("ask_time", context),
         channel_hints: {
           prefer_numbered_options: true,
@@ -246,13 +230,13 @@ export function decideNextSemanticAction(
       }
     }
 
-    if (!context.state.contact_preference && !context.state.slots?.customer_phone && !context.state.slots?.customer_email) {
+    if (booking.missing_step === "contact") {
       return {
         action: "ask_contact",
         reason: "missing_contact_preference",
         confidence: snapshot.confidence,
-        slot_updates: slotUpdates,
-        semantic_people_queue: peopleQueue,
+        slot_updates: booking.slot_updates,
+        semantic_people_queue: booking.people_queue,
         next_question: buildNextQuestion("ask_contact", context),
         channel_hints: {
           prefer_numbered_options: true,
@@ -265,8 +249,8 @@ export function decideNextSemanticAction(
       action: "confirm_booking",
       reason: "booking_ready_for_confirmation",
       confidence: snapshot.confidence,
-      slot_updates: slotUpdates,
-      semantic_people_queue: peopleQueue,
+      slot_updates: booking.slot_updates,
+      semantic_people_queue: booking.people_queue,
       next_question: buildNextQuestion("confirm_booking", context),
       channel_hints: {
         prefer_numbered_options: true,

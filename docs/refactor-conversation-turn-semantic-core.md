@@ -944,3 +944,10 @@ Fonte:
 - [x] elegibilidade de sequencia derivada no proprio builder
 - [ ] integrar esse builder ao runtime do novo semantic core
 - [ ] validar se ha campos adicionais do onboarding que ainda nao entraram no brain
+
+### Consolidacao recente
+
+- contexto derivado de booking extraido para semantic-core/booking-context.ts`r
+- decision-engine.ts deixou de remontar fila, slots e passos faltantes em varios blocos
+- objetivo: uma fonte unica para progresso de booking dentro do semantic core
+
