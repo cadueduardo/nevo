@@ -187,7 +187,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     !nextState.pending_second_service_choice &&
     !nextState.pending_attendee_name
 
-  if (!nextState.slots.service || shouldPrioritizeCurrentServiceAnswer) {
+  if ((!nextState.slots.service || shouldPrioritizeCurrentServiceAnswer) && !nextState.pending_second_service_choice) {
     // 0) Texto livre baseado nas opcoes exibidas no multi-select (robusto mesmo com catalogo parcial).
     const normalizedInput = normalizeText(text)
     const presentedOptions =
