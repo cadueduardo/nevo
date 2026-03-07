@@ -4,13 +4,14 @@ import type { SemanticRuntimeResult } from "../runtime.ts"
 import { renderBooking } from "./booking.ts"
 import { renderGreeting } from "./greeting.ts"
 import { renderInformational } from "./informational.ts"
-import { buildSemanticResult } from "./shared.ts"
+import { buildFallbackClarificationMessage } from "./prompt-library.ts"
+import { buildSemanticResult, type RenderedSemanticMessage } from "./shared.ts"
 
 export async function renderSemanticSimulatorResult(
   baseState: SimulatorState,
   semantic: SemanticRuntimeResult
 ): Promise<SimulatorResult> {
-  let rendered: { message: string; action_options?: string[] }
+  let rendered: RenderedSemanticMessage
 
   switch (semantic.decision.action) {
     case "reply_greeting":
@@ -35,7 +36,7 @@ export async function renderSemanticSimulatorResult(
       break
     default:
       rendered = {
-        message: "Pode me dar mais detalhes sobre o que voce precisa? Assim, consigo te ajudar melhor.",
+        message: buildFallbackClarificationMessage(),
         action_options: ["Quero agendar"],
       }
   }

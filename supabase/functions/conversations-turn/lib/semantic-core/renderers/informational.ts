@@ -1,36 +1,44 @@
 // @ts-nocheck
 import type { SemanticRuntimeResult } from "../runtime.ts"
+import {
+  buildFallbackClarificationMessage,
+  buildIdentityMessage,
+  buildPriceGuidanceMessage,
+  buildServiceDetailMessage,
+  buildServiceListMessage,
+} from "./prompt-library.ts"
+import type { RenderedSemanticMessage } from "./shared.ts"
 
-export function renderInformational(semantic: SemanticRuntimeResult): { message: string; action_options?: string[] } {
+export function renderInformational(semantic: SemanticRuntimeResult): RenderedSemanticMessage {
   const brain = semantic.business_brain
   const decision = semantic.decision
   const services = brain.services.map((service) => service.name)
-  const businessName = brain.business_name || "a empresa"
+  const businessName = brain.business_name
 
   switch (decision.action) {
     case "reply_identity":
       return {
-        message: `Aqui e da ${businessName}. Vou te ajudar no que precisar.`,
+        message: buildIdentityMessage(businessName),
         action_options: ["Quero agendar"],
       }
     case "reply_price":
       return {
-        message: "Posso te informar os valores certinhos e te ajudar a agendar. Qual servico voce quer consultar?",
+        message: buildPriceGuidanceMessage(),
         action_options: services,
       }
     case "reply_service_detail":
       return {
-        message: "Posso te explicar melhor esse servico e, se quiser, ja seguimos para o agendamento.",
+        message: buildServiceDetailMessage(),
         action_options: ["Quero agendar"],
       }
     case "reply_service_list":
       return {
-        message: `Estes sao os servicos disponiveis em ${businessName}. Qual voce quer agendar?`,
+        message: buildServiceListMessage(businessName),
         action_options: services,
       }
     default:
       return {
-        message: "Pode me dar mais detalhes sobre o que voce precisa? Assim, consigo te ajudar melhor.",
+        message: buildFallbackClarificationMessage(),
         action_options: ["Quero agendar"],
       }
   }

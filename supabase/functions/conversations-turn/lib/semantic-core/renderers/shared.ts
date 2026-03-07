@@ -3,6 +3,8 @@ import { buildResult } from "../../state.ts"
 import type { SimulatorResult, SimulatorState } from "../../types.ts"
 import type { SemanticRuntimeResult } from "../runtime.ts"
 
+export type RenderedSemanticMessage = { message: string; action_options?: string[] }
+
 export function mergeSemanticState(
   baseState: SimulatorState,
   semantic: SemanticRuntimeResult
@@ -29,12 +31,4 @@ export function buildSemanticResult(
 ): SimulatorResult {
   const mergedState = mergeSemanticState(baseState, semantic)
   return buildResult(message, mergedState, actionOptions)
-}
-
-export function formatAudienceLabel(modes: string[] = []): string {
-  if (modes.includes("men_only") && modes.includes("kids_only")) return "homens e criancas"
-  if (modes.includes("men_only")) return "homens"
-  if (modes.includes("women_only")) return "mulheres"
-  if (modes.includes("kids_only")) return "criancas"
-  return "todos os publicos"
 }

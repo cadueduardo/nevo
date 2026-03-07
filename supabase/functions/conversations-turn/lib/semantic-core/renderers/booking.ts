@@ -1,6 +1,18 @@
 // @ts-nocheck
 import type { SemanticRuntimeResult } from "../runtime.ts"
-import { formatAudienceLabel } from "./shared.ts"
+import {
+  buildAttendeeQuestion,
+  buildAudienceConfirmationMessage,
+  buildBookingConfirmationMessage,
+  buildCalendarOfferMessage,
+  buildContactQuestion,
+  buildDateQuestion,
+  buildFallbackClarificationMessage,
+  buildSequenceOfferQuestion,
+  buildServiceQuestion,
+  buildTimeQuestion,
+} from "./prompt-library.ts"
+import type { RenderedSemanticMessage } from "./shared.ts"
 
 function getAttendeeName(semantic: SemanticRuntimeResult): string | undefined {
   return semantic.execution?.slot_updates?.attendee_name || semantic.decision.slot_updates?.attendee_name
@@ -21,7 +33,7 @@ function getTime(semantic: SemanticRuntimeResult): string | undefined {
   return semantic.execution?.metadata?.time || semantic.snapshot.time_candidate?.hhmm
 }
 
-export function renderBooking(semantic: SemanticRuntimeResult): { message: string; action_options?: string[] } {
+export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemanticMessage {
   const attendeeName = getAttendeeName(semantic)
   const serviceNames = getServiceNames(semantic)
   const dateIso = getDate(semantic)
@@ -33,53 +45,49 @@ export function renderBooking(semantic: SemanticRuntimeResult): { message: strin
   switch (decision.action) {
     case "ask_audience_confirmation":
       return {
-        message: `So para confirmar: aqui atendemos ${formatAudienceLabel(brain.audience?.modes)}. Voces se encaixam nesse perfil?`,
+        message: buildAudienceConfirmationMessage(brain),
         action_options: decision.action_options,
       }
     case "ask_attendee_name":
       return {
-        message: semantic.context.state.pending_additional_booking
-          ? "Qual e o nome da proxima pessoa?"
-          : "De quem sera o primeiro agendamento?",
+        message: buildAttendeeQuestion(Boolean(semantic.context.state.pending_additional_booking)),
       }
     case "ask_service":
       return {
-        message: attendeeName
-          ? `Perfeito! Vamos agendar para ${attendeeName}. Qual servico voce gostaria? Pode escolher mais de um.`
-          : "Qual servico voce gostaria de agendar? Pode escolher mais de um.",
+        message: buildServiceQuestion(attendeeName),
         action_options: execution?.action_options || brain.services.map((service) => service.name),
       }
     case "offer_sequence_template":
       return {
-        message: `Voce gostaria de agendar ${attendeeName || "a proxima pessoa"} logo apos o atendimento anterior? O proximo horario esta disponivel. Prefere esse horario, outro horario no mesmo dia ou em outro dia?`,
+        message: buildSequenceOfferQuestion(attendeeName),
         action_options: decision.action_options,
       }
     case "ask_date":
       return {
-        message: "Qual dia voce prefere agendar? (ex: Hoje, Amanha ou dia da semana)",
+        message: buildDateQuestion(),
       }
     case "ask_time":
       return {
-        message: "Qual horario voce prefere?",
+        message: buildTimeQuestion(),
       }
     case "ask_contact":
       return {
-        message: "Como prefere ser contatado para confirmar o agendamento?",
+        message: buildContactQuestion(),
         action_options: ["So celular", "So email", "Celular e email"],
       }
     case "confirm_booking":
       return {
-        message: `Perfeito! Vou confirmar ${serviceNames.join(", ") || "o atendimento"}${attendeeName ? ` para ${attendeeName}` : ""}${dateIso ? ` em ${dateIso}` : ""}${time ? ` as ${time}` : ""}.`,
+        message: buildBookingConfirmationMessage(serviceNames, attendeeName, dateIso, time),
         action_options: ["Confirmar agendamento"],
       }
     case "offer_calendar":
       return {
-        message: "Gostaria de adicionar este compromisso no seu calendario?",
+        message: buildCalendarOfferMessage(),
         action_options: decision.action_options,
       }
     default:
       return {
-        message: "Pode me dar mais detalhes sobre o que voce precisa? Assim, consigo te ajudar melhor.",
+        message: buildFallbackClarificationMessage(),
         action_options: ["Quero agendar"],
       }
   }

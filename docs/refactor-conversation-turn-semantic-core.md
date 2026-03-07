@@ -227,6 +227,23 @@ Regra:
 
 - a logica de negocio deve ser a mesma
 - muda apenas a forma de apresentar
+- a biblioteca de prompts deve ser unica, sem adapter paralelo montando mensagens concorrentes
+
+### Estado atual desta camada
+
+Arquivos novos/ativos:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/prompt-library.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/greeting.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/informational.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/booking.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/index.ts`
+
+Diretriz aplicada:
+
+- `prompt-library.ts` passa a ser a fonte unica de texto-base do semantic core
+- `greeting`, `informational` e `booking` apenas escolhem a mensagem e injetam variaveis
+- o `adapter.ts` legado do semantic core fica obsoleto e deve ser removido para evitar duas fontes de renderizacao
 
 ## Plano de migracao
 
