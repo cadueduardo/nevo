@@ -96,7 +96,8 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     if (referenceBooking.date) nextState.slots.date = referenceBooking.date
     if (referenceBooking.staff_name) nextState.slots.staff_name = referenceBooking.staff_name
 
-    if (referenceBooking.date && referenceBooking.staff_name && defaultService) {
+    const referenceStaffName = referenceBooking.staff_name || nextState.slots.staff_name || getStaffList(config)[0]?.name
+    if (referenceBooking.date && referenceStaffName && defaultService) {
       const secondDuration = getServicesTotalDurationOrFallback(config, defaultService)
       const firstDuration =
         (referenceBooking as any)?.duration_minutes ??
@@ -108,19 +109,20 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
         referenceBooking.date,
         config,
         nextState.booked_slots,
-        referenceBooking.staff_name,
+        referenceStaffName,
         firstEndTime,
         secondDuration ?? undefined
       )
       if (nextSlot) {
         nextState.slots.time = nextSlot
+        nextState.slots.staff_name = referenceStaffName
         const firstName = referenceBooking.attendee_name || "o primeiro"
         const secondName = nextState.slots.attendee_name || "ele"
         const confirmOpts = [
           `1 - Sim, ${nextSlot}`,
           "2 - Outro horario no mesmo dia",
           "3 - Outro dia",
-          ...(getOtherStaffOptions(config, referenceBooking.staff_name).length > 0
+          ...(getOtherStaffOptions(config, referenceStaffName).length > 0
             ? ["4 - Mesmo horario com outro colaborador"]
             : []),
         ]
@@ -131,7 +133,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
           confirmOpts
         )
       }
-      const hasOtherStaff = getOtherStaffOptions(config, referenceBooking.staff_name).length > 0
+      const hasOtherStaff = getOtherStaffOptions(config, referenceStaffName).length > 0
       const msg = hasOtherStaff
         ? "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia ou manter esse horario com outro colaborador?"
         : "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia?"
@@ -485,7 +487,8 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       nextState.last_service_options = undefined
       const last =
         lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
-      if (last?.date && last?.staff_name) {
+      const lastStaffName = last?.staff_name || nextState.slots.staff_name || getStaffList(config)[0]?.name
+      if (last?.date && lastStaffName) {
         const secondDuration = getServicesTotalDurationOrFallback(config, nextState.slots.service)
         const firstDuration =
           (last as any)?.duration_minutes ??
@@ -497,20 +500,20 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
           last.date,
           config,
           nextState.booked_slots,
-          last.staff_name,
+          lastStaffName,
           firstEndTime,
           secondDuration ?? undefined
         )
         if (nextSlot) {
           nextState.slots.date = last.date
           nextState.slots.time = nextSlot
-          nextState.slots.staff_name = last.staff_name
+          nextState.slots.staff_name = lastStaffName
           const firstName = last.attendee_name || "o primeiro"
           const confirmOpts = [
             `1 - Sim, ${nextSlot}`,
             "2 - Outro horario no mesmo dia",
             "3 - Outro dia",
-            ...(getOtherStaffOptions(config, last.staff_name).length > 0
+            ...(getOtherStaffOptions(config, lastStaffName).length > 0
               ? ["4 - Mesmo horario com outro colaborador"]
               : []),
           ]
@@ -521,7 +524,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
             confirmOpts
           )
         }
-        const hasOtherStaff = getOtherStaffOptions(config, last.staff_name).length > 0
+        const hasOtherStaff = getOtherStaffOptions(config, lastStaffName).length > 0
         const msg = hasOtherStaff
           ? "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia ou manter esse horario com outro colaborador?"
           : "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia?"
