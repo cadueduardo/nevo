@@ -291,6 +291,57 @@ Regra:
 - [ ] `tenta encaixar um depois do outro`
 - [ ] `se der hoje vai, senao amanha`
 
+### Implementacao inicial desta fase
+
+Arquivo:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/turn-semantics.ts`
+
+Escopo atual:
+
+- constroi `TurnSemanticSnapshot` a partir de:
+  - mensagem atual
+  - historico curto
+  - `SimulatorState`
+  - `BusinessBrain`
+- reaproveita os helpers legados:
+  - `interpretFlowWithAI(...)`
+  - `interpretBookingRequestWithAI(...)`
+  - `interpretSlotsFromMessageWithAI(...)`
+- consolida em um unico objeto:
+  - `primary_intent`
+  - `secondary_intents`
+  - `people`
+  - `service_candidates`
+  - `date_candidate`
+  - `time_candidate`
+  - `sequence_request`
+  - `audience_risk`
+  - `ambiguities`
+  - `next_question_hint`
+
+Regra importante desta etapa:
+
+- a IA legada continua sendo usada como insumo
+- mas o resultado agora e normalizado em um snapshot unico
+- nenhum modulo novo deve consumir diretamente os helpers legados fora do snapshot builder
+
+### O que ja esta decidido no snapshot inicial
+
+- saudacao vs preco vs FAQ/lista vs booking
+- pedido de multiagendamento
+- nomes ja citados
+- servicos ja citados
+- data/hora quando a mensagem ja trouxe isso
+- pedido de sequencia em linguagem natural
+- risco de publico quando houver restricao configurada
+
+### O que ainda nao foi feito nesta fase
+
+- integrar o snapshot ao runtime principal
+- substituir o decision flow legado
+- migrar FAQ/quote/cancelamento para o novo `decision_engine`
+
 ## Fase 5 - Decision Engine
 
 - [ ] criar funcao unica de decisao do turno
