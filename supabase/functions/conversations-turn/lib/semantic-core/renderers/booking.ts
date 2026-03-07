@@ -57,6 +57,12 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
         message: buildAttendeeQuestion(booking.is_additional_booking),
       }
     case "ask_service":
+      if (booking.template_choice === "same_next") {
+        return {
+          message: `Perfeito. Antes de sugerir o proximo horario em sequencia para ${attendeeName || "a proxima pessoa"}, preciso confirmar o servico.`,
+          action_options: execution?.action_options || booking.service_options,
+        }
+      }
       return {
         message: buildServiceQuestion(attendeeName),
         action_options: execution?.action_options || booking.service_options,
@@ -67,6 +73,13 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
         action_options: decision.action_options,
       }
     case "ask_date":
+      if (booking.template_choice === "same_next" && booking.sequence_suggestion && !booking.sequence_suggestion.available) {
+        return {
+          message:
+            "Nao encontrei um proximo horario livre na sequencia desse atendimento. Vamos escolher outro dia ou outro horario para continuar.",
+          action_options: execution?.action_options,
+        }
+      }
       return {
         message: buildDateQuestion(),
         action_options: execution?.action_options,

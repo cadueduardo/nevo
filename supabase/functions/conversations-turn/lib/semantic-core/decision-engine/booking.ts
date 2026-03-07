@@ -43,6 +43,10 @@ export function decideBooking(
       reason: "missing_service_selection",
       confidence: snapshot.intents.confidence,
       semantic_people_queue: booking.people_queue,
+      slot_updates:
+        booking.template_choice === "same_next" || booking.template_choice === "same_day"
+          ? booking.slot_updates
+          : undefined,
       next_question: "ask_service_selection",
       channel_hints: {
         prefer_numbered_options: preferNumberedOptions,
@@ -71,7 +75,10 @@ export function decideBooking(
   if (booking.missing_step === "date") {
     return {
       action: "ask_date",
-      reason: "missing_date_preference",
+      reason:
+        booking.template_choice === "same_next" && booking.sequence_suggestion && !booking.sequence_suggestion.available
+          ? "sequence_same_next_unavailable"
+          : "missing_date_preference",
       confidence: snapshot.intents.confidence,
       slot_updates: booking.slot_updates,
       semantic_people_queue: booking.people_queue,

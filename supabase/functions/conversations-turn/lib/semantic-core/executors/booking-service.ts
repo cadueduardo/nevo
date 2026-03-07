@@ -21,11 +21,17 @@ export function executeBookingService(
   return buildExecutorResult({
     executor: "booking-service",
     decision,
-    slot_updates: serviceValue ? { service: serviceValue } : undefined,
+    slot_updates: serviceValue
+      ? {
+          ...(decision.slot_updates || {}),
+          service: serviceValue,
+        }
+      : decision.slot_updates,
     state_patch: {
       last_service_options: booking.service_options,
       service_selection_multi: multiSelect,
-      pending_second_service_choice: context.state.pending_second_service_choice && !serviceValue,
+      pending_second_service_choice:
+        Boolean((context.state.pending_second_service_choice || context.state.pending_template_choice) && !serviceValue),
     },
     action_options: booking.service_options,
     metadata: {

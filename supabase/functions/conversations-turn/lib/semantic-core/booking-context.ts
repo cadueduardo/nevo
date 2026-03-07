@@ -3,14 +3,18 @@ import type {
   SemanticTurnContext,
   TurnSemanticSnapshot,
 } from "./types.ts"
+import { parseTemplateChoice } from "../utils.ts"
+import { planSequentialBooking } from "./sequence-planner.ts"
 
 export interface DerivedBookingContext {
+  template_choice?: "same_next" | "same_day" | "other_day" | "other_staff" | null
   people_queue: string[]
   slot_updates: {
     attendee_name?: string
     service?: string
     date?: string
     time?: string
+    staff_name?: string
   }
   has_attendee: boolean
   has_service: boolean
@@ -23,6 +27,13 @@ export interface DerivedBookingContext {
   service_options: string[]
   contact_options: string[]
   sequence_anchor_booking?: Record<string, unknown>
+  sequence_suggestion?: {
+    available: boolean
+    suggested_date?: string
+    suggested_time?: string
+    suggested_staff_name?: string
+    has_other_staff_same_day: boolean
+  }
   should_offer_sequence_template: boolean
   missing_step: "audience" | "attendee" | "service" | "date" | "time" | "contact" | "confirm"
 }
@@ -49,10 +60,38 @@ export function deriveBookingContext(
 ): DerivedBookingContext {
   const peopleQueue = inferPeopleQueue(snapshot)
   const slotUpdates = inferSlotUpdates(snapshot)
+  const templateChoice = parseTemplateChoice(
+    snapshot.meta.raw_user_message,
+    context.state.last_template_options
+  )
   const hasAttendee = Boolean(snapshot.entities.attendee_names?.length || context.state.slots?.attendee_name)
   const hasService = Boolean(snapshot.entities.services?.length || context.state.slots?.service)
-  const hasDate = Boolean(snapshot.entities.date?.iso_date || context.state.slots?.date)
-  const hasTime = Boolean(snapshot.entities.time?.hhmm || context.state.slots?.time)
+  const sequenceAnchorBooking =
+    (Array.isArray(context.state.completed_bookings) && context.state.completed_bookings.length > 0
+      ? context.state.completed_bookings[context.state.completed_bookings.length - 1]
+      : undefined) ||
+    context.state.last_booking ||
+    undefined
+  const selectedServiceValue = slotUpdates.service || context.state.slots?.service
+  const sequenceSuggestion =
+    templateChoice === "same_next" && sequenceAnchorBooking && selectedServiceValue
+      ? planSequentialBooking(
+          context.business_brain,
+          context.state,
+          sequenceAnchorBooking as any,
+          selectedServiceValue
+        )
+      : undefined
+  if (templateChoice === "same_next" && sequenceSuggestion?.available) {
+    slotUpdates.date = sequenceSuggestion.suggested_date
+    slotUpdates.time = sequenceSuggestion.suggested_time
+    slotUpdates.staff_name = sequenceSuggestion.suggested_staff_name
+  } else if (templateChoice === "same_day" && sequenceAnchorBooking?.date) {
+    slotUpdates.date = sequenceAnchorBooking.date
+    slotUpdates.staff_name = sequenceAnchorBooking.staff_name
+  }
+  const hasDate = Boolean(slotUpdates.date || snapshot.entities.date?.iso_date || context.state.slots?.date)
+  const hasTime = Boolean(slotUpdates.time || snapshot.entities.time?.hhmm || context.state.slots?.time)
   const hasContact = Boolean(
     context.state.contact_preference || context.state.slots?.customer_phone || context.state.slots?.customer_email
   )
@@ -67,24 +106,24 @@ export function deriveBookingContext(
   const contactOptions = isAdditionalBooking
     ? ["So celular", "So email", "Celular e email", "Pular (usar contato do titular)"]
     : ["So celular", "So email", "Celular e email"]
-  const sequenceAnchorBooking =
-    (Array.isArray(context.state.completed_bookings) && context.state.completed_bookings.length > 0
-      ? context.state.completed_bookings[context.state.completed_bookings.length - 1]
-      : undefined) ||
-    context.state.last_booking ||
-    undefined
-  const shouldOfferSequenceTemplate = Boolean(snapshot.signals.sequence_request && hasCompletedBookings)
+  const shouldOfferSequenceTemplate = Boolean(
+    hasCompletedBookings &&
+    (snapshot.signals.sequence_request || context.state.pending_template_choice) &&
+    !templateChoice
+  )
 
   let missingStep: DerivedBookingContext["missing_step"] = "confirm"
   if (snapshot.risks.audience?.requires_confirmation) missingStep = "audience"
   else if (!hasAttendee) missingStep = "attendee"
   else if (!hasService) missingStep = "service"
   else if (shouldOfferSequenceTemplate) missingStep = "date"
+  else if (templateChoice === "same_next" && !sequenceSuggestion?.available) missingStep = "date"
   else if (!hasDate) missingStep = "date"
   else if (!hasTime) missingStep = "time"
   else if (!hasContact) missingStep = "contact"
 
   return {
+    template_choice: templateChoice,
     people_queue: peopleQueue,
     slot_updates: slotUpdates,
     has_attendee: hasAttendee,
@@ -98,6 +137,7 @@ export function deriveBookingContext(
     service_options: serviceOptions,
     contact_options: contactOptions,
     sequence_anchor_booking: sequenceAnchorBooking,
+    sequence_suggestion: sequenceSuggestion,
     should_offer_sequence_template: shouldOfferSequenceTemplate,
     missing_step: missingStep,
   }
