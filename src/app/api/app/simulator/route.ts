@@ -113,6 +113,7 @@ export async function POST(req: NextRequest) {
           session_id: sessionId,
           message: message.trim(),
           conversation_id: conversation_id ?? undefined,
+          channel: 'web_simulator',
           context,
           tenant_id: tenant.id,
           agent_id: effectiveAgentId,

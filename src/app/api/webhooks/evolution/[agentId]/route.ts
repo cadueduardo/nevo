@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { resolveActorByPhone } from '@/lib/actor'
+import { buildSimulatorContextFromBusinessConfig } from '@/lib/simulator/context'
 
 /**
  * POST /api/webhooks/evolution/[agentId]
@@ -84,51 +85,15 @@ export async function POST(
 
   const bc = (setting.business_config as Record<string, unknown>) ?? {}
   const businessNameFromConfig = (bc.business_name as string)?.trim()
-  const bookingServices = Array.isArray(bc.booking_services)
-    ? bc.booking_services
-    : Array.isArray(bc.services)
-      ? bc.services
-      : []
-  const catalogServices = Array.isArray(bc.catalog_services)
-    ? bc.catalog_services
-    : bookingServices
-  const context = {
-    business_name: businessNameFromConfig || (agent.name ?? '') || '',
-    business_type: bc.business_type ?? undefined,
-    context_mode: bc.context_mode ?? 'booking',
-    establishment_address: bc.establishment_address ?? undefined,
-    tone: setting.tone ?? undefined,
-    catalog_services: catalogServices,
-    booking_services: bookingServices,
-    services: bookingServices,
-    when_client_asks_price_no_value: setting.when_client_asks_price_no_value ?? 'offer_handoff_or_booking',
-    schedule: bc.schedule ?? undefined,
-    staff: Array.isArray(bc.staff) ? bc.staff : [],
-    dynamic_variables: Array.isArray(bc.dynamic_variables) ? bc.dynamic_variables : [],
-    lead_policy: {
-      reject_unlisted_services: true,
-      use_ai_matching: true,
-      ...(typeof bc.lead_policy === 'object' && bc.lead_policy !== null
-        ? (bc.lead_policy as Record<string, unknown>)
-        : {}),
+  const context = buildSimulatorContextFromBusinessConfig({
+    businessName: businessNameFromConfig || (agent.name ?? '') || '',
+    businessConfig: {
+      ...bc,
+      when_client_asks_price_no_value:
+        setting.when_client_asks_price_no_value ?? 'offer_handoff_or_booking',
     },
-    holidays_attend: Array.isArray(bc.holidays_attend) ? bc.holidays_attend : [],
-    closure_periods: Array.isArray(bc.closure_periods) ? bc.closure_periods : [],
-    allow_sequence_booking: Boolean(bc.allow_sequence_booking),
-    sequence_eligible_services: Array.isArray(bc.sequence_eligible_services) ? bc.sequence_eligible_services : [],
-    target_audience:
-      typeof bc.target_audience === 'object' && bc.target_audience !== null
-        ? bc.target_audience
-        : undefined,
-    interaction_style:
-      bc.interaction_style === 'numbered_options' ||
-      bc.interaction_style === 'conversational' ||
-      bc.interaction_style === 'hybrid'
-        ? bc.interaction_style
-        : 'hybrid',
-    branding:
-      typeof bc.branding === 'object' && bc.branding !== null ? bc.branding : undefined,
-  }
+    tone: setting.tone ?? undefined,
+  })
 
   const fromNormalized = from.startsWith('whatsapp:') ? from : `whatsapp:${from}`
 
