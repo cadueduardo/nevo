@@ -632,20 +632,27 @@ Candidatos a reaproveitamento:
 Arquivos:
 
 - `supabase/functions/conversations-turn/index.ts`
-- `supabase/functions/conversations-turn/lib/semantic-core/adapter.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/index.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/greeting.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/informational.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/booking.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/shared.ts`
 
 Comportamento:
 
 - se `CONVERSATION_TURN_ENGINE=semantic_core`, o `index.ts` executa:
   - `runSemanticCoreTurn(...)`
-  - `buildSemanticSimulatorResult(...)`
+  - `renderSemanticSimulatorResult(...)`
 - se a flag nao estiver ativa, continua no legado
 
 Observacao importante:
 
-- o renderer atual do semantic core ainda e minimo
+- o semantic core ja tem renderers separados por dominio:
+  - saudacao
+  - informacional
+  - booking
+- ainda nao existe renderer final especifico por canal
 - serve para testar o pipeline novo sem misturar com o legado
-- ainda nao substitui a renderizacao final por canal
 
 ## Auditoria do legado - mapa inicial do fluxo atual
 

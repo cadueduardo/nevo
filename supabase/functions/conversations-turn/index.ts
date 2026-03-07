@@ -29,8 +29,8 @@ import {
   handleInternalIntent,
   tryHandleExternalQuote,
 } from "./lib/index.ts"
-import { buildSemanticSimulatorResult } from "./lib/semantic-core/adapter.ts"
 import { runSemanticCoreTurn, shouldUseSemanticCore } from "./lib/semantic-core/runtime.ts"
+import { renderSemanticSimulatorResult } from "./lib/semantic-core/renderers/index.ts"
 import type {
   ConversationTurnRequest,
   ConversationTurnResponse,
@@ -376,7 +376,7 @@ serve(async (req) => {
                 history,
                 sender_display_name: senderDisplayName,
               })
-              result = buildSemanticSimulatorResult(stateWithFirstFlag, semantic)
+              result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
             } else {
               result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
                 supabaseAdmin,
@@ -425,7 +425,7 @@ serve(async (req) => {
               history,
               sender_display_name: senderDisplayName,
             })
-            result = buildSemanticSimulatorResult(stateWithFirstFlag, semantic)
+            result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
           } else {
             result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
               supabaseAdmin,
