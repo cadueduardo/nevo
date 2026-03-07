@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 /** Helpers extraidos para reduzir duplicacao em qualification e qualification_rejected. */
 import { buildResult } from "./state.ts"
 import {
@@ -13,6 +13,12 @@ import { getServiceWithPrice, findServiceFromText } from "./services.ts"
 import { interpretAdditionalBookingsWithAI, interpretBookingRequestWithAI } from "./ai.ts"
 import { getSequenceServicesFromText } from "./anytime-handlers.ts"
 import { normalizeText } from "./utils.ts"
+import {
+  shouldBlockByTargetAudience,
+  buildTargetAudienceRestrictionMessage,
+  needsAudienceClarification,
+  buildAudienceClarificationMessage,
+} from "./policies.ts"
 import type { SimulatorConfig, SimulatorState, SimulatorResult } from "./types.ts"
 import type { ResolveBookingFn } from "./orchestrator-actions.ts"
 
@@ -78,6 +84,25 @@ export async function enterBookingFromIntent({
   orchestrator,
   includeIntro = true,
 }: EnterBookingFromIntentParams): Promise<SimulatorResult> {
+  if (shouldBlockByTargetAudience(config, text)) {
+    return buildResult(
+      buildTargetAudienceRestrictionMessage(config),
+      {
+        ...nextState,
+        step: "qualification",
+        slots: { ...nextState.slots, attendee_name: undefined },
+      },
+      ["Quero agendar"]
+    )
+  }
+
+  if (needsAudienceClarification(config, text)) {
+    return buildResult(
+      buildAudienceClarificationMessage(config),
+      { ...nextState, step: "qualification" },
+      ["Sim, nos encaixamos", "Quero agendar"]
+    )
+  }
   nextState.mode = "booking"
   nextState.step = undefined
 
@@ -206,3 +231,4 @@ export async function enterBookingFromIntent({
   nextState.last_service_options = buildServiceOptions(config.services || [])
   return buildResult(prompt.message, nextState, prompt.action_options)
 }
+

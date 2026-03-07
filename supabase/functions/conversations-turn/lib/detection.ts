@@ -13,6 +13,7 @@ export function isGreeting(text: string): boolean {
     /^(boa tarde)$/,
     /^(boa noite)$/,
     /^(e ai)$/,
+    /^(oi|oii|oa|ola|opa|fala|salve)\s+e ai(\s+(tudo bem|tudo certo|tranquilo|suave|beleza|como ta|como e que ta))?$/,
     /^(oi|oii|oa|ola|opa|fala|salve)\s+(tudo bem|tudo certo|tranquilo|suave|beleza|como ta|como e que ta)$/,
     /^(bom dia|boa tarde|boa noite)\s+(tudo bem|tudo certo)?$/,
     /^(e ai)\s+(como e que ta|como ta|tudo bem|tudo certo|suave|beleza)$/,
