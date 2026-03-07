@@ -16,7 +16,7 @@ export function executeBookingFinalization(
   context: SemanticTurnContext
 ): SemanticExecutorResult {
   const completedBooking = buildCompletedBookingDraft(snapshot, decision, context)
-  const postConfirmationPlan = buildPostConfirmationPlan(context, snapshot)
+  const postConfirmationPlan = buildPostConfirmationPlan(context, snapshot, completedBooking)
   const completedBookings = [...(context.state.completed_bookings || []), completedBooking]
   const schedule = getScheduleForStaff(context.business_brain.raw_config, completedBooking.staff_name)
   const intervalMinutes = schedule?.interval_minutes ?? 30

@@ -87,10 +87,14 @@ export function buildBookingConfirmedMessage(draft: SemanticCompletedBookingDraf
 }
 
 export function buildNextAttendeePrompt(plan: SemanticPostConfirmationPlan): string {
+  const suggestionLine =
+    plan.suggested_next_time && plan.suggested_next_date
+      ? `Posso te sugerir ${plan.suggested_next_time} em ${plan.suggested_next_date} para seguir na sequencia.`
+      : ""
   if (plan.next_attendee_name) {
-    return `Vamos seguir com o proximo agendamento. Agora vou preparar o atendimento de ${plan.next_attendee_name}.`
+    return `Vamos seguir com o proximo agendamento. Agora vou preparar o atendimento de ${plan.next_attendee_name}.${suggestionLine ? ` ${suggestionLine}` : ""}`
   }
-  return "Vamos seguir com o proximo agendamento. Qual e o nome da proxima pessoa?"
+  return `Vamos seguir com o proximo agendamento. Qual e o nome da proxima pessoa?${suggestionLine ? ` ${suggestionLine}` : ""}`
 }
 
 export function buildPriceGuidanceMessage(): string {

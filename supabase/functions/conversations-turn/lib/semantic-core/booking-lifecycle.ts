@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { getServicesTotalDurationOrFallback } from "../services.ts"
 import { getOtherStaffOptions } from "../staff.ts"
+import { planSequentialBooking } from "./sequence-planner.ts"
 import type {
   SemanticCompletedBookingDraft,
   SemanticDecisionResult,
@@ -58,7 +59,8 @@ export function buildCompletedBookingDraft(
 
 export function buildPostConfirmationPlan(
   context: SemanticTurnContext,
-  snapshot: TurnSemanticSnapshot
+  snapshot: TurnSemanticSnapshot,
+  completedBooking?: SemanticCompletedBookingDraft
 ): SemanticPostConfirmationPlan {
   const existingCompleted = context.state.completed_bookings?.length || 0
   const remainingQueue = Array.isArray(context.state.pending_attendee_queue)
@@ -85,6 +87,19 @@ export function buildPostConfirmationPlan(
         "Outro dia",
       ]
     : undefined
+  const defaultNextService =
+    context.state.pending_default_service ||
+    completedBooking?.service ||
+    context.state.slots?.service
+  const sequenceSuggestion =
+    remainingQueue.length > 0
+      ? planSequentialBooking(
+          context.business_brain,
+          context.state,
+          completedBooking || (anchorBooking as SemanticCompletedBookingDraft | undefined),
+          defaultNextService
+        )
+      : undefined
   return {
     has_more_people: remainingQueue.length > 0 || (context.state.pending_additional_count || 0) > 0,
     next_attendee_name: remainingQueue[0],
@@ -93,5 +108,8 @@ export function buildPostConfirmationPlan(
     completed_count_after_confirmation: existingCompleted + 1,
     next_action_options: nextActionOptions,
     should_offer_sequence_template: Boolean(remainingQueue[0]),
+    suggested_next_date: sequenceSuggestion?.suggested_date,
+    suggested_next_time: sequenceSuggestion?.suggested_time,
+    suggested_next_staff_name: sequenceSuggestion?.suggested_staff_name,
   }
 }

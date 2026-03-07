@@ -217,6 +217,9 @@ export interface SemanticPostConfirmationPlan {
   completed_count_after_confirmation: number
   next_action_options?: string[]
   should_offer_sequence_template?: boolean
+  suggested_next_date?: string
+  suggested_next_time?: string
+  suggested_next_staff_name?: string
 }
 
 export interface SemanticExecutorResult {
