@@ -166,6 +166,27 @@ export interface SemanticDecisionResult {
   }
 }
 
+export interface SemanticCompletedBookingDraft {
+  attendee_name?: string
+  service?: string
+  service_names: string[]
+  duration_minutes?: number
+  date?: string
+  time?: string
+  staff_name?: string
+  customer_phone?: string
+  customer_email?: string
+  contact_delivery?: "own" | "primary"
+}
+
+export interface SemanticPostConfirmationPlan {
+  has_more_people: boolean
+  next_attendee_name?: string
+  remaining_queue: string[]
+  expected_total_people?: number
+  completed_count_after_confirmation: number
+}
+
 export interface SemanticExecutorResult {
   executor: string
   state_patch?: Partial<SimulatorState>

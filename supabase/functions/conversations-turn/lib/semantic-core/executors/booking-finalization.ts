@@ -1,11 +1,20 @@
 // @ts-nocheck
-import type { SemanticDecisionResult, SemanticExecutorResult, TurnSemanticSnapshot } from "../types.ts"
+import type {
+  SemanticDecisionResult,
+  SemanticExecutorResult,
+  SemanticTurnContext,
+  TurnSemanticSnapshot,
+} from "../types.ts"
+import { buildCompletedBookingDraft, buildPostConfirmationPlan } from "../booking-lifecycle.ts"
 import { buildExecutorResult } from "./shared.ts"
 
 export function executeBookingFinalization(
   decision: SemanticDecisionResult,
-  snapshot: TurnSemanticSnapshot
+  snapshot: TurnSemanticSnapshot,
+  context: SemanticTurnContext
 ): SemanticExecutorResult {
+  const completedBooking = buildCompletedBookingDraft(snapshot, decision, context)
+  const postConfirmationPlan = buildPostConfirmationPlan(context, snapshot)
   return buildExecutorResult({
     executor: "booking-finalization",
     decision,
@@ -15,10 +24,12 @@ export function executeBookingFinalization(
       last_confirm_options: ["Confirmar agendamento"],
     },
     metadata: {
-      attendee_name: decision.slot_updates?.attendee_name || snapshot.attendee_names?.[0] || null,
-      service_names: snapshot.service_candidates.map((service) => service.name),
-      date: decision.slot_updates?.date || snapshot.date_candidate?.iso_date || null,
-      time: decision.slot_updates?.time || snapshot.time_candidate?.hhmm || null,
+      attendee_name: completedBooking.attendee_name || null,
+      service_names: completedBooking.service_names,
+      date: completedBooking.date || null,
+      time: completedBooking.time || null,
+      completed_booking: completedBooking,
+      post_confirmation_plan: postConfirmationPlan,
     },
   })
 }

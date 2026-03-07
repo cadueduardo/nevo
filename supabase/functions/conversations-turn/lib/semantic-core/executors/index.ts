@@ -32,7 +32,7 @@ export function executeSemanticDecision(
     case "offer_sequence_template":
       return executeBookingSequence(decision, snapshot, context)
     case "confirm_booking":
-      return executeBookingFinalization(decision, snapshot)
+      return executeBookingFinalization(decision, snapshot, context)
     default:
       return null
   }

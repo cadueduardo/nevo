@@ -955,3 +955,8 @@ Fonte:
 - renderers e executores de booking agora consomem semantic-core/booking-context.ts como fonte unica de progresso de booking
 - isso reduz leituras paralelas de state, snapshot e usiness_brain para multiagendamento e sequencia
 
+
+- lifecycle de booking estruturado em semantic-core/booking-lifecycle.ts`r
+- finalizacao agora produz completed_booking e post_confirmation_plan como metadados estruturados
+- isso prepara a migracao da confirmacao real de multiagendamento para o semantic core
+
