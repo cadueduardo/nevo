@@ -1037,3 +1037,11 @@ Fonte:
 - FAQ, endereco, horarios e resumo do proprio agendamento agora reaproveitam a base informativa do legado
 - respostas de preco e detalhe de servico passaram a usar contexto estruturado do business_brain
 
+
+- harness inicial de testes do semantic core criado`r
+- cobre:
+  - fila dinamica de pessoas inferidas
+  - promocao do atendido atual a partir da fila
+  - continuidade do multiagendamento apos confirmacao
+- execucao local depende de `deno test`, que ainda nao esta disponivel neste ambiente
+
