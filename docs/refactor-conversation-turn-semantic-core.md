@@ -356,6 +356,58 @@ Regra importante desta etapa:
 - [ ] pedido de agendamento ambiguu com publico restrito pede confirmacao antes de seguir
 - [ ] multiagendamento nao colapsa para fluxo simples
 
+### Implementacao inicial desta fase
+
+Arquivo:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/decision-engine.ts`
+
+Escopo atual:
+
+- traduz `TurnSemanticSnapshot` + `SemanticTurnContext` em `SemanticDecisionResult`
+- define uma unica proxima acao sem reinterpretar a mensagem
+- centraliza a precedencia entre:
+  - saudacao
+  - identidade
+  - preco
+  - detalhe de servico
+  - lista de servicos
+  - booking
+  - confirmacao de publico
+  - sequencia
+  - fallback
+
+### Ordem de precedencia inicial
+
+1. `greeting`
+2. `identity`
+3. `price`
+4. `service_detail`
+5. `service_list`
+6. `booking` / `booking_sequence`
+   - confirma publico se necessario
+   - pede nome se faltar
+   - pede servico se faltar
+   - oferece template de sequencia se detectado
+   - pede data
+   - pede hora
+   - pede contato
+   - confirma booking
+7. `closing`
+8. `handoff_fallback`
+
+### Principio importante
+
+- o `decision_engine` nao chama IA
+- ele confia no snapshot semantico pronto
+- se o runtime precisar de algo a mais, isso deve virar campo do snapshot e nao logica paralela
+
+### O que ainda nao foi feito nesta fase
+
+- integrar o `decision_engine` no runtime do legado
+- ligar cada `action` a executores novos
+- remover os branches equivalentes do `turn-handler.ts`
+
 ## Fase 6 - Booking Core novo
 
 - [ ] reimplementar booking por executores pequenos
