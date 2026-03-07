@@ -3,6 +3,13 @@ import { createClient } from '@supabase/supabase-js'
 import { resolveActorByPhone } from '@/lib/actor'
 import { buildSimulatorContextFromBusinessConfig } from '@/lib/simulator/context'
 
+function computeTypingDelay(replyTexts: string[]): number {
+  const joined = replyTexts.join('\n\n').trim()
+  const chars = joined.length
+  const estimated = Math.round(chars * 28)
+  return Math.max(3200, Math.min(6500, estimated))
+}
+
 /**
  * POST /api/webhooks/evolution/[agentId]
  * Webhook chamado pela Evolution API quando chega uma mensagem (evento MESSAGES_UPSERT).
@@ -130,6 +137,8 @@ export async function POST(
   // Indicador de digitação (3 pontinhos) enquanto processa
   // Evolution API: POST /chat/sendPresence/{instance} | doc: https://doc.evolution-api.com/v2/api-reference/chat-controller/send-presence
   const presenceNumber = numberForEvolution
+  const typingStartedAt = Date.now()
+  const initialPresenceDelay = 6500
   for (const presenceUrl of baseCandidates.map((b) => `${b}/chat/sendPresence/${instance}`)) {
     try {
       const presenceRes = await fetch(presenceUrl, {
@@ -142,7 +151,7 @@ export async function POST(
         body: JSON.stringify({
           number: presenceNumber,
           presence: 'composing',
-          delay: 2500,
+          delay: initialPresenceDelay,
         }),
       })
       if (presenceRes.ok) break
@@ -225,6 +234,12 @@ export async function POST(
     }
   } else {
     console.error('[webhooks/evolution] conversations-turn não OK:', turnResponse.status, await turnResponse.text())
+  }
+
+  const desiredTypingDelay = computeTypingDelay(replyTexts)
+  const elapsedSinceTyping = Date.now() - typingStartedAt
+  if (elapsedSinceTyping < desiredTypingDelay) {
+    await new Promise((resolve) => setTimeout(resolve, desiredTypingDelay - elapsedSinceTyping))
   }
 
   const evolutionSendUrls = baseCandidates.map((b) => `${b}/message/sendText/${instance}`)
