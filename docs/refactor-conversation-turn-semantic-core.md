@@ -534,3 +534,65 @@ Ao migrar para o semantic core, cada responsabilidade abaixo deve existir em ape
 - [x] arquivos de maior acoplamento identificados
 - [ ] classificar o que sera reaproveitado vs descartado
 - [ ] definir o primeiro corte do semantic core no codigo
+
+## Classificacao inicial do legado
+
+### Reaproveitar com poucas mudancas
+
+- `lib/utils.ts`
+- `lib/services.ts`
+- `lib/staff.ts`
+- `lib/calendar.ts`
+- `lib/http.ts`
+- `lib/db.ts`
+- `lib/holidays.ts`
+- `lib/generatePdf.ts`
+- `lib/booking/time-and-availability.ts`
+- `lib/booking/contact.ts`
+- `lib/booking/confirmation.ts`
+
+### Adaptar para o semantic core
+
+- `lib/ai.ts`
+- `lib/informational.ts`
+- `lib/builders.ts`
+- `lib/policies.ts`
+- `lib/state.ts`
+- `lib/cancellation.ts`
+- `lib/booking/finalization.ts`
+- `lib/booking/staff-and-date.ts`
+
+### Candidatos a esvaziamento ou substituicao
+
+- `lib/turn-handler.ts`
+- `lib/orchestrator-actions.ts`
+- `lib/qualification.ts`
+- `lib/resolve-booking.ts`
+- `lib/conversation-rules.ts`
+- `lib/flow-pipeline.ts`
+- `lib/booking/service.ts`
+- `lib/turn/early/*`
+
+### Observacao
+
+Substituicao nao significa apagar de imediato. Esses arquivos devem ficar funcionando atras de uma flag de fallback ate a matriz de aceite ficar verde.
+
+## Contratos iniciais do semantic core
+
+Arquivo criado:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/types.ts`
+
+Tipos definidos nesta etapa:
+
+- `BusinessBrain`
+- `TurnSemanticSnapshot`
+- `SemanticDecisionResult`
+- `SemanticTurnContext`
+
+### Criterio de aceite desta etapa
+
+- [x] classificacao inicial do legado registrada
+- [x] contratos centrais iniciais criados
+- [ ] revisar contratos apos o primeiro builder do business brain
+- [ ] revisar contratos apos o primeiro interpreter semantico
