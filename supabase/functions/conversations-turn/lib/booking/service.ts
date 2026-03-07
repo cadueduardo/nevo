@@ -768,5 +768,44 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     }
   }
 
+  if (
+    nextState.pending_second_service_choice &&
+    Array.isArray(nextState.last_service_options) &&
+    nextState.last_service_options.length > 0
+  ) {
+    const attendee = nextState.slots.attendee_name || "essa pessoa"
+    return buildResult(
+      `Ainda estou aguardando qual servico voce quer agendar para ${attendee}. Pode escolher uma das opcoes abaixo.`,
+      nextState,
+      toNumberedOptions(nextState.last_service_options)
+    )
+  }
+
+  if (
+    nextState.pending_template_choice &&
+    Array.isArray(nextState.last_template_options) &&
+    nextState.last_template_options.length > 0
+  ) {
+    return buildResult(
+      "Ainda preciso que voce escolha uma das opcoes para seguir com o proximo agendamento.",
+      nextState,
+      nextState.last_template_options
+    )
+  }
+
+  if (
+    nextState.service_selection_multi &&
+    Array.isArray(nextState.last_service_options) &&
+    nextState.last_service_options.length > 0 &&
+    !nextState.slots.service
+  ) {
+    const attendee = nextState.slots.attendee_name || "essa pessoa"
+    return buildResult(
+      `Nao consegui identificar os servicos de ${attendee}. Responda com os numeros separados por virgula, por exemplo: 1,2.`,
+      nextState,
+      toNumberedOptions(nextState.last_service_options)
+    )
+  }
+
   return null
 }
