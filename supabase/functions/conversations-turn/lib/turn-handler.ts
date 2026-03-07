@@ -73,13 +73,36 @@ import { ensureConversationMode } from "./ensure-mode.ts"
 import { resolveBooking } from "./resolve-booking.ts"
 import { tryAnswerInformationalQuestion } from "./informational.ts"
 import { getEntryActionOptions } from "./request-helpers.ts"
+import { runSemanticCoreTurn, shouldUseSemanticCore } from "./semantic-core/runtime.ts"
+import { renderSemanticSimulatorResult } from "./semantic-core/renderers/index.ts"
 
+
+async function trySemanticCoreResult(
+  message: string,
+  config: SimulatorConfig,
+  state: SimulatorState,
+  history: Array<{ role: string; content: string }>,
+  senderDisplayName?: string
+): Promise<SimulatorResult | null> {
+  if (!shouldUseSemanticCore()) return null
+  const semantic = await runSemanticCoreTurn({
+    message,
+    channel: "web_simulator",
+    config,
+    state,
+    history,
+    sender_display_name: senderDisplayName,
+  })
+  return await renderSemanticSimulatorResult(state, semantic)
+}
 function handleQuoteModeMessage(config: SimulatorConfig, text: string, nextState: SimulatorState): SimulatorResult {
   return resolveQuote(config, text, nextState)
 }
 
 export async function handleBookingModeMessage(context: SimulatorHandlerContext): Promise<SimulatorResult> {
   const { text, config, nextState, history, senderDisplayName, isFirst } = context
+  const semanticResult = await trySemanticCoreResult(text, config, nextState, history, senderDisplayName)
+  if (semanticResult) return semanticResult
   const cordial = getCordialPrefix(config, isFirst)
 
   if (isPriceQuestion(text)) {
@@ -151,6 +174,8 @@ export async function processSimulatorMessage(
   runtime?: ConversationRuntimeContext
 ): Promise<SimulatorResult> {
   const incomingText = input.trim()
+  const semanticResult = await trySemanticCoreResult(incomingText, config, state, history, senderDisplayName)
+  if (semanticResult) return semanticResult
   const numericMultiServiceResolved = tryResolveNumericMultipleServiceSelection(incomingText, state)
   const numericServiceResolved = tryResolveNumericServiceSelection(incomingText, state)
   let numericActionResolved: string | null = null
@@ -755,3 +780,4 @@ export async function processSimulatorMessage(
   ]
   return runPipeline(ctx, phases)
 }
+

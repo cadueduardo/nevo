@@ -624,7 +624,7 @@ Candidatos a reaproveitamento:
 - [x] executores iniciais de booking implementados
 - [x] `runtime` unificado do semantic core implementado
 - [x] integracao controlada com `index.ts` via flag
-- [ ] integracao controlada com `turn-handler.ts`
+- [x] integracao controlada com `turn-handler.ts`
 - [ ] renderizacao real por canal
 
 ### Integracao controlada atual
@@ -632,6 +632,7 @@ Candidatos a reaproveitamento:
 Arquivos:
 
 - `supabase/functions/conversations-turn/index.ts`
+- `supabase/functions/conversations-turn/lib/turn-handler.ts`
 - `supabase/functions/conversations-turn/lib/semantic-core/renderers/index.ts`
 - `supabase/functions/conversations-turn/lib/semantic-core/renderers/greeting.ts`
 - `supabase/functions/conversations-turn/lib/semantic-core/renderers/informational.ts`
@@ -643,6 +644,7 @@ Comportamento:
 - se `CONVERSATION_TURN_ENGINE=semantic_core`, o `index.ts` executa:
   - `runSemanticCoreTurn(...)`
   - `renderSemanticSimulatorResult(...)`
+- `processSimulatorMessage(...)` e `handleBookingModeMessage(...)` tambem respeitam a mesma flag
 - se a flag nao estiver ativa, continua no legado
 
 Observacao importante:
