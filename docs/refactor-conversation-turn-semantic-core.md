@@ -236,6 +236,35 @@ Regra:
 - [ ] manter o motor atual utilizavel durante a migracao
 - [ ] definir flag de fallback entre legado e semantic core
 
+### Implementacao inicial desta fase
+
+Arquivo:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/runtime.ts`
+
+Ja existe:
+
+- `runSemanticCoreTurn(...)`
+- `shouldUseSemanticCore(...)`
+
+Comportamento atual:
+
+- o runtime novo ja executa internamente:
+  1. `BusinessBrain`
+  2. `TurnSemanticSnapshot`
+  3. `DecisionEngine`
+  4. executores
+- a ativacao por padrao continua desligada
+- a flag prevista e:
+  - `CONVERSATION_TURN_ENGINE=semantic_core`
+  - `CONVERSATION_TURN_ENGINE=legacy`
+
+Objetivo desta etapa:
+
+- permitir integracao gradual sem remover o legado
+- comparar comportamento do motor novo contra o antigo
+- reduzir risco de regressao durante a migracao
+
 ## Fase 1 - Auditoria completa do legado
 
 - [ ] mapear todos os entrypoints reais do turno
@@ -587,8 +616,15 @@ Candidatos a reaproveitamento:
 
 - [x] branch criada
 - [x] documento base criado
-- [ ] auditoria completa do legado em andamento
-- [ ] nenhuma mudanca estrutural do motor novo iniciada ainda
+- [x] auditoria inicial do legado documentada
+- [x] contratos do semantic core criados
+- [x] `BusinessBrain` implementado
+- [x] `TurnSemanticSnapshot` implementado
+- [x] `DecisionEngine` implementado
+- [x] executores iniciais de booking implementados
+- [x] `runtime` unificado do semantic core implementado
+- [ ] integracao controlada com `index.ts` / `turn-handler.ts`
+- [ ] renderizacao real por canal
 
 ## Auditoria do legado - mapa inicial do fluxo atual
 
