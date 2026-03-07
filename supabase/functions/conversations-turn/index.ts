@@ -29,6 +29,8 @@ import {
   handleInternalIntent,
   tryHandleExternalQuote,
 } from "./lib/index.ts"
+import { buildSemanticSimulatorResult } from "./lib/semantic-core/adapter.ts"
+import { runSemanticCoreTurn, shouldUseSemanticCore } from "./lib/semantic-core/runtime.ts"
 import type {
   ConversationTurnRequest,
   ConversationTurnResponse,
@@ -365,16 +367,28 @@ serve(async (req) => {
         } else {
           // NÃ£o classificou como intent interna; segue fluxo normal.
           try {
-            result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
-              supabaseAdmin,
-              tenantId: tenant.id,
-              agentId,
-              contactId: contact.id,
-              contact,
-              senderDisplayName,
-              history,
-              config,
-            })
+            if (shouldUseSemanticCore({ channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator" })) {
+              const semantic = await runSemanticCoreTurn({
+                message: body.message,
+                channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
+                config,
+                state: stateWithFirstFlag,
+                history,
+                sender_display_name: senderDisplayName,
+              })
+              result = buildSemanticSimulatorResult(stateWithFirstFlag, semantic)
+            } else {
+              result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
+                supabaseAdmin,
+                tenantId: tenant.id,
+                agentId,
+                contactId: contact.id,
+                contact,
+                senderDisplayName,
+                history,
+                config,
+              })
+            }
           } catch (err) {
             console.error("processSimulatorMessage error:", err)
             result = {
@@ -402,17 +416,29 @@ serve(async (req) => {
         }
       } else {
         try {
-          result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
-            supabaseAdmin,
-            tenantId: tenant.id,
-            agentId,
-            isExternalActor: true,
-            contactId: contact.id,
-            contact,
-            senderDisplayName,
-            history,
-            config,
-          })
+          if (shouldUseSemanticCore({ channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator" })) {
+            const semantic = await runSemanticCoreTurn({
+              message: body.message,
+              channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
+              config,
+              state: stateWithFirstFlag,
+              history,
+              sender_display_name: senderDisplayName,
+            })
+            result = buildSemanticSimulatorResult(stateWithFirstFlag, semantic)
+          } else {
+            result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
+              supabaseAdmin,
+              tenantId: tenant.id,
+              agentId,
+              isExternalActor: true,
+              contactId: contact.id,
+              contact,
+              senderDisplayName,
+              history,
+              config,
+            })
+          }
         } catch (err) {
           console.error("processSimulatorMessage error:", err)
           result = {

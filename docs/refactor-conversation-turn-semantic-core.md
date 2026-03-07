@@ -623,8 +623,29 @@ Candidatos a reaproveitamento:
 - [x] `DecisionEngine` implementado
 - [x] executores iniciais de booking implementados
 - [x] `runtime` unificado do semantic core implementado
-- [ ] integracao controlada com `index.ts` / `turn-handler.ts`
+- [x] integracao controlada com `index.ts` via flag
+- [ ] integracao controlada com `turn-handler.ts`
 - [ ] renderizacao real por canal
+
+### Integracao controlada atual
+
+Arquivos:
+
+- `supabase/functions/conversations-turn/index.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/adapter.ts`
+
+Comportamento:
+
+- se `CONVERSATION_TURN_ENGINE=semantic_core`, o `index.ts` executa:
+  - `runSemanticCoreTurn(...)`
+  - `buildSemanticSimulatorResult(...)`
+- se a flag nao estiver ativa, continua no legado
+
+Observacao importante:
+
+- o renderer atual do semantic core ainda e minimo
+- serve para testar o pipeline novo sem misturar com o legado
+- ainda nao substitui a renderizacao final por canal
 
 ## Auditoria do legado - mapa inicial do fluxo atual
 
