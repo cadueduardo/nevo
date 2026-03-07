@@ -176,11 +176,8 @@ export async function POST(
         },
         body: JSON.stringify({
           number: presenceNumber,
-          options: {
-            presence: 'composing',
-            delay: 15000,
-            number: presenceNumber,
-          },
+          presence: 'composing',
+          delay: 15000,
         }),
       })
       if (presenceRes.ok) break
@@ -194,6 +191,12 @@ export async function POST(
   const functionsUrl = `${url}/functions/v1/conversations-turn`
   let turnResponse: Response
   try {
+    console.log('[webhooks/evolution] chamando conversations-turn:', {
+      agentId,
+      from: fromNormalized,
+      session_id: fromNormalized,
+      functionsUrl,
+    })
     turnResponse = await fetch(functionsUrl, {
       method: 'POST',
       headers: {
@@ -247,8 +250,13 @@ export async function POST(
             .map((n) => ({ phone: String(n.phone || '').trim(), content: String(n.content || '').trim() }))
             .filter((n) => n.phone.length > 0 && n.content.length > 0)
         : []
+      console.log('[webhooks/evolution] conversations-turn OK:', {
+        agentId,
+        replyCount: replyTexts.length,
+        outboundCount: outboundNotifications.length,
+      })
     } catch {
-      // keep default replyTexts
+      console.warn('[webhooks/evolution] conversations-turn OK, mas JSON de resposta nao pode ser interpretado')
     }
   } else {
     console.error('[webhooks/evolution] conversations-turn não OK:', turnResponse.status, await turnResponse.text())
@@ -273,6 +281,11 @@ export async function POST(
           }),
         })
         if (evoRes.ok) {
+          console.log('[webhooks/evolution] sendText OK:', {
+            evolutionSendUrl,
+            number: numberForEvolution,
+            chars: replyText.length,
+          })
           sent = true
           break
         }
@@ -319,6 +332,11 @@ export async function POST(
           }),
         })
         if (evoRes.ok) {
+          console.log('[webhooks/evolution] outbound sendText OK:', {
+            evolutionSendUrl,
+            number: targetNumber,
+            chars: content.length,
+          })
           sent = true
           break
         }

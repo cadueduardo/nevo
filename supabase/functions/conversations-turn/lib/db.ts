@@ -85,7 +85,7 @@ export async function getOrCreateChannel(
   if (existing) return existing
   const insertPayload =
     channelType === "whatsapp"
-      ? { tenant_id: tenantId, agent_id: agentId, type: "whatsapp", provider: "twilio", provider_config: {}, is_active: true }
+      ? { tenant_id: tenantId, agent_id: agentId, type: "whatsapp", provider: "evolution", provider_config: {}, is_active: true }
       : { tenant_id: tenantId, agent_id: agentId, type: "web_chat", chat_slug: simSlug, is_active: true }
   const { data, error } = await supabaseAdmin.from("channel").insert(insertPayload).select().single()
   if (error) throw error
