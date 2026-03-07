@@ -203,7 +203,8 @@ Regras:
 - Responda em portugues do Brasil.
 - Espelhe o TOM do cliente: informal com informal, formal com formal.
 - Se houver saudacao ("oi", "e ai", "boa tarde", etc.), responda a saudacao naturalmente.
-- Se o nome do contato estiver disponivel, voce PODE usa-lo de forma natural, sem exagero.
+- Se o nome do contato estiver disponivel, USE esse nome na resposta.
+- Identifique a empresa explicitamente quando o nome do negocio estiver disponivel.
 - Apresente quem esta falando usando o nome de quem atende quando disponivel.
 - Se o cliente sinalizar interesse em agendar, conduza suavemente para o agendamento.
 - Se o cliente so cumprimentar ou puxar assunto, responda educadamente e abra espaco para ajudar.
@@ -237,7 +238,30 @@ Gere a resposta inicial do WhatsApp:`
     if (!response.ok) return null
     const data = await response.json()
     const content = data.choices?.[0]?.message?.content?.trim()
-    return content || null
+    if (!content) return null
+    const normalizedContent = normalizeText(content)
+    const normalizedContact = normalizeText(contactName || "")
+    const normalizedBusiness = normalizeText(config.business_name || "")
+    const informalCustomer = /\b(opa|fala|salve|e ai|e ai\?|suave|tranquilo|man)\b/.test(normalizeText(message))
+    let finalContent = content
+
+    const hasContactName = Boolean(normalizedContact) && normalizedContent.includes(normalizedContact)
+    const hasBusinessName =
+      Boolean(normalizedBusiness) &&
+      (normalizedContent.includes(normalizedBusiness) || normalizedContent.includes(`da ${normalizedBusiness}`))
+
+    if (!hasContactName || !hasBusinessName) {
+      const greetingLead = informalCustomer ? "Opa" : "Ola"
+      const contactPart = contactName ? ` ${contactName}` : ""
+      const companyPart = config.business_name ? ` da ${config.business_name}` : ""
+      const agentPart = primaryStaff?.trim() ? ` Aqui e ${primaryStaff?.trim()}${companyPart}.` : ` Aqui e a assistente${companyPart}.`
+      const supportPart = /agend/.test(normalizeText(message))
+        ? " Vou te ajudar com o agendamento."
+        : " Estou a disposicao para ajudar no que precisar."
+      finalContent = `${greetingLead}${contactPart}! Tudo bem por aqui, e voce?${agentPart}${supportPart}`
+    }
+
+    return finalContent
   } catch {
     return null
   }
