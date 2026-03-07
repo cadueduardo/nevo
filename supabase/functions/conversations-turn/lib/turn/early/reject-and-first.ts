@@ -1,5 +1,5 @@
 // @ts-nocheck
-/** Early steps: rejei√ß√£o de servi√ßo n√£o listado, primeira intera√ß√£o (sauda√ß√£o), primeira mensagem com IA. */
+/** Early steps: rejeiÁ„o de serviÁo n„o listado, primeira interaÁ„o (saudaÁ„o), primeira mensagem com IA. */
 import type { SimulatorResult } from "../../types.ts"
 import type { TurnPipelineContext } from "../../turn-context.ts"
 import { buildResult } from "../../state.ts"
@@ -9,7 +9,7 @@ import { getGreetingMessage, buildClarificationMessage } from "../../builders.ts
 import { isGreeting, isExplicitBookingIntent } from "../../detection.ts"
 import { findServiceFromText, getServicesTotalDuration } from "../../services.ts"
 import { getStaffList, getScheduleForStaff } from "../../staff.ts"
-import { answerWithContextualAI, generateAvailabilityResponseWithAI } from "../../ai.ts"
+import { answerWithContextualAI, generateAvailabilityResponseWithAI, interpretBookingRequestWithAI } from "../../ai.ts"
 import { classifyServiceMatch } from "../../services.ts"
 import { hasMatchContext } from "../../qualification.ts"
 import { generateRejectionMessageWithAI } from "../../builders.ts"
@@ -19,12 +19,13 @@ import { getEntryActionOptions } from "../../request-helpers.ts"
 import { resolveQuote } from "../../quote-mode.ts"
 import { handleFirstMessageOrchestratorAction } from "../../orchestrator-actions.ts"
 import { resolveBooking } from "../../resolve-booking.ts"
+import { enterBookingFromIntent } from "../../qualification.ts"
 
 function handleQuoteModeMessage(config: import("../../types.ts").SimulatorConfig, text: string, nextState: import("../../types.ts").SimulatorState): SimulatorResult {
   return resolveQuote(config, text, nextState)
 }
 
-/** Retorna resultado se rejei√ß√£o unlisted, primeira sauda√ß√£o ou primeira mensagem (IA); sen√£o null. */
+/** Retorna resultado se rejeiÁ„o unlisted, primeira saudaÁ„o ou primeira mensagem (IA); sen„o null. */
 export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<SimulatorResult | null> {
   const { text, config, nextState, history, senderDisplayName, isFirst, textNorm, minOrchestratorConfidence, getOrchestrator } = ctx
 
@@ -55,8 +56,21 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
 
   if (isFirst && !nextState.mode && !nextState.step) {
     const greeting = getGreetingMessage(config)
-    if (isExplicitBookingIntent(text)) {
-      const handled = await resolveBooking(config, text, nextState, history, senderDisplayName)
+    const bookingRequest = await interpretBookingRequestWithAI(
+      text,
+      { history, sender_display_name: senderDisplayName },
+      config
+    )
+    if (isExplicitBookingIntent(text) || bookingRequest?.booking_intent) {
+      const handled = await enterBookingFromIntent({
+        text,
+        config,
+        nextState,
+        history,
+        senderDisplayName,
+        resolveBooking,
+        includeIntro: false,
+      })
       if (handled) return handled
     }
     const orchestrator = await getOrchestrator()
@@ -132,18 +146,6 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
         return handleQuoteModeMessage(config, text, nextState)
       }
     }
-    if (hasConfidentOrchestrator) {
-      const handled = await handleFirstMessageOrchestratorAction(orchestrator, {
-        text,
-        config,
-        nextState,
-        history,
-        senderDisplayName,
-        isFirst,
-        resolveBooking,
-      })
-      if (handled) return handled
-    }
     const aiAnswer = await answerWithContextualAI(config, text, history)
     if (aiAnswer) return buildResult(aiAnswer, { ...nextState, step: "qualification" })
     return buildResult(buildClarificationMessage(config), { ...nextState, step: "qualification" })
@@ -151,3 +153,5 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
 
   return null
 }
+
+

@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { normalizeText, getTodayIsoBusinessTz, addDaysToIsoDate, getWeekdayKey } from "./utils.ts"
 import type { SimulatorState, SimulatorConfig, FlowOrchestratorOutput } from "./types.ts"
+import { findServicesFromText } from "./services.ts"
 
 const DAY_NAMES: Record<string, string> = {
   monday: "segunda",
@@ -44,6 +45,15 @@ function buildConfigSummary(config: SimulatorConfig): string {
       parts.push(`\n[IMPORTANTE: ${withPrice.length} serviço(s) tem preço. Quando o cliente perguntar preço, informe o valor exato.]`)
     }
   }
+  const faq = Array.isArray(config.faq) ? config.faq.filter((item) => item?.question || item?.answer) : []
+  if (faq.length > 0) {
+    const faqLines = faq
+      .map((item) => `- ${String(item.question || "Pergunta").trim()}: ${String(item.answer || "").trim()}`)
+      .join("\n")
+    parts.push(`FAQ:
+${faqLines}`)
+  }
+
   const staff = config.staff || []
   if (staff.length > 0) {
     parts.push(`Colaboradores: ${staff.map((s) => s.name).join(", ")}`)
@@ -575,6 +585,15 @@ export type AdditionalBookingsInterpretation = {
   for_whom?: string | null
 }
 
+
+export type BookingRequestInterpretation = {
+  booking_intent?: boolean
+  includes_self?: boolean
+  attendee_names?: string[]
+  additional_count?: number
+  for_whom?: string | null
+  service_names?: string[]
+}
 export async function interpretAdditionalBookingsWithAI(
   text: string,
   context?: { has_completed_booking?: boolean; history?: Array<{ role: string; content: string }> }
@@ -654,6 +673,139 @@ export async function interpretAdditionalBookingsWithAI(
       count: count ?? undefined,
       has_additional: hasAdditional ?? undefined,
       for_whom: forWhom ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
+
+export async function interpretBookingRequestWithAI(
+  text: string,
+  context: {
+    history?: Array<{ role: string; content: string }>
+    sender_display_name?: string
+  },
+  config: SimulatorConfig
+): Promise<BookingRequestInterpretation | null> {
+  const normalized = normalizeText(text || "")
+  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
+  const heuristicServices = findServicesFromText(text, config.services || [])
+  const explicitCountMatch =
+    normalized.match(/\bnos?\s+(\d+)\b/) ||
+    normalized.match(/\b(\d+)\s+(pessoas|agendamentos|cortes?)\b/)
+  const explicitTotal = explicitCountMatch ? Number(explicitCountMatch[1]) : null
+  if (explicitTotal && explicitTotal >= 2) {
+    return {
+      booking_intent: true,
+      includes_self: /\b(pra|para|pro)\s+mim\b|\beu\b|\bnos\b|\bn[o?]s\b/.test(normalized),
+      attendee_names: [],
+      additional_count: explicitTotal - 1,
+      for_whom: null,
+      service_names: heuristicServices,
+    }
+  }
+
+  const openaiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!openaiKey) {
+    return heuristicServices.length > 0
+      ? {
+          booking_intent: true,
+          includes_self: /\b(pra|para|pro)\s+mim\b|\beu\b/.test(normalized),
+          attendee_names: [],
+          additional_count: 0,
+          for_whom: null,
+          service_names: heuristicServices,
+        }
+      : null
+  }
+
+  const historyText =
+    context.history && context.history.length > 0
+      ? context.history
+          .slice(-6)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : "(sem historico)"
+  const servicesJson = servicesList.length ? JSON.stringify(servicesList) : "[]"
+  const senderLine = context.sender_display_name?.trim()
+    ? `Nome do remetente atual: "${context.sender_display_name.trim()}".`
+    : "Nome do remetente atual: desconhecido."
+
+  const systemPrompt =
+    "Voce extrai um pedido de agendamento em estrutura semantica. " +
+    "Interprete linguagem natural, variacoes informais, nomes, parentescos e quantidade de pessoas. " +
+    "Nao dependa de frases fixas. Retorne apenas JSON valido."
+
+  const userPrompt =
+    `Mensagem atual: "${text}"\n` +
+    `Historico recente:\n${historyText}\n` +
+    `${senderLine}\n` +
+    `Servicos do negocio: ${servicesJson}\n\n` +
+    "Retorne JSON com:\n" +
+    '- booking_intent (boolean): true quando a mensagem quer marcar/agendar atendimento.\n' +
+    '- includes_self (boolean): true quando a pessoa inclui a si mesma no pedido ("pra mim", "eu", "nos").\n' +
+    '- attendee_names (array de strings): nomes proprios de pessoas citadas que vao receber atendimento. Nao inclua parentesco sem nome. Nao invente nome.\n' +
+    '- additional_count (numero inteiro >= 0): quantidade de pessoas adicionais apos o primeiro agendamento.\n' +
+    '- for_whom (string ou null): quando for um unico agendamento para outra pessoa sem multiagendamento claro.\n' +
+    '- service_names (array de strings): servicos citados que existam na lista do negocio.\n\n' +
+    "Regras criticas:\n" +
+    '- "pra mim e meu irmao", "eu e meu amigo", "nos 3", "cabelo dos muleque Davi, Carlos, Joao" = booking_intent true e additional_count correto.\n' +
+    '- Quando a mensagem citar 2 ou mais pessoas pelo nome, considere multiagendamento.\n' +
+    '- "quero agendar um corte pro Gustavo" = booking_intent true, attendee_names ["Gustavo"], additional_count 0.\n' +
+    '- "quero agendar pro Elisa e o Malaquias" = booking_intent true, attendee_names ["Elisa","Malaquias"], additional_count 1.\n' +
+    '- Varios servicos para a mesma pessoa NAO significam multiagendamento.\n' +
+    '- Se houver duvida entre uma ou varias pessoas, prefira refletir a mensagem literal do cliente.\n'
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 220,
+        temperature: 0,
+        response_format: { type: "json_object" },
+      }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    if (!content) return null
+    const parsed = JSON.parse(content)
+    const attendeeNames = Array.isArray(parsed.attendee_names)
+      ? parsed.attendee_names
+          .filter((value) => typeof value === "string" && value.trim())
+          .map((value) => value.trim())
+      : []
+    const matchedServices = Array.isArray(parsed.service_names)
+      ? parsed.service_names
+          .filter((value) => typeof value === "string" && value.trim())
+          .map((value) => servicesList.find((svc) => normalizeText(svc) === normalizeText(value)) || value.trim())
+      : heuristicServices
+    const additionalCountRaw =
+      typeof parsed.additional_count === "number" && parsed.additional_count >= 0
+        ? parsed.additional_count
+        : null
+    return {
+      booking_intent: parsed.booking_intent === true,
+      includes_self: parsed.includes_self === true,
+      attendee_names: Array.from(new Set(attendeeNames)),
+      additional_count:
+        additionalCountRaw ??
+        (attendeeNames.length > 1 ? attendeeNames.length - 1 : 0),
+      for_whom:
+        typeof parsed.for_whom === "string" && parsed.for_whom.trim()
+          ? parsed.for_whom.trim()
+          : null,
+      service_names: Array.from(new Set(matchedServices.filter(Boolean))),
     }
   } catch {
     return null

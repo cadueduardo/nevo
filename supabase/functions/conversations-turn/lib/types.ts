@@ -25,6 +25,7 @@ export interface SimulatorConfig {
   business_type?: string
   context_mode?: SimulatorContextMode
   establishment_address?: EstablishmentAddress
+  faq?: Array<{ question?: string; answer?: string }>
   tone?: "formal" | "amigavel" | "profissional" | "engracado"
   catalog_services?: Array<{ name: string; description?: string }>
   booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
@@ -89,6 +90,7 @@ export interface SimulatorState {
   pending_additional_booking?: boolean
   pending_additional_count?: number
   pending_attendee_name?: boolean
+  pending_attendee_queue?: string[]
   pending_template_choice?: boolean
   pending_cancel_selection?: boolean
   pending_cancel_confirm?: boolean
@@ -211,6 +213,7 @@ export interface ConversationTurnRequest {
     business_type?: string
     context_mode?: "booking" | "quote" | "both"
     establishment_address?: EstablishmentAddress
+    faq?: Array<{ question?: string; answer?: string }>
     tone?: "formal" | "amigavel" | "profissional" | "engracado"
     catalog_services?: Array<{ name: string; description?: string }>
     booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>

@@ -339,6 +339,32 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
           nextState.slots.customer_phone = undefined
           nextState.slots.customer_email = undefined
           nextState.contact_preference = undefined
+          const queuedName = nextState.pending_attendee_queue?.shift()
+          if (queuedName) {
+            nextState.slots.attendee_name = queuedName
+            nextState.pending_attendee_name = false
+            nextState.pending_template_choice = true
+            const referenceBooking = nextState.completed_bookings?.[nextState.completed_bookings.length - 1]
+            const hasOtherStaff = getOtherStaffOptions(config, referenceBooking?.staff_name).length > 0
+            const rawOpts = [
+              "Mesmo dia e colaborador (proximo horario)",
+              ...(hasOtherStaff ? ["Mesmo horario com outro colaborador"] : []),
+              "Outro horario no mesmo dia",
+              "Outro dia",
+            ]
+            const options = rawOpts.map((o, i) => `${i + 1} - ${o}`)
+            nextState.last_template_options = options
+            const optsText = hasOtherStaff
+              ? "Prefere o proximo horario, o mesmo horario com outro colaborador, outro horario no mesmo dia ou outro dia?"
+              : "Prefere o proximo horario, outro horario no mesmo dia ou outro dia?"
+            return buildResult(
+              `Perfeito! Agendei ${completedService} para ${formatDatePt(
+                completedDate || dateIso
+              )} as ${completedTime || time}. Vamos agendar ${queuedName} agora? ${optsText}`,
+              nextState,
+              options
+            )
+          }
           nextState.pending_attendee_name = true
           return buildResult(
             `Perfeito! Agendei ${completedService} para ${formatDatePt(

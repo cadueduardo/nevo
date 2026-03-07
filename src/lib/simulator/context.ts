@@ -192,6 +192,7 @@ export function buildSimulatorContextFromBusinessConfig(input: {
     business_type: (bc.business_type as string | undefined) ?? undefined,
     context_mode: normalizeContextMode(bc.context_mode),
     establishment_address: normalizeAddress(bc.establishment_address),
+    faq: Array.isArray(bc.faq) ? (bc.faq as Array<{ question?: string; answer?: string }>) : undefined,
     tone: normalizeToneFromOnboarding(input.tone),
     catalog_services: catalogServices,
     booking_services: bookingServices,

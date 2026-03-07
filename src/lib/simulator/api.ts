@@ -23,6 +23,7 @@ export interface SimulatorRequest {
       localidade: string
       uf: string
     }
+    faq?: Array<{ question?: string; answer?: string }>
     tone?: 'formal' | 'amigavel' | 'profissional' | 'engracado'
     catalog_services?: Array<{ name: string; description?: string }>
     booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
