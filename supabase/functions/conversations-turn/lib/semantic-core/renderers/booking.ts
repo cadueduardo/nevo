@@ -5,10 +5,12 @@ import {
   buildAttendeeQuestion,
   buildAudienceConfirmationMessage,
   buildBookingConfirmationMessage,
+  buildBookingConfirmedMessage,
   buildCalendarOfferMessage,
   buildContactQuestion,
   buildDateQuestion,
   buildFallbackClarificationMessage,
+  buildNextAttendeePrompt,
   buildSequenceOfferQuestion,
   buildServiceQuestion,
   buildTimeQuestion,
@@ -78,6 +80,18 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
         action_options: execution?.action_options || booking.contact_options,
       }
     case "confirm_booking":
+      if (execution?.metadata?.completed_booking) {
+        const confirmed = execution.metadata.completed_booking as any
+        const postPlan = execution.metadata.post_confirmation_plan as any
+        const lines = [buildBookingConfirmedMessage(confirmed)]
+        if (postPlan?.has_more_people) {
+          lines.push(buildNextAttendeePrompt(postPlan))
+        }
+        return {
+          message: lines.join("\n\n"),
+          action_options: postPlan?.has_more_people ? ["Continuar agendamento"] : ["Confirmar agendamento"],
+        }
+      }
       return {
         message: buildBookingConfirmationMessage(serviceNames, attendeeName, dateIso, time),
         action_options: ["Confirmar agendamento"],

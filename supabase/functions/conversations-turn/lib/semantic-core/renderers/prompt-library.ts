@@ -1,5 +1,9 @@
 // @ts-nocheck
-import type { BusinessBrain } from "../types.ts"
+import type {
+  BusinessBrain,
+  SemanticCompletedBookingDraft,
+  SemanticPostConfirmationPlan,
+} from "../types.ts"
 
 export function formatAudienceLabel(modes: string[] = []): string {
   if (modes.includes("men_only") && modes.includes("kids_only")) return "homens e criancas"
@@ -72,6 +76,21 @@ export function buildBookingConfirmationMessage(
 
 export function buildCalendarOfferMessage(): string {
   return "Gostaria de adicionar este compromisso no seu calendario?"
+}
+
+export function buildBookingConfirmedMessage(draft: SemanticCompletedBookingDraft): string {
+  const serviceLabel = draft.service || draft.service_names.join(", ") || "o atendimento"
+  const attendeeLabel = draft.attendee_name ? ` de ${draft.attendee_name}` : ""
+  const dateLabel = draft.date ? ` para ${draft.date}` : ""
+  const timeLabel = draft.time ? ` as ${draft.time}` : ""
+  return `Perfeito! O agendamento${attendeeLabel} de ${serviceLabel} ficou confirmado${dateLabel}${timeLabel}.`
+}
+
+export function buildNextAttendeePrompt(plan: SemanticPostConfirmationPlan): string {
+  if (plan.next_attendee_name) {
+    return `Vamos seguir com o proximo agendamento. Agora vou preparar o atendimento de ${plan.next_attendee_name}.`
+  }
+  return "Vamos seguir com o proximo agendamento. Qual e o nome da proxima pessoa?"
 }
 
 export function buildPriceGuidanceMessage(): string {

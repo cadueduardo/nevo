@@ -960,3 +960,7 @@ Fonte:
 - finalizacao agora produz completed_booking e post_confirmation_plan como metadados estruturados
 - isso prepara a migracao da confirmacao real de multiagendamento para o semantic core
 
+
+- renderer de booking agora consome completed_booking e post_confirmation_plan`r
+- semantic core passa a renderizar confirmacao e continuidade de multiagendamento com base em metadados estruturados, nao em texto solto
+
