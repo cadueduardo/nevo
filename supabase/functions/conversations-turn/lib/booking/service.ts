@@ -64,7 +64,6 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     Boolean(
       referenceBooking &&
       completedCount > 0 &&
-      nextState.slots.attendee_name &&
       !nextState.slots.date &&
       !nextState.slots.time &&
       hasServicePromptContext
