@@ -58,6 +58,7 @@ import {
 } from "./conversation-rules.ts"
 import {
   tryResolveNumericServiceSelection,
+  tryResolveNumericMultipleServiceSelection,
   getSequenceServicesFromText,
   buildServicesListResult,
 } from "./anytime-handlers.ts"
@@ -149,6 +150,7 @@ export async function processSimulatorMessage(
   runtime?: ConversationRuntimeContext
 ): Promise<SimulatorResult> {
   const incomingText = input.trim()
+  const numericMultiServiceResolved = tryResolveNumericMultipleServiceSelection(incomingText, state)
   const numericServiceResolved = tryResolveNumericServiceSelection(incomingText, state)
   let numericActionResolved: string | null = null
   if (/^[1-9]\d*$/.test(incomingText) && Array.isArray(state.last_action_options) && state.last_action_options.length > 0) {
@@ -158,7 +160,7 @@ export async function processSimulatorMessage(
       numericActionResolved = raw.replace(/^\d+\s*-\s*/, "").trim()
     }
   }
-  const text = numericActionResolved || numericServiceResolved || incomingText
+  const text = numericActionResolved || numericMultiServiceResolved || numericServiceResolved || incomingText
   const textNorm = normalizeText(text)
   const hasForcedBookingAction = normalizeText(String(numericActionResolved || "")) === "quero agendar"
   const hasStrongBookingIntent =

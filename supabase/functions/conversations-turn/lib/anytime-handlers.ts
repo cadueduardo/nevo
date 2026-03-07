@@ -8,6 +8,7 @@ import {
   addDaysToIsoDate,
   getTodayIsoBusinessTz,
   resolveOptionByNumber,
+  resolveMultipleOptionsByNumber,
   isWithinSchedule,
   getMockAvailability,
 } from "./utils.ts"
@@ -72,6 +73,20 @@ export function tryResolveNumericServiceSelection(incomingText: string, state: S
     return resolveOptionByNumber(incomingText, serviceOptions)
   }
   return null
+}
+
+export function tryResolveNumericMultipleServiceSelection(
+  incomingText: string,
+  state: SimulatorState
+): string | null {
+  if (!/^\s*\d+(?:\s*[,;eE]\s*|\s+e\s+|\s+)\d+/.test(incomingText.trim())) return null
+  const serviceOptions = (state.last_service_options || []).map((s) => String(s || "").trim()).filter(Boolean)
+  if (serviceOptions.length === 0) return null
+  const selected = resolveMultipleOptionsByNumber(incomingText, serviceOptions)
+  if (selected.length === 0) return null
+  const withoutVisit = selected.filter((s) => normalizeText(s) !== normalizeText("Quero agendar uma visita"))
+  if (withoutVisit.length === 0) return "visita"
+  return withoutVisit.join(", ")
 }
 
 export function tryHandlePriceQuestionAnytime(
