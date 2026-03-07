@@ -951,3 +951,7 @@ Fonte:
 - decision-engine.ts deixou de remontar fila, slots e passos faltantes em varios blocos
 - objetivo: uma fonte unica para progresso de booking dentro do semantic core
 
+
+- renderers e executores de booking agora consomem semantic-core/booking-context.ts como fonte unica de progresso de booking
+- isso reduz leituras paralelas de state, snapshot e usiness_brain para multiagendamento e sequencia
+

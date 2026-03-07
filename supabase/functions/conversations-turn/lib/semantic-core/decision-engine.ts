@@ -237,6 +237,7 @@ export function decideNextSemanticAction(
         confidence: snapshot.confidence,
         slot_updates: booking.slot_updates,
         semantic_people_queue: booking.people_queue,
+        action_options: booking.contact_options,
         next_question: buildNextQuestion("ask_contact", context),
         channel_hints: {
           prefer_numbered_options: true,

@@ -1,11 +1,19 @@
 // @ts-nocheck
-import type { SemanticDecisionResult, SemanticExecutorResult, TurnSemanticSnapshot } from "../types.ts"
+import type {
+  SemanticDecisionResult,
+  SemanticExecutorResult,
+  SemanticTurnContext,
+  TurnSemanticSnapshot,
+} from "../types.ts"
+import { deriveBookingContext } from "../booking-context.ts"
 import { buildExecutorResult } from "./shared.ts"
 
 export function executeBookingSequence(
   decision: SemanticDecisionResult,
-  snapshot: TurnSemanticSnapshot
+  snapshot: TurnSemanticSnapshot,
+  context: SemanticTurnContext
 ): SemanticExecutorResult {
+  const booking = deriveBookingContext(snapshot, context)
   return buildExecutorResult({
     executor: "booking-sequence",
     decision,
@@ -18,7 +26,8 @@ export function executeBookingSequence(
     action_options: decision.action_options,
     metadata: {
       sequence_request: snapshot.sequence_request === true,
-      completed_bookings_count: 0,
+      completed_bookings_count: context.state.completed_bookings?.length || 0,
+      sequence_anchor_booking: booking.sequence_anchor_booking || null,
     },
   })
 }

@@ -5,6 +5,7 @@ import type {
   SemanticTurnContext,
   TurnSemanticSnapshot,
 } from "../types.ts"
+import { deriveBookingContext } from "../booking-context.ts"
 import { buildExecutorResult } from "./shared.ts"
 
 export function executeBookingAttendee(
@@ -12,8 +13,9 @@ export function executeBookingAttendee(
   snapshot: TurnSemanticSnapshot,
   context: SemanticTurnContext
 ): SemanticExecutorResult {
-  const attendeeName = snapshot.attendee_names?.[0] || decision.slot_updates?.attendee_name
-  const queue = decision.semantic_people_queue || snapshot.attendee_names || []
+  const booking = deriveBookingContext(snapshot, context)
+  const attendeeName = booking.current_attendee_name || decision.slot_updates?.attendee_name
+  const queue = decision.semantic_people_queue || booking.people_queue || []
 
   return buildExecutorResult({
     executor: "booking-attendee",

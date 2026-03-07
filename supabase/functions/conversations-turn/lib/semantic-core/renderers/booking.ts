@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { SemanticRuntimeResult } from "../runtime.ts"
+import { deriveBookingContext } from "../booking-context.ts"
 import {
   buildAttendeeQuestion,
   buildAudienceConfirmationMessage,
@@ -34,7 +35,8 @@ function getTime(semantic: SemanticRuntimeResult): string | undefined {
 }
 
 export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemanticMessage {
-  const attendeeName = getAttendeeName(semantic)
+  const booking = deriveBookingContext(semantic.snapshot, semantic.context)
+  const attendeeName = getAttendeeName(semantic) || booking.current_attendee_name
   const serviceNames = getServiceNames(semantic)
   const dateIso = getDate(semantic)
   const time = getTime(semantic)
@@ -50,12 +52,12 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
       }
     case "ask_attendee_name":
       return {
-        message: buildAttendeeQuestion(Boolean(semantic.context.state.pending_additional_booking)),
+        message: buildAttendeeQuestion(booking.is_additional_booking),
       }
     case "ask_service":
       return {
         message: buildServiceQuestion(attendeeName),
-        action_options: execution?.action_options || brain.services.map((service) => service.name),
+        action_options: execution?.action_options || booking.service_options,
       }
     case "offer_sequence_template":
       return {
@@ -73,7 +75,7 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
     case "ask_contact":
       return {
         message: buildContactQuestion(),
-        action_options: ["So celular", "So email", "Celular e email"],
+        action_options: execution?.action_options || booking.contact_options,
       }
     case "confirm_booking":
       return {

@@ -18,6 +18,11 @@ export interface DerivedBookingContext {
   has_time: boolean
   has_contact: boolean
   has_completed_bookings: boolean
+  is_additional_booking: boolean
+  current_attendee_name?: string
+  service_options: string[]
+  contact_options: string[]
+  sequence_anchor_booking?: Record<string, unknown>
   should_offer_sequence_template: boolean
   missing_step: "audience" | "attendee" | "service" | "date" | "time" | "contact" | "confirm"
 }
@@ -52,6 +57,22 @@ export function deriveBookingContext(
     context.state.contact_preference || context.state.slots?.customer_phone || context.state.slots?.customer_email
   )
   const hasCompletedBookings = Boolean(context.state.completed_bookings?.length)
+  const isAdditionalBooking = Boolean(context.state.pending_additional_booking || hasCompletedBookings)
+  const currentAttendeeName =
+    slotUpdates.attendee_name ||
+    context.state.slots?.attendee_name ||
+    context.state.pending_attendee_queue?.[0] ||
+    undefined
+  const serviceOptions = context.business_brain.services.map((service) => service.name)
+  const contactOptions = isAdditionalBooking
+    ? ["So celular", "So email", "Celular e email", "Pular (usar contato do titular)"]
+    : ["So celular", "So email", "Celular e email"]
+  const sequenceAnchorBooking =
+    (Array.isArray(context.state.completed_bookings) && context.state.completed_bookings.length > 0
+      ? context.state.completed_bookings[context.state.completed_bookings.length - 1]
+      : undefined) ||
+    context.state.last_booking ||
+    undefined
   const shouldOfferSequenceTemplate = Boolean(snapshot.sequence_request && hasCompletedBookings)
 
   let missingStep: DerivedBookingContext["missing_step"] = "confirm"
@@ -72,6 +93,11 @@ export function deriveBookingContext(
     has_time: hasTime,
     has_contact: hasContact,
     has_completed_bookings: hasCompletedBookings,
+    is_additional_booking: isAdditionalBooking,
+    current_attendee_name: currentAttendeeName,
+    service_options: serviceOptions,
+    contact_options: contactOptions,
+    sequence_anchor_booking: sequenceAnchorBooking,
     should_offer_sequence_template: shouldOfferSequenceTemplate,
     missing_step: missingStep,
   }

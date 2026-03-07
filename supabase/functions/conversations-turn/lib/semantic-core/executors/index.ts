@@ -28,9 +28,9 @@ export function executeSemanticDecision(
     case "ask_time":
       return executeBookingTime(decision, snapshot)
     case "ask_contact":
-      return executeBookingContact(decision)
+      return executeBookingContact(decision, snapshot, context)
     case "offer_sequence_template":
-      return executeBookingSequence(decision, snapshot)
+      return executeBookingSequence(decision, snapshot, context)
     case "confirm_booking":
       return executeBookingFinalization(decision, snapshot)
     default:
