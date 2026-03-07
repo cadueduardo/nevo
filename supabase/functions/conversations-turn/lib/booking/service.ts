@@ -52,13 +52,27 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
   const referenceBooking =
     lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
   const inferredTemplateChoice = parseTemplateChoice(text, state.last_template_options || undefined)
+  const lastAssistantNorm = normalizeText(String(lastAssistantMsg || ""))
+  const completedCount =
+    (nextState.completed_bookings?.length ?? state.completed_bookings?.length ?? 0)
+  const awaitingSequenceServiceChoice =
+    Boolean(nextState.pending_second_service_choice) ||
+    Boolean(
+      referenceBooking &&
+      completedCount > 0 &&
+      nextState.slots.attendee_name &&
+      !nextState.slots.service &&
+      !nextState.slots.date &&
+      !nextState.slots.time &&
+      /qual[\s\w]*servico/.test(lastAssistantNorm)
+    )
 
   // Trava definitiva: ao escolher "mesmo dia e colaborador (proximo horario)",
   // calcular e sugerir diretamente o slot em sequencia usando o ultimo booking concluido.
   if (
     inferredTemplateChoice === "same_next" &&
     referenceBooking &&
-    !nextState.pending_second_service_choice
+    !awaitingSequenceServiceChoice
   ) {
     nextState.service_selection_multi = false
     nextState.last_service_options = undefined
@@ -189,7 +203,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     !nextState.pending_second_service_choice &&
     !nextState.pending_attendee_name
 
-  if ((!nextState.slots.service || shouldPrioritizeCurrentServiceAnswer) && !nextState.pending_second_service_choice) {
+  if ((!nextState.slots.service || shouldPrioritizeCurrentServiceAnswer) && !awaitingSequenceServiceChoice) {
     // 0) Texto livre baseado nas opcoes exibidas no multi-select (robusto mesmo com catalogo parcial).
     const normalizedInput = normalizeText(text)
     const presentedOptions =
@@ -452,7 +466,8 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     return buildResult(msg, nextState, numberedOpts)
   }
 
-  if (nextState.pending_second_service_choice) {
+  if (awaitingSequenceServiceChoice) {
+    nextState.pending_second_service_choice = true
     const serviceOptions =
       state.service_selection_multi && Array.isArray(state.last_service_options) && state.last_service_options.length > 0
         ? state.last_service_options
