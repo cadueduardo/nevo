@@ -205,6 +205,110 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     !nextState.pending_second_service_choice &&
     !nextState.pending_attendee_name
 
+  if (state.pending_second_service_choice || awaitingSequenceServiceChoice) {
+    nextState.pending_second_service_choice = true
+    const serviceOptions =
+      state.service_selection_multi && Array.isArray(state.last_service_options) && state.last_service_options.length > 0
+        ? state.last_service_options
+        : buildServiceOptions(config.services || [])
+    const canSequence = config.allow_sequence_booking
+    const multiSelectedByNumber =
+      canSequence &&
+      state.service_selection_multi &&
+      Array.isArray(state.last_service_options) &&
+      state.last_service_options.length > 0
+        ? resolveMultipleOptionsByNumber(text, state.last_service_options)
+        : []
+    const multiSelectedByText = canSequence ? getSequenceServicesFromText(config, text) : []
+    const resolvedMulti =
+      multiSelectedByNumber.length > 0
+        ? multiSelectedByNumber
+        : multiSelectedByText.length > 0
+          ? multiSelectedByText
+          : []
+    const resolvedSingle = resolveOptionByNumber(text, serviceOptions) || findServiceFromText(text, config.services || [])
+    const serviceNames = (config.services || []).map((s) => s.name).filter(Boolean)
+    const resolvedServiceValue =
+      resolvedMulti.length > 0
+        ? resolvedMulti.filter((s) => s !== "Quero agendar uma visita").join(", ") || "visita"
+        : resolvedSingle && (resolvedSingle === "Quero agendar uma visita" || serviceNames.includes(resolvedSingle))
+          ? (resolvedSingle === "Quero agendar uma visita" ? "visita" : resolvedSingle)
+          : null
+    if (resolvedServiceValue) {
+      nextState.pending_second_service_choice = false
+      nextState.slots.service = resolvedServiceValue
+      nextState.service_selection_multi = false
+      nextState.last_service_options = undefined
+      const last =
+        lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
+      const lastStaffName = last?.staff_name || nextState.slots.staff_name || getStaffList(config)[0]?.name
+      if (last?.date && lastStaffName) {
+        const secondDuration = getServicesTotalDurationOrFallback(config, nextState.slots.service)
+        const firstDuration =
+          (last as any)?.duration_minutes ??
+          getServicesTotalDurationOrFallback(config, last.service) ??
+          30
+        const firstEndMins = toMinutes(last.time) + firstDuration
+        const firstEndTime = fromMinutes(firstEndMins)
+        const nextSlot = getNextAvailableSlot(
+          last.date,
+          config,
+          nextState.booked_slots,
+          lastStaffName,
+          firstEndTime,
+          secondDuration ?? undefined
+        )
+        if (nextSlot) {
+          nextState.slots.date = last.date
+          nextState.slots.time = nextSlot
+          nextState.slots.staff_name = lastStaffName
+          const firstName = last.attendee_name || "o primeiro"
+          const confirmOpts = [
+            `1 - Sim, ${nextSlot}`,
+            "2 - Outro horario no mesmo dia",
+            "3 - Outro dia",
+            ...(getOtherStaffOptions(config, lastStaffName).length > 0
+              ? ["4 - Mesmo horario com outro colaborador"]
+              : []),
+          ]
+          nextState.last_confirm_options = confirmOpts
+          return buildResult(
+            `Otimo, vamos agendar ${nextState.slots.attendee_name || "ele"} em seguida ao ${firstName}. Sugeri ${nextSlot} em ${formatDatePt(last.date)}. Posso confirmar?`,
+            nextState,
+            confirmOpts
+          )
+        }
+        const hasOtherStaff = getOtherStaffOptions(config, lastStaffName).length > 0
+        const msg = hasOtherStaff
+          ? "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia ou manter esse horario com outro colaborador?"
+          : "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia?"
+        return buildResult(msg, nextState, [
+          "1 - Outro dia",
+          ...(hasOtherStaff ? ["2 - Mesmo horario com outro colaborador"] : []),
+        ])
+      }
+    } else {
+      const canSequenceSecond = config.allow_sequence_booking
+      const sequenceList =
+        (config.sequence_eligible_services?.length ?? 0) > 0
+          ? config.sequence_eligible_services!
+          : (config.services || []).map((s) => s.name).filter(Boolean)
+      if (canSequenceSecond && sequenceList.length > 0) {
+        nextState.service_selection_multi = true
+        const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
+        nextState.last_service_options = sequenceOpts
+        return buildResult(
+          "Qual servico voce prefere para essa pessoa? (pode escolher mais de um)",
+          nextState,
+          toNumberedOptions(sequenceOpts)
+        )
+      }
+      nextState.service_selection_multi = false
+      const opts = buildServiceOptions(config.services || []).map((o, i) => `${i + 1} - ${o}`)
+      return buildResult("Qual servico voce prefere? (responda com o numero ou nome)", nextState, opts)
+    }
+  }
+
   if ((!nextState.slots.service || shouldPrioritizeCurrentServiceAnswer) && !awaitingSequenceServiceChoice) {
     // 0) Texto livre baseado nas opcoes exibidas no multi-select (robusto mesmo com catalogo parcial).
     const normalizedInput = normalizeText(text)
@@ -466,110 +570,6 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     nextState.last_service_options = serviceOptsList
     const msg = `Otimo! Vamos agendar primeiro para o ${name}. Qual servico seria? (responda com o numero ou nome)`
     return buildResult(msg, nextState, numberedOpts)
-  }
-
-  if (awaitingSequenceServiceChoice) {
-    nextState.pending_second_service_choice = true
-    const serviceOptions =
-      state.service_selection_multi && Array.isArray(state.last_service_options) && state.last_service_options.length > 0
-        ? state.last_service_options
-        : buildServiceOptions(config.services || [])
-    const canSequence = config.allow_sequence_booking
-    const multiSelectedByNumber =
-      canSequence &&
-      state.service_selection_multi &&
-      Array.isArray(state.last_service_options) &&
-      state.last_service_options.length > 0
-        ? resolveMultipleOptionsByNumber(text, state.last_service_options)
-        : []
-    const multiSelectedByText = canSequence ? getSequenceServicesFromText(config, text) : []
-    const resolvedMulti =
-      multiSelectedByNumber.length > 0
-        ? multiSelectedByNumber
-        : multiSelectedByText.length > 0
-          ? multiSelectedByText
-          : []
-    const resolvedSingle = resolveOptionByNumber(text, serviceOptions) || findServiceFromText(text, config.services || [])
-    const serviceNames = (config.services || []).map((s) => s.name).filter(Boolean)
-    const resolvedServiceValue =
-      resolvedMulti.length > 0
-        ? resolvedMulti.filter((s) => s !== "Quero agendar uma visita").join(", ") || "visita"
-        : resolvedSingle && (resolvedSingle === "Quero agendar uma visita" || serviceNames.includes(resolvedSingle))
-          ? (resolvedSingle === "Quero agendar uma visita" ? "visita" : resolvedSingle)
-          : null
-    if (resolvedServiceValue) {
-      nextState.pending_second_service_choice = false
-      nextState.slots.service = resolvedServiceValue
-      nextState.service_selection_multi = false
-      nextState.last_service_options = undefined
-      const last =
-        lastCompletedFromNextState || lastCompletedFromState || nextState.last_booking || state.last_booking
-      const lastStaffName = last?.staff_name || nextState.slots.staff_name || getStaffList(config)[0]?.name
-      if (last?.date && lastStaffName) {
-        const secondDuration = getServicesTotalDurationOrFallback(config, nextState.slots.service)
-        const firstDuration =
-          (last as any)?.duration_minutes ??
-          getServicesTotalDurationOrFallback(config, last.service) ??
-          30
-        const firstEndMins = toMinutes(last.time) + firstDuration
-        const firstEndTime = fromMinutes(firstEndMins)
-        const nextSlot = getNextAvailableSlot(
-          last.date,
-          config,
-          nextState.booked_slots,
-          lastStaffName,
-          firstEndTime,
-          secondDuration ?? undefined
-        )
-        if (nextSlot) {
-          nextState.slots.date = last.date
-          nextState.slots.time = nextSlot
-          nextState.slots.staff_name = lastStaffName
-          const firstName = last.attendee_name || "o primeiro"
-          const confirmOpts = [
-            `1 - Sim, ${nextSlot}`,
-            "2 - Outro horario no mesmo dia",
-            "3 - Outro dia",
-            ...(getOtherStaffOptions(config, lastStaffName).length > 0
-              ? ["4 - Mesmo horario com outro colaborador"]
-              : []),
-          ]
-          nextState.last_confirm_options = confirmOpts
-          return buildResult(
-            `Otimo, vamos agendar ${nextState.slots.attendee_name || "ele"} em seguida ao ${firstName}. Sugeri ${nextSlot} em ${formatDatePt(last.date)}. Posso confirmar?`,
-            nextState,
-            confirmOpts
-          )
-        }
-        const hasOtherStaff = getOtherStaffOptions(config, lastStaffName).length > 0
-        const msg = hasOtherStaff
-          ? "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia ou manter esse horario com outro colaborador?"
-          : "Nao encontrei um proximo horario nesse dia. Quer escolher outro dia?"
-        return buildResult(msg, nextState, [
-          "1 - Outro dia",
-          ...(hasOtherStaff ? ["2 - Mesmo horario com outro colaborador"] : []),
-        ])
-      }
-    } else {
-      const canSequenceSecond = config.allow_sequence_booking
-      const sequenceList =
-        (config.sequence_eligible_services?.length ?? 0) > 0
-          ? config.sequence_eligible_services!
-          : (config.services || []).map((s) => s.name).filter(Boolean)
-      if (canSequenceSecond && sequenceList.length > 0) {
-        nextState.service_selection_multi = true
-        const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
-        nextState.last_service_options = sequenceOpts
-        return buildResult(
-          "Qual servico voce prefere para essa pessoa? (pode escolher mais de um)",
-          nextState,
-          toNumberedOptions(sequenceOpts)
-        )
-      }
-      nextState.service_selection_multi = false
-      const opts = buildServiceOptions(config.services || []).map((o, i) => `${i + 1} - ${o}`)
-      return buildResult("Qual servico voce prefere? (responda com o numero ou nome)", nextState, opts)
-    }
   }
 
   if (nextState.pending_template_choice) {
