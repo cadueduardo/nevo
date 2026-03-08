@@ -917,6 +917,20 @@ Objetivo:
 - reduzir divergencia entre os dois caminhos principais do entrypoint
 - concentrar o dispatch principal do entrypoint em uma unica funcao local antes de novos cortes de autoridade do legado
 
+### Decimo corte de superficie duplicada do legado
+
+- a preparacao de estado no caminho legado de `qualification` para `preco -> possivel booking` foi consolidada em um helper unico
+- o fluxo antigo ainda oferece preco/lista normalmente, mas sem repetir a mesma mutacao de:
+  - `mode = booking`
+  - `step = undefined`
+  - inferencia de booking adicional
+  - preenchimento de `attendee_name` por `for_whom`
+
+Objetivo:
+
+- reduzir duplicidade no booking legado sem alterar a precedencia atual
+- preparar cortes futuros onde o semantic core assuma de vez essa etapa
+
 ## Guardrails reforcados para a continuacao da refatoracao
 
 Os pontos abaixo passam a fazer parte do plano de implementacao, nao apenas como principios gerais.
