@@ -305,3 +305,55 @@ Deno.test("semantic runtime fixture asks for another date when same_next sequenc
   assertEquals(semantic.decision.action, "ask_date")
   assertIncludes(result.message, "Nao encontrei um proximo horario livre")
 })
+
+Deno.test("semantic runtime fixture keeps raw action options for web_simulator", async () => {
+  const { result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    channel: "web_simulator",
+    snapshot: {
+      intents: { primary: "service_list", secondary: [], booking: false, confidence: 0.9 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "quais servicos voces fazem?" },
+    } as any,
+  })
+
+  assertEquals(result.action_options, ["Corte", "Barba"])
+})
+
+Deno.test("semantic runtime fixture numbers action options for whatsapp", async () => {
+  const { result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    channel: "whatsapp",
+    snapshot: {
+      intents: { primary: "service_list", secondary: [], booking: false, confidence: 0.9 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "quais servicos voces fazem?" },
+    } as any,
+  })
+
+  assertEquals(result.action_options, ["1 - Corte", "2 - Barba"])
+})

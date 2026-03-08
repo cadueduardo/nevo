@@ -607,6 +607,35 @@ Principio importante:
 - [ ] garantir equivalencia de regra entre canais
 - [ ] manter diferenca apenas de UX
 
+### Implementacao inicial desta fase
+
+Arquivos:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/shared.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/index.ts`
+
+Regra aplicada:
+
+- o semantic core continua produzindo a mesma decisao e os mesmos prompts
+- a diferenca de canal acontece apenas na formatacao final de `action_options`
+
+Comportamento atual:
+
+- `web_simulator`
+  - recebe opcoes cruas para a UI renderizar botoes/seletores
+- `whatsapp`
+  - recebe opcoes numeradas quando o canal pede resposta numerica
+  - preserva opcoes em texto livre quando a decisao nao pede numeracao
+
+Observacao:
+
+- a logica de negocio continua em:
+  - snapshot
+  - policy layer
+  - decision engine
+  - executors
+- o renderer por canal so adapta apresentacao
+
 ## Fase 8 - Observabilidade
 
 - [ ] logar snapshot semantico por turno
