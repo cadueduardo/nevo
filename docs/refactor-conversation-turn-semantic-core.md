@@ -332,6 +332,24 @@ Semantica do rollout controlado:
   - sessao
   - remetente
 
+### Playbook de ativacao controlada
+
+1. ativar apenas no simulador:
+   - `CONVERSATION_TURN_ENGINE=semantic_core`
+   - `CONVERSATION_TURN_ENGINE_CHANNELS=web_simulator`
+
+2. ativar para um remetente especifico no WhatsApp:
+   - `CONVERSATION_TURN_ENGINE=semantic_core`
+   - `CONVERSATION_TURN_ENGINE_CHANNELS=whatsapp`
+   - `CONVERSATION_TURN_ENGINE_SENDER_IDS=whatsapp:55119...`
+
+3. ativar para uma sessao especifica:
+   - `CONVERSATION_TURN_ENGINE=semantic_core`
+   - `CONVERSATION_TURN_ENGINE_SESSION_IDS=fixture-session-123`
+
+4. rollback imediato:
+   - `CONVERSATION_TURN_ENGINE=legacy`
+
 Objetivo desta etapa:
 
 - permitir integracao gradual sem remover o legado

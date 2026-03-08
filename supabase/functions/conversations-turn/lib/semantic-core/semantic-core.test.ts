@@ -4,6 +4,7 @@ import { buildDynamicPeopleQueue, deriveBookingContext } from "./booking-context
 import { buildPostConfirmationPlan } from "./booking-lifecycle.ts"
 import { planSequentialBooking } from "./sequence-planner.ts"
 import { applySemanticPolicies } from "./policy-layer.ts"
+import { shouldUseSemanticCore } from "./runtime.ts"
 
 function assertEquals(actual: unknown, expected: unknown, message?: string) {
   const actualJson = JSON.stringify(actual)
@@ -48,6 +49,23 @@ function createBaseState(overrides = {}) {
       ...overrides.slots,
     },
     ...overrides,
+  }
+}
+
+function withEnv(vars: Record<string, string | undefined>, fn: () => void) {
+  const previous = new Map<string, string | undefined>()
+  for (const [key, value] of Object.entries(vars)) {
+    previous.set(key, Deno.env.get(key))
+    if (value == null || value === "") Deno.env.delete(key)
+    else Deno.env.set(key, value)
+  }
+  try {
+    fn()
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value == null || value === "") Deno.env.delete(key)
+      else Deno.env.set(key, value)
+    }
   }
 }
 
@@ -264,4 +282,83 @@ Deno.test("applySemanticPolicies asks clarification for ambiguous audience fit",
   const policy = applySemanticPolicies(snapshot as any, context as any)
   assertEquals(policy.should_clarify, false)
   assertEquals(policy.adjusted_snapshot.risks.audience.requires_confirmation, true)
+})
+
+Deno.test("shouldUseSemanticCore enables global semantic core when no allowlists are configured", () => {
+  withEnv(
+    {
+      CONVERSATION_TURN_ENGINE: "semantic_core",
+      CONVERSATION_TURN_ENGINE_CHANNELS: undefined,
+      CONVERSATION_TURN_ENGINE_SESSION_IDS: undefined,
+      CONVERSATION_TURN_ENGINE_SENDER_IDS: undefined,
+    },
+    () => {
+      assertEquals(
+        shouldUseSemanticCore({
+          channel: "whatsapp",
+          sessionId: "whatsapp:5511999999999",
+          senderId: "whatsapp:5511999999999",
+        }),
+        true
+      )
+    }
+  )
+})
+
+Deno.test("shouldUseSemanticCore respects configured channel and sender allowlists", () => {
+  withEnv(
+    {
+      CONVERSATION_TURN_ENGINE: "semantic_core",
+      CONVERSATION_TURN_ENGINE_CHANNELS: "whatsapp",
+      CONVERSATION_TURN_ENGINE_SESSION_IDS: undefined,
+      CONVERSATION_TURN_ENGINE_SENDER_IDS: "whatsapp:5511950878863",
+    },
+    () => {
+      assertEquals(
+        shouldUseSemanticCore({
+          channel: "whatsapp",
+          sessionId: "whatsapp:5511950878863",
+          senderId: "whatsapp:5511950878863",
+        }),
+        true
+      )
+      assertEquals(
+        shouldUseSemanticCore({
+          channel: "web_simulator",
+          sessionId: "fixture-session",
+          senderId: "web:fixture",
+        }),
+        false
+      )
+      assertEquals(
+        shouldUseSemanticCore({
+          channel: "whatsapp",
+          sessionId: "whatsapp:5511972763228",
+          senderId: "whatsapp:5511972763228",
+        }),
+        false
+      )
+    }
+  )
+})
+
+Deno.test("shouldUseSemanticCore stays disabled when engine is legacy", () => {
+  withEnv(
+    {
+      CONVERSATION_TURN_ENGINE: "legacy",
+      CONVERSATION_TURN_ENGINE_CHANNELS: "whatsapp",
+      CONVERSATION_TURN_ENGINE_SESSION_IDS: "whatsapp:5511950878863",
+      CONVERSATION_TURN_ENGINE_SENDER_IDS: "whatsapp:5511950878863",
+    },
+    () => {
+      assertEquals(
+        shouldUseSemanticCore({
+          channel: "whatsapp",
+          sessionId: "whatsapp:5511950878863",
+          senderId: "whatsapp:5511950878863",
+        }),
+        false
+      )
+    }
+  )
 })
