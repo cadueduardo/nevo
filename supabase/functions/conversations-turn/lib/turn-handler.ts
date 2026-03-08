@@ -112,13 +112,17 @@ function shouldEnterLegacyBookingFromSignals(params: {
     (params.confidence ?? 0) >= params.minConfidence
   )
 }
+function applyLegacyBookingModeState(nextState: SimulatorState): void {
+  nextState.mode = "booking"
+  nextState.step = undefined
+}
+
 async function applyLegacyPriceBookingLeadContext(
   nextState: SimulatorState,
   text: string,
   history: Array<{ role: string; content: string }>
 ): Promise<void> {
-  nextState.mode = "booking"
-  nextState.step = undefined
+  applyLegacyBookingModeState(nextState)
   const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
   if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
     applyLegacyAdditionalBookingSetup(nextState, interpreted?.count ?? 1)
@@ -261,8 +265,7 @@ export async function processSimulatorMessage(
     !isExplicitBookingIntent(text) &&
     !isGreeting(text)
   if ((nextState.pending_attendee_name || askedForAttendeeNameHardGuard) && plausibleAttendeeAnswer) {
-    nextState.mode = "booking"
-    nextState.step = undefined
+    applyLegacyBookingModeState(nextState)
     applyLegacyAdditionalBookingSetup(nextState, nextState.pending_additional_count ?? 1)
     return await handleBookingModeMessage({
       text,
@@ -360,8 +363,7 @@ export async function processSimulatorMessage(
           ""
         const name = await extractAttendeeNameForMultiBooking(text, { lastAssistantMessage: last })
         if (!name) return null
-        nextState.mode = "booking"
-        nextState.step = undefined
+        applyLegacyBookingModeState(nextState)
         applyLegacyAdditionalBookingSetup(nextState, nextState.pending_additional_count ?? 1)
         nextState.pending_attendee_name = false
         nextState.slots = { ...nextState.slots, attendee_name: name, quote_answers: nextState.slots?.quote_answers || {} }
@@ -432,15 +434,7 @@ export async function processSimulatorMessage(
       if (serviceName && svc && svc.base_price != null) {
         nextState.slots.service = svc.name
         nextState.just_identified_service = true
-        nextState.step = undefined
-        nextState.mode = "booking"
-        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
-        if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
-          nextState.pending_additional_booking = true
-          nextState.pending_attendee_name = true
-          nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
-          nextState.expected_additional_count = nextState.pending_additional_count
-        }
+        await applyLegacyPriceBookingLeadContext(nextState, text, history)
         return buildResult(
           cordial + `O ${svc.name} está R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
           nextState,
@@ -456,15 +450,7 @@ export async function processSimulatorMessage(
       }
       const withPrice = (config.services || []).filter((s) => s.base_price != null)
       if (withPrice.length > 0) {
-        nextState.mode = "booking"
-        nextState.step = undefined
-        const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
-        if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
-          nextState.pending_additional_booking = true
-          nextState.pending_attendee_name = true
-          nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
-          nextState.expected_additional_count = nextState.pending_additional_count
-        }
+        await applyLegacyPriceBookingLeadContext(nextState, text, history)
         const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
         nextState.last_service_options = serviceOptions
         return buildServicesListResult(config, nextState, cordial)
@@ -504,8 +490,7 @@ export async function processSimulatorMessage(
       trimmedQual === "1" ||
       (trimmedQual.length <= 60 && /\bnos\s+encaixamos\b/i.test(trimmedQual))
     if (isAudienceConfirmation && (config.services || []).length > 0) {
-      nextState.mode = "booking"
-      nextState.step = undefined
+      applyLegacyBookingModeState(nextState)
       applyLegacyAdditionalBookingSetup(nextState, 1)
       return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
     }
@@ -521,7 +506,7 @@ export async function processSimulatorMessage(
       const hasContext = hasMatchContext(match)
       if (match.service) {
         applyLegacyMatchedServiceState(nextState, match.service)
-        nextState.mode = "booking"
+        applyLegacyBookingModeState(nextState)
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
         const intro = buildBookingConfirmationIntro(config)
         return buildResult(`${intro} ${result.message}`, result.state, result.action_options)
@@ -674,7 +659,7 @@ export async function processSimulatorMessage(
     !isExplicitBookingIntent(text) &&
     !isGreeting(text)
   if (askedForAttendeeName && isPlausibleAnswer) {
-    nextState.mode = "booking"
+    applyLegacyBookingModeState(nextState)
     applyLegacyAdditionalBookingSetup(nextState, nextState.pending_additional_count ?? 1)
   }
 
@@ -781,6 +766,8 @@ export async function processSimulatorMessage(
   ]
   return runPipeline(ctx, phases)
 }
+
+
 
 
 

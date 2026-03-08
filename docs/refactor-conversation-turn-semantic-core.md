@@ -1384,3 +1384,14 @@ Fonte:
   - resposta curta preservando contexto de selecao de data
   - fila dinamica encadeada com varios nomes ja inferidos
   - FAQ antes de pedido multiplo caotico sem perder continuidade
+
+
+- decimo quarto corte de superficie duplicada do legado`r
+- a entrada em modo booking no caminho legado agora passa por um helper unico:
+  - `applyLegacyBookingModeState(...)`
+- o setup repetido do ramo `qualification_rejected` de preco tambem passou a reutilizar:
+  - `applyLegacyPriceBookingLeadContext(...)`
+- isso reduz escrita paralela de:
+  - `mode = "booking"`
+  - `step = undefined`
+  - setup inicial de lead para preco -> booking
