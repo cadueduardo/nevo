@@ -834,6 +834,18 @@ Objetivo:
 
 - impedir que o motor novo produza uma resposta e o legado altere semantica ou UX por fora
 
+### Terceiro corte de autoridade do legado
+
+Com o `semantic_core` ativo:
+
+- a inferencia legada de `service_multi_select` no `index.ts` deixa de governar a resposta
+- o payload de resposta passa a usar hint do proprio motor novo para indicar multi-selecao de servicos
+
+Objetivo:
+
+- impedir que a UX final do semantic core continue dependendo de heuristica de estado do legado
+- reduzir mais um ponto em que a camada antiga ainda tentava "entender" a etapa atual da conversa
+
 Observacao importante:
 
 - o semantic core ja tem renderers separados por dominio:

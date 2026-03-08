@@ -319,6 +319,7 @@ serve(async (req) => {
       senderId: (body as { from?: string }).from,
     })
     let usedSemanticCore = false
+    let semanticRenderHints: { service_multi_select?: boolean } | null = null
 
     // Intents internas (modo internal, owner/admin): consulta/cancelamento de agenda.
     const incomingMode = (body as { mode?: string }).mode
@@ -372,10 +373,10 @@ serve(async (req) => {
           }
         } else {
           // NÃ£o classificou como intent interna; segue fluxo normal.
-          try {
-            if (semanticCoreEnabled) {
-              usedSemanticCore = true
-              const semantic = await runSemanticCoreTurn({
+            try {
+              if (semanticCoreEnabled) {
+                usedSemanticCore = true
+                const semantic = await runSemanticCoreTurn({
                 message: body.message,
                 channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
                 config,
@@ -383,10 +384,17 @@ serve(async (req) => {
                 history,
                 sender_display_name: senderDisplayName,
                 session_id: body.session_id,
-                sender_id: (body as { from?: string }).from,
-              })
-              result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
-            } else {
+                  sender_id: (body as { from?: string }).from,
+                })
+                semanticRenderHints = {
+                  service_multi_select:
+                    semantic.decision.action === "ask_service" &&
+                    semantic.decision.channel_hints?.prefer_multi_select === true &&
+                    Array.isArray(semantic.execution?.action_options || semantic.decision.action_options) &&
+                    (semantic.execution?.action_options || semantic.decision.action_options || []).length > 0,
+                }
+                result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
+              } else {
               result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
                 supabaseAdmin,
                 tenantId: tenant.id,
@@ -442,6 +450,13 @@ serve(async (req) => {
               session_id: body.session_id,
               sender_id: (body as { from?: string }).from,
             })
+            semanticRenderHints = {
+              service_multi_select:
+                semantic.decision.action === "ask_service" &&
+                semantic.decision.channel_hints?.prefer_multi_select === true &&
+                Array.isArray(semantic.execution?.action_options || semantic.decision.action_options) &&
+                (semantic.execution?.action_options || semantic.decision.action_options || []).length > 0,
+            }
             result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
           } else {
             result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
@@ -610,10 +625,12 @@ serve(async (req) => {
           content: finalMessage,
           created_at: nowIso,
           action_options: result.action_options,
-          service_multi_select: (() => {
-            const state = result.state as SimulatorState
-            const isServiceStep =
-              (state.service_selection_multi ?? false) &&
+          service_multi_select: usedSemanticCore
+            ? Boolean(semanticRenderHints?.service_multi_select)
+            : (() => {
+              const state = result.state as SimulatorState
+              const isServiceStep =
+                (state.service_selection_multi ?? false) &&
               !state.slots?.service
             if (!isServiceStep) return false
 
@@ -642,9 +659,9 @@ serve(async (req) => {
               .filter(Boolean)
             if (catalogServiceOptions.length === 0) return false
 
-            // Blindagem final: se as opcoes nao forem do catalogo de servicos, nao renderizar multi-select.
-            return actionOptions.every((opt) => catalogServiceOptions.includes(opt))
-          })(),
+              // Blindagem final: se as opcoes nao forem do catalogo de servicos, nao renderizar multi-select.
+              return actionOptions.every((opt) => catalogServiceOptions.includes(opt))
+            })(),
         },
         ...extraAssistantMessages
           .filter((m) => typeof m?.content === "string" && m.content.trim().length > 0)
