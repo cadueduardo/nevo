@@ -1193,4 +1193,6 @@ Fonte:
   - preco com valor real configurado
   - detalhe de servico com descricao real
   - sequencia same_next sem slot disponivel
-
+  - continuidade multi-turno no web_simulator
+  - confirmacao seguida de proxima pessoa ja inferida
+  - selecao de template de sequencia seguida de escolha de servico

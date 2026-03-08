@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { runSemanticFixture } from "./test-runtime.ts"
+import { runSemanticFixture, runSemanticFixtureSequence } from "./test-runtime.ts"
 
 function assertIncludes(actual: string, expected: string, message?: string) {
   if (!String(actual || "").includes(expected)) {
@@ -356,4 +356,139 @@ Deno.test("semantic runtime fixture numbers action options for whatsapp", async 
   })
 
   assertEquals(result.action_options, ["1 - Corte", "2 - Barba"])
+})
+
+Deno.test("semantic runtime fixture sequence keeps continuity after confirmation for inferred next attendee", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState({
+      slots: {
+        attendee_name: "Carlos",
+        service: "Corte, Barba",
+        date: "2026-03-09",
+        time: "09:00",
+        staff_name: "Cadu",
+        customer_phone: "11999999999",
+      },
+      pending_attendee_queue: ["Davi"],
+      pending_additional_booking: true,
+      completed_bookings: [],
+      booked_slots: {},
+    }),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.96 },
+        entities: {
+          people: [],
+          attendee_names: ["Carlos", "Davi"],
+          services: [{ name: "Corte", normalized_name: "corte" }, { name: "Barba", normalized_name: "barba" }],
+          date: { iso_date: "2026-03-09" },
+          time: { hhmm: "09:00" },
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "confirmar" },
+      } as any,
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.94 },
+        entities: {
+          people: [],
+          attendee_names: ["Davi"],
+          services: [],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "quero o proximo logo depois" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "confirm_booking")
+  assertEquals(outputs[0].result.state.slots.attendee_name, "Davi")
+  assertEquals(outputs[1].semantic.decision.action, "offer_sequence_template")
+  assertIncludes(outputs[1].result.message, "Davi")
+})
+
+Deno.test("semantic runtime fixture sequence keeps ask_service context after selecting same_next", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState({
+      completed_bookings: [
+        {
+          attendee_name: "Carlos",
+          service: "Corte, Barba",
+          duration_minutes: 60,
+          date: "2026-03-09",
+          time: "09:00",
+          staff_name: "Cadu",
+        },
+      ],
+      pending_additional_booking: true,
+      pending_attendee_queue: ["Davi"],
+      pending_template_choice: true,
+      last_template_options: [
+        "Mesmo dia e colaborador (proximo horario)",
+        "Outro horario no mesmo dia",
+        "Outro dia",
+      ],
+      slots: {
+        attendee_name: "Davi",
+      },
+    }),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.95 },
+        entities: {
+          people: [],
+          attendee_names: ["Davi"],
+          services: [],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "1" },
+      } as any,
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.97 },
+        entities: {
+          people: [],
+          attendee_names: ["Davi"],
+          services: [{ name: "Corte", normalized_name: "corte" }, { name: "Barba", normalized_name: "barba" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "1,2" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "ask_service")
+  assertIncludes(outputs[0].result.message, "Davi")
+  assertEquals(outputs[1].result.state.slots.service, "Corte, Barba")
+  if (!outputs[1].result.state.slots.date && !outputs[1].result.state.slots.time) {
+    throw new Error("Expected semantic sequence flow to carry date/time suggestion after selecting same_next services")
+  }
 })
