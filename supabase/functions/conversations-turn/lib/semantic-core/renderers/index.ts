@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { SimulatorResult, SimulatorState } from "../../types.ts"
+import { logSemanticRender } from "../logging.ts"
 import type { SemanticRuntimeResult } from "../runtime.ts"
 import { renderBooking } from "./booking.ts"
 import { renderGreeting } from "./greeting.ts"
@@ -44,5 +45,11 @@ export async function renderSemanticSimulatorResult(
       }
   }
 
-  return buildSemanticResult(baseState, semantic, rendered.message, rendered.action_options)
+  const result = buildSemanticResult(baseState, semantic, rendered.message, rendered.action_options)
+  logSemanticRender(semantic.context, {
+    message: rendered.message,
+    action_options: rendered.action_options,
+    fallback_reason: semantic.decision.action === "handoff_fallback" ? semantic.decision.reason : undefined,
+  })
+  return result
 }

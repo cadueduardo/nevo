@@ -93,6 +93,8 @@ async function trySemanticCoreResult(
     state,
     history,
     sender_display_name: senderDisplayName,
+    session_id: runtime?.sessionId,
+    sender_id: runtime?.senderId,
   })
   return await renderSemanticSimulatorResult(state, semantic)
 }

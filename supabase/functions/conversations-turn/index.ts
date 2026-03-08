@@ -381,6 +381,8 @@ serve(async (req) => {
                 state: stateWithFirstFlag,
                 history,
                 sender_display_name: senderDisplayName,
+                session_id: body.session_id,
+                sender_id: (body as { from?: string }).from,
               })
               result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
             } else {
@@ -436,6 +438,8 @@ serve(async (req) => {
               state: stateWithFirstFlag,
               history,
               sender_display_name: senderDisplayName,
+              session_id: body.session_id,
+              sender_id: (body as { from?: string }).from,
             })
             result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
           } else {

@@ -615,6 +615,41 @@ Principio importante:
 - [ ] logar motivo de fallback
 - [ ] logar porque uma sequencia nao foi seguida
 
+### Implementacao inicial desta fase
+
+Arquivos:
+
+- `supabase/functions/conversations-turn/lib/semantic-core/logging.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/runtime.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/index.ts`
+
+Cobertura atual:
+
+- `snapshot`
+- `policy`
+- `decision`
+- `execution`
+- `render`
+
+Variavel de controle:
+
+- `SEMANTIC_CORE_DEBUG=true`
+
+Campos de rastreio incluidos:
+
+- `channel`
+- `session_id`
+- `sender_id`
+
+Objetivo:
+
+- diagnosticar por turno:
+  - como a mensagem foi interpretada
+  - qual politica interferiu
+  - qual acao foi escolhida
+  - qual executor aplicou patch
+  - qual mensagem foi renderizada
+
 ## Fase 9 - Matriz de aceite
 
 ### Saudacao
@@ -716,6 +751,8 @@ Candidatos a reaproveitamento:
 - [x] `runtime` unificado do semantic core implementado
 - [x] integracao controlada com `index.ts` via flag
 - [x] integracao controlada com `turn-handler.ts`
+- [x] rollout controlado por canal, sessao e remetente
+- [x] observabilidade inicial por turno no semantic core
 - [ ] renderizacao real por canal
 
 ### Integracao controlada atual
@@ -742,6 +779,19 @@ Comportamento:
   - `runtime.senderId`
   para evitar que entrypoints internos avaliem a flag sem contexto
 - se a flag nao estiver ativa, continua no legado
+
+### Primeiro corte de autoridade do legado
+
+Quando o `semantic_core` esta ativo para a sessao corrente:
+
+- `processSimulatorMessage(...)` sai antes das heuristicas locais e do pipeline legado
+- `handleBookingModeMessage(...)` sai antes dos interceptores legados de preco/lista/detalhe
+- o `turn-handler` nao deve continuar reinterpretando intencao principal nem preencher slots em paralelo
+
+Este e o primeiro corte efetivo de soberania:
+
+- o legado continua existindo como fallback para sessoes nao ativadas
+- mas perde autoridade semantica nas sessoes em que o motor novo foi habilitado
 
 Observacao importante:
 

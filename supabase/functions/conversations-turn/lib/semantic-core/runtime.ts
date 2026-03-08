@@ -3,6 +3,12 @@ import type { SimulatorConfig, SimulatorState } from "../types.ts"
 import { buildBusinessBrain } from "./business-brain.ts"
 import { decideNextSemanticAction } from "./decision-engine.ts"
 import { executeSemanticDecision } from "./executors/index.ts"
+import {
+  logSemanticDecision,
+  logSemanticExecution,
+  logSemanticPolicy,
+  logSemanticSnapshot,
+} from "./logging.ts"
 import { applySemanticPolicies } from "./policy-layer.ts"
 import { buildTurnSemanticSnapshot } from "./turn-semantics.ts"
 import type {
@@ -21,6 +27,8 @@ export interface SemanticRuntimeInput {
   state: SimulatorState
   history: Array<{ role: string; content: string }>
   sender_display_name?: string
+  session_id?: string
+  sender_id?: string
 }
 
 export interface SemanticRuntimeResult {
@@ -74,13 +82,22 @@ export async function runSemanticCoreTurn(input: SemanticRuntimeInput): Promise<
   const context: SemanticTurnContext = {
     channel: input.channel,
     sender_display_name: input.sender_display_name,
+    session_id: input.session_id,
+    sender_id: input.sender_id,
     history: input.history || [],
     state: input.state,
     business_brain: businessBrain,
   }
 
   const snapshot = await buildTurnSemanticSnapshot(input.message, context)
+  logSemanticSnapshot(context, snapshot)
   const policy = applySemanticPolicies(snapshot, context)
+  logSemanticPolicy(context, {
+    should_clarify: policy.should_clarify,
+    clarification_reason: policy.clarification_reason,
+    clarification_prompt: policy.clarification_prompt,
+    audience_risk: policy.adjusted_snapshot.risks?.audience,
+  })
   const decision = policy.should_clarify
     ? {
         action: "ask_clarification",
@@ -93,9 +110,11 @@ export async function runSemanticCoreTurn(input: SemanticRuntimeInput): Promise<
         },
       }
     : decideNextSemanticAction(policy.adjusted_snapshot, context)
+  logSemanticDecision(context, decision)
   const execution = policy.should_clarify
     ? null
     : executeSemanticDecision(decision, policy.adjusted_snapshot, context)
+  logSemanticExecution(context, execution)
 
   return {
     business_brain: businessBrain,

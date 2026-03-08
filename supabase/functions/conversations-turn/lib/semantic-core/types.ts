@@ -243,6 +243,8 @@ export interface SemanticExecutorResult {
 export interface SemanticTurnContext {
   channel: SemanticChannel
   sender_display_name?: string
+  session_id?: string
+  sender_id?: string
   history: Array<{ role: string; content: string }>
   state: SimulatorState
   business_brain: BusinessBrain
