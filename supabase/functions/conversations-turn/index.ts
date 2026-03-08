@@ -319,6 +319,38 @@ serve(async (req) => {
       senderId: (body as { from?: string }).from,
     })
     let usedSemanticCore = false
+    const semanticChannel = channelType === "whatsapp" ? "whatsapp" : "web_simulator"
+    const runMainConversationFlow = async (options?: { isExternalActor?: boolean }): Promise<SimulatorResult> => {
+      if (semanticCoreEnabled) {
+        usedSemanticCore = true
+        const semantic = await runSemanticCoreTurn({
+          message: body.message,
+          channel: semanticChannel,
+          config,
+          state: stateWithFirstFlag,
+          history,
+          sender_display_name: senderDisplayName,
+          session_id: body.session_id,
+          sender_id: (body as { from?: string }).from,
+        })
+        return await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
+      }
+
+      return await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
+        supabaseAdmin,
+        tenantId: tenant.id,
+        agentId,
+        channel: semanticChannel,
+        sessionId: body.session_id,
+        senderId: (body as { from?: string }).from,
+        contactId: contact.id,
+        contact,
+        senderDisplayName,
+        history,
+        config,
+        ...options,
+      })
+    }
 
     // Intents internas (modo internal, owner/admin): consulta/cancelamento de agenda.
     const incomingMode = (body as { mode?: string }).mode
@@ -430,35 +462,7 @@ serve(async (req) => {
         }
       } else {
         try {
-          if (semanticCoreEnabled) {
-            usedSemanticCore = true
-            const semantic = await runSemanticCoreTurn({
-              message: body.message,
-              channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
-              config,
-              state: stateWithFirstFlag,
-              history,
-              sender_display_name: senderDisplayName,
-              session_id: body.session_id,
-              sender_id: (body as { from?: string }).from,
-            })
-            result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
-          } else {
-            result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
-              supabaseAdmin,
-              tenantId: tenant.id,
-              agentId,
-              channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
-              sessionId: body.session_id,
-              senderId: (body as { from?: string }).from,
-              isExternalActor: true,
-              contactId: contact.id,
-              contact,
-              senderDisplayName,
-              history,
-              config,
-            })
-          }
+          result = await runMainConversationFlow({ isExternalActor: true })
         } catch (err) {
           console.error("processSimulatorMessage error:", err)
           result = {
@@ -671,3 +675,4 @@ serve(async (req) => {
     return json({ error: error?.message || error?.toString() || "Erro desconhecido" }, 500)
   }
 })
+

@@ -905,6 +905,19 @@ Objetivo:
 - reduzir mais um ponto de precedencia duplicada no caminho antigo
 - deixar mais explicito, no proprio legado, qual e o criterio unico de entrada em booking enquanto ele ainda existir
 
+### Nono corte parcial de superficie duplicada do legado
+
+- o entrypoint da Edge Function agora tem um helper unico (`runMainConversationFlow`) para acionar:
+  - `semantic_core`
+  - ou `processSimulatorMessage(...)`
+- o ramo `external` ja passou a usar esse helper unico
+- o ramo `internal` ainda possui um bloco duplicado por conta de inconsistencias locais de formatacao/encoding no arquivo e permanece no radar para o proximo corte
+
+Objetivo:
+
+- reduzir divergencia entre os dois caminhos principais do entrypoint
+- preparar a remocao completa do bloco duplicado restante no ramo `internal` sem forcar um patch mais agressivo neste ponto
+
 ## Guardrails reforcados para a continuacao da refatoracao
 
 Os pontos abaixo passam a fazer parte do plano de implementacao, nao apenas como principios gerais.
