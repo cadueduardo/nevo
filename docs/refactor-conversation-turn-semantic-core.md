@@ -846,6 +846,21 @@ Objetivo:
 - impedir que a UX final do semantic core continue dependendo de heuristica de estado do legado
 - reduzir mais um ponto em que a camada antiga ainda tentava "entender" a etapa atual da conversa
 
+### Quarto corte de autoridade do legado
+
+Com o `semantic_core` ativo:
+
+- o `index.ts` deixa de inspecionar `decision.action` e `channel_hints` para inferir `service_multi_select`
+- esse hint passa a sair do proprio renderer do semantic core via `render_hints`
+
+Objetivo:
+
+- impedir que o entrypoint continue lendo semantica do motor novo para decidir UX
+- reforcar que:
+  - semantic core decide
+  - renderer adapta
+  - edge function apenas entrega a resposta
+
 Observacao importante:
 
 - o semantic core ja tem renderers separados por dominio:

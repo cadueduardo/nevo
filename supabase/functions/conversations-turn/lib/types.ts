@@ -194,6 +194,9 @@ export interface SimulatorResult {
   message: string
   state: SimulatorState
   action_options?: string[]
+  render_hints?: {
+    service_multi_select?: boolean
+  }
 }
 
 export interface ConversationTurnRequest {

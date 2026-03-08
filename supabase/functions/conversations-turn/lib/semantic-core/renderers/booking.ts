@@ -61,11 +61,17 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
         return {
           message: `Perfeito. Antes de sugerir o proximo horario em sequencia para ${attendeeName || "a proxima pessoa"}, preciso confirmar o servico.`,
           action_options: execution?.action_options || booking.service_options,
+          render_hints: {
+            service_multi_select: semantic.decision.channel_hints?.prefer_multi_select === true,
+          },
         }
       }
       return {
         message: buildServiceQuestion(attendeeName),
         action_options: execution?.action_options || booking.service_options,
+        render_hints: {
+          service_multi_select: semantic.decision.channel_hints?.prefer_multi_select === true,
+        },
       }
     case "offer_sequence_template":
       return {

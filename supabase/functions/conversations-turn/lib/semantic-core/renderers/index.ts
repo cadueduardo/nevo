@@ -45,7 +45,7 @@ export async function renderSemanticSimulatorResult(
       }
   }
 
-  const result = buildSemanticResult(baseState, semantic, rendered.message, rendered.action_options)
+  const result = buildSemanticResult(baseState, semantic, rendered)
   logSemanticRender(semantic.context, {
     message: rendered.message,
     action_options: rendered.action_options,

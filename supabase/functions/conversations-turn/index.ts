@@ -319,7 +319,6 @@ serve(async (req) => {
       senderId: (body as { from?: string }).from,
     })
     let usedSemanticCore = false
-    let semanticRenderHints: { service_multi_select?: boolean } | null = null
 
     // Intents internas (modo internal, owner/admin): consulta/cancelamento de agenda.
     const incomingMode = (body as { mode?: string }).mode
@@ -383,16 +382,9 @@ serve(async (req) => {
                 state: stateWithFirstFlag,
                 history,
                 sender_display_name: senderDisplayName,
-                session_id: body.session_id,
+                  session_id: body.session_id,
                   sender_id: (body as { from?: string }).from,
                 })
-                semanticRenderHints = {
-                  service_multi_select:
-                    semantic.decision.action === "ask_service" &&
-                    semantic.decision.channel_hints?.prefer_multi_select === true &&
-                    Array.isArray(semantic.execution?.action_options || semantic.decision.action_options) &&
-                    (semantic.execution?.action_options || semantic.decision.action_options || []).length > 0,
-                }
                 result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
               } else {
               result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
@@ -450,13 +442,6 @@ serve(async (req) => {
               session_id: body.session_id,
               sender_id: (body as { from?: string }).from,
             })
-            semanticRenderHints = {
-              service_multi_select:
-                semantic.decision.action === "ask_service" &&
-                semantic.decision.channel_hints?.prefer_multi_select === true &&
-                Array.isArray(semantic.execution?.action_options || semantic.decision.action_options) &&
-                (semantic.execution?.action_options || semantic.decision.action_options || []).length > 0,
-            }
             result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
           } else {
             result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
@@ -626,7 +611,7 @@ serve(async (req) => {
           created_at: nowIso,
           action_options: result.action_options,
           service_multi_select: usedSemanticCore
-            ? Boolean(semanticRenderHints?.service_multi_select)
+            ? Boolean(result.render_hints?.service_multi_select)
             : (() => {
               const state = result.state as SimulatorState
               const isServiceStep =

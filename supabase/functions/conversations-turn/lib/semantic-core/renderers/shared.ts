@@ -2,7 +2,13 @@
 import type { SimulatorResult, SimulatorState } from "../../types.ts"
 import type { SemanticRuntimeResult } from "../runtime.ts"
 
-export type RenderedSemanticMessage = { message: string; action_options?: string[] }
+export type RenderedSemanticMessage = {
+  message: string
+  action_options?: string[]
+  render_hints?: {
+    service_multi_select?: boolean
+  }
+}
 
 function numberActionOptions(options: string[]): string[] {
   return options.map((opt, idx) => {
@@ -52,18 +58,18 @@ export function mergeSemanticState(
 export function buildSemanticResult(
   baseState: SimulatorState,
   semantic: SemanticRuntimeResult,
-  message: string,
-  actionOptions?: string[]
+  rendered: RenderedSemanticMessage
 ): SimulatorResult {
-  const formattedActionOptions = formatSemanticActionOptions(semantic, actionOptions)
+  const formattedActionOptions = formatSemanticActionOptions(semantic, rendered.action_options)
   const mergedState = mergeSemanticState(baseState, semantic, formattedActionOptions)
   return {
-    message,
+    message: rendered.message,
     state: {
       ...mergedState,
-      last_prompt: message,
+      last_prompt: rendered.message,
       last_action_options: formattedActionOptions,
     },
     action_options: formattedActionOptions,
+    render_hints: rendered.render_hints,
   }
 }
