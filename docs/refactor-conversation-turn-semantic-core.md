@@ -861,6 +861,16 @@ Objetivo:
   - renderer adapta
   - edge function apenas entrega a resposta
 
+### Quinto corte de autoridade do legado
+
+- a implementacao duplicada de `handleBookingModeMessage` em `lib/turn/booking-mode.ts` foi removida
+- o caminho ativo de modo booking passa a existir apenas em `lib/turn-handler.ts` enquanto o legado ainda estiver vivo
+
+Objetivo:
+
+- reduzir superficie duplicada de comportamento no booking legado
+- evitar que uma segunda implementacao fique desatualizada e reintroduza divergencia durante a transicao
+
 Observacao importante:
 
 - o semantic core ja tem renderers separados por dominio:
