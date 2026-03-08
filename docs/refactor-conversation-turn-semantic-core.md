@@ -1210,3 +1210,6 @@ Fonte:
   - selecao de template de sequencia seguida de escolha de servico
   - pergunta informacional antes de booking sem perder continuidade
   - resposta curta/imprecisa sem derrubar o contexto de sequencia
+  - recuperacao apos same_next indisponivel
+  - confirmacao de publico no meio do booking
+  - resposta curta preservando contexto de selecao de data

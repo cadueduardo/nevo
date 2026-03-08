@@ -611,3 +611,187 @@ Deno.test("semantic runtime fixture keeps sequence context after short affirmati
   assertEquals(outputs[1].semantic.decision.action, "ask_service")
   assertIncludes(outputs[1].result.message, "Davi")
 })
+
+Deno.test("semantic runtime fixture recovers after same_next unavailable by asking for date on next turn", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState({
+      completed_bookings: [
+        {
+          attendee_name: "Carlos",
+          service: "Corte, Barba",
+          duration_minutes: 60,
+          date: "2026-03-09",
+          time: "17:00",
+          staff_name: "Cadu",
+        },
+      ],
+      pending_additional_booking: true,
+      pending_attendee_queue: ["Davi"],
+      last_template_options: [
+        "Mesmo dia e colaborador (proximo horario)",
+        "Outro horario no mesmo dia",
+        "Outro dia",
+      ],
+      slots: {
+        attendee_name: "Davi",
+        service: "Corte",
+      },
+      booked_slots: {
+        cadu: {
+          "2026-03-09": ["17:00", "17:30"],
+        },
+      },
+    }),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.95 },
+        entities: {
+          people: [],
+          attendee_names: ["Davi"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "1" },
+      } as any,
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.86 },
+        entities: {
+          people: [],
+          attendee_names: ["Davi"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: false,
+          next_question_hint: "ask_date_preference",
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "outro dia entao" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "ask_date")
+  assertIncludes(outputs[0].result.message, "Nao encontrei um proximo horario livre")
+  assertEquals(outputs[1].semantic.decision.action, "ask_date")
+})
+
+Deno.test("semantic runtime fixture asks audience confirmation before continuing booking", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState(),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "booking", secondary: [], booking: true, confidence: 0.91 },
+        entities: {
+          people: [],
+          attendee_names: [],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 1,
+        },
+        risks: {
+          audience: {
+            requires_confirmation: true,
+            blocked: false,
+            reason: "audience_needs_confirmation",
+            prompt: "Atendemos homens e criancas a partir de 8 anos. Voces se encaixam?",
+            inferred_fit: null,
+          },
+          ambiguities: [],
+        },
+        meta: { raw_user_message: "quero agendar pra mim e meu irmao" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: ["audience_confirmation"], booking: true, confidence: 0.94 },
+        entities: {
+          people: [],
+          attendee_names: [],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 1,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "sim, nos encaixamos" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "ask_audience_confirmation")
+  assertIncludes(outputs[0].result.message, "Atendemos homens e criancas")
+  if (outputs[1].semantic.decision.action === "ask_audience_confirmation") {
+    throw new Error("Expected semantic core to progress after audience confirmation")
+  }
+})
+
+Deno.test("semantic runtime fixture keeps date selection context after short affirmative reply", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState({
+      slots: {
+        attendee_name: "Carlos",
+        service: "Corte",
+      },
+    }),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "booking", secondary: [], booking: true, confidence: 0.93 },
+        entities: {
+          people: [],
+          attendee_names: ["Carlos"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 0,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "segunda" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: [], booking: true, confidence: 0.8 },
+        entities: {
+          people: [],
+          attendee_names: ["Carlos"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 0,
+          next_question_hint: "ask_date_preference",
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "isso" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "ask_date")
+  assertEquals(outputs[1].semantic.decision.action, "ask_date")
+})
