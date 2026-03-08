@@ -1049,3 +1049,16 @@ Fonte:
   - confirmacao de publico ambiguo
 - execucao local depende de `deno test`, que ainda nao esta disponivel neste ambiente
 
+
+- runner de fixture do pipeline semantico criado`r
+- permite testar localmente, sem IA externa, a cadeia:
+  - snapshot fixture
+  - policy layer
+  - decision engine
+  - executor
+  - renderer
+- fixtures iniciais cobrem:
+  - FAQ com endereco real
+  - confirmacao com proxima pessoa ja inferida
+  - oferta de template de sequencia para a proxima pessoa
+
