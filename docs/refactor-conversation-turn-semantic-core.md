@@ -931,6 +931,22 @@ Objetivo:
 - reduzir duplicidade no booking legado sem alterar a precedencia atual
 - preparar cortes futuros onde o semantic core assuma de vez essa etapa
 
+### Decimo primeiro corte de superficie duplicada do legado
+
+- a mutacao repetida de `match.service` no caminho legado de `qualification` foi consolidada em um helper unico
+- o fluxo antigo continua podendo:
+  - promover o servico para booking imediato
+  - ou apenas preparar `slots.service` no fallback
+- mas sem repetir em mais de um ponto a mesma escrita de:
+  - `slots.service`
+  - `just_identified_service`
+  - `step = undefined`
+
+Objetivo:
+
+- reduzir mais uma superficie de escrita paralela de slots no legado
+- preparar o terreno para o semantic core assumir de vez a promocao de servico no fluxo de qualification
+
 ## Guardrails reforcados para a continuacao da refatoracao
 
 Os pontos abaixo passam a fazer parte do plano de implementacao, nao apenas como principios gerais.

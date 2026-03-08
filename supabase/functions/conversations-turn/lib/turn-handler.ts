@@ -130,6 +130,12 @@ async function applyLegacyPriceBookingLeadContext(
   }
 }
 
+function applyLegacyMatchedServiceState(nextState: SimulatorState, service: string): void {
+  nextState.slots.service = service
+  nextState.just_identified_service = true
+  nextState.step = undefined
+}
+
 export async function handleBookingModeMessage(context: SimulatorHandlerContext): Promise<SimulatorResult> {
   const { text, config, nextState, history, senderDisplayName, isFirst, runtime } = context
   const semanticResult = await trySemanticCoreResult(text, config, nextState, history, senderDisplayName, runtime)
@@ -518,9 +524,7 @@ export async function processSimulatorMessage(
       const match = await classifyServiceMatch(text, config)
       const hasContext = hasMatchContext(match)
       if (match.service) {
-        nextState.slots.service = match.service
-        nextState.just_identified_service = true
-        nextState.step = undefined
+        applyLegacyMatchedServiceState(nextState, match.service)
         nextState.mode = "booking"
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
         const intro = buildBookingConfirmationIntro(config)
@@ -637,9 +641,7 @@ export async function processSimulatorMessage(
 
     const match = await classifyServiceMatch(text, config)
     if (match.service) {
-      nextState.slots.service = match.service
-      nextState.just_identified_service = true
-      nextState.step = undefined
+      applyLegacyMatchedServiceState(nextState, match.service)
     } else if (match.reject || config.lead_policy?.reject_unlisted_services) {
       const hasContext = hasMatchContext(match)
       const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, isFirst, hasContext)
