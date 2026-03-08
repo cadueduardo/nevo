@@ -367,7 +367,13 @@ serve(async (req) => {
         } else {
           // NÃ£o classificou como intent interna; segue fluxo normal.
           try {
-            if (shouldUseSemanticCore({ channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator" })) {
+            if (
+              shouldUseSemanticCore({
+                channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
+                sessionId: body.session_id,
+                senderId: (body as { from?: string }).from,
+              })
+            ) {
               const semantic = await runSemanticCoreTurn({
                 message: body.message,
                 channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
@@ -416,7 +422,13 @@ serve(async (req) => {
         }
       } else {
         try {
-          if (shouldUseSemanticCore({ channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator" })) {
+          if (
+            shouldUseSemanticCore({
+              channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
+              sessionId: body.session_id,
+              senderId: (body as { from?: string }).from,
+            })
+          ) {
             const semantic = await runSemanticCoreTurn({
               message: body.message,
               channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",

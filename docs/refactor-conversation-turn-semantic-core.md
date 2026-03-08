@@ -318,6 +318,19 @@ Comportamento atual:
 - a flag prevista e:
   - `CONVERSATION_TURN_ENGINE=semantic_core`
   - `CONVERSATION_TURN_ENGINE=legacy`
+- rollout controlado adicional:
+  - `CONVERSATION_TURN_ENGINE_CHANNELS`
+  - `CONVERSATION_TURN_ENGINE_SESSION_IDS`
+  - `CONVERSATION_TURN_ENGINE_SENDER_IDS`
+
+Semantica do rollout controlado:
+
+- se `CONVERSATION_TURN_ENGINE=legacy`, o motor novo nao entra
+- se `CONVERSATION_TURN_ENGINE=semantic_core` e nao houver allowlists, o motor novo entra globalmente
+- se houver allowlists configuradas, o motor novo so entra quando todos os filtros configurados coincidirem com:
+  - canal
+  - sessao
+  - remetente
 
 Objetivo desta etapa:
 
@@ -705,6 +718,11 @@ Comportamento:
   - `runSemanticCoreTurn(...)`
   - `renderSemanticSimulatorResult(...)`
 - `processSimulatorMessage(...)` e `handleBookingModeMessage(...)` tambem respeitam a mesma flag
+- `processSimulatorMessage(...)` e `handleBookingModeMessage(...)` agora tambem propagam:
+  - `runtime.channel`
+  - `runtime.sessionId`
+  - `runtime.senderId`
+  para evitar que entrypoints internos avaliem a flag sem contexto
 - se a flag nao estiver ativa, continua no legado
 
 Observacao importante:

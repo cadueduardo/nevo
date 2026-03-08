@@ -82,12 +82,13 @@ async function trySemanticCoreResult(
   config: SimulatorConfig,
   state: SimulatorState,
   history: Array<{ role: string; content: string }>,
-  senderDisplayName?: string
+  senderDisplayName?: string,
+  runtime?: ConversationRuntimeContext
 ): Promise<SimulatorResult | null> {
-  if (!shouldUseSemanticCore()) return null
+  if (!shouldUseSemanticCore({ channel: runtime?.channel, sessionId: runtime?.sessionId, senderId: runtime?.senderId })) return null
   const semantic = await runSemanticCoreTurn({
     message,
-    channel: "web_simulator",
+    channel: runtime?.channel === "whatsapp" ? "whatsapp" : "web_simulator",
     config,
     state,
     history,
@@ -100,8 +101,8 @@ function handleQuoteModeMessage(config: SimulatorConfig, text: string, nextState
 }
 
 export async function handleBookingModeMessage(context: SimulatorHandlerContext): Promise<SimulatorResult> {
-  const { text, config, nextState, history, senderDisplayName, isFirst } = context
-  const semanticResult = await trySemanticCoreResult(text, config, nextState, history, senderDisplayName)
+  const { text, config, nextState, history, senderDisplayName, isFirst, runtime } = context
+  const semanticResult = await trySemanticCoreResult(text, config, nextState, history, senderDisplayName, runtime)
   if (semanticResult) return semanticResult
   const cordial = getCordialPrefix(config, isFirst)
 
@@ -174,7 +175,7 @@ export async function processSimulatorMessage(
   runtime?: ConversationRuntimeContext
 ): Promise<SimulatorResult> {
   const incomingText = input.trim()
-  const semanticResult = await trySemanticCoreResult(incomingText, config, state, history, senderDisplayName)
+  const semanticResult = await trySemanticCoreResult(incomingText, config, state, history, senderDisplayName, runtime)
   if (semanticResult) return semanticResult
   const numericMultiServiceResolved = tryResolveNumericMultipleServiceSelection(incomingText, state)
   const numericServiceResolved = tryResolveNumericServiceSelection(incomingText, state)
@@ -194,7 +195,7 @@ export async function processSimulatorMessage(
     isExplicitBookingIntent(text) ||
     /\b(quero|gostaria|preciso|pode|sim)\b.*\b(agendar|marcar)\b/.test(textNorm)
 
-  // Trava m√≠nima: mensagens muito curtas (ex: "O", "a") ‚Ä" mensagem clara respeitando o tom do neg√≥cio.
+  // Trava m√≠nima: mensagens muito curtas (ex: "O", "a") ÔøΩ" mensagem clara respeitando o tom do neg√≥cio.
   const MIN_MSG_LENGTH = 2
   const isNumericOption =
     /^[1-9]\d*$/.test(text) && Array.isArray(state.last_action_options) && state.last_action_options.length > 0
@@ -238,6 +239,7 @@ export async function processSimulatorMessage(
       history,
       senderDisplayName,
       isFirst,
+      runtime,
     })
   }
 
@@ -290,7 +292,7 @@ export async function processSimulatorMessage(
   const postServiceRuleResult = applyConversationRules(postServiceResolutionRules, { text, config, nextState })
   if (postServiceRuleResult) return postServiceRuleResult
 
-  // Encerrar conversa apÛs agradecimento final para evitar loop
+  // Encerrar conversa apÔøΩs agradecimento final para evitar loop
   if (isFinalizedState(nextState)) {
     const msg = normalizeText(text)
     if (/\b(obrigad|valeu|agradec)\b/.test(msg)) {
@@ -302,7 +304,7 @@ export async function processSimulatorMessage(
   }
 
   const phases: Phase<typeof ctx>[] = [
-    // InterceptaÁ„o: quando o contexto È "quem ser· o primeiro/prÛximo agendamento?" e o usu·rio responde, usar IA para extrair o nome e seguir no booking. Roda sempre que a ˙ltima pergunta pediu o nome (ou state tem pending_attendee_name), mesmo que mode j· seja booking ó evita "Pode me dar mais detalhes?" quando o cliente j· disse o nome.
+    // InterceptaÔøΩÔøΩo: quando o contexto ÔøΩ "quem serÔøΩ o primeiro/prÔøΩximo agendamento?" e o usuÔøΩrio responde, usar IA para extrair o nome e seguir no booking. Roda sempre que a ÔøΩltima pergunta pediu o nome (ou state tem pending_attendee_name), mesmo que mode jÔøΩ seja booking ÔøΩ evita "Pode me dar mais detalhes?" quando o cliente jÔøΩ disse o nome.
     {
       when: (c) => {
         const last =
@@ -356,7 +358,7 @@ export async function processSimulatorMessage(
       }
     }
 
-    // Prioridade: regex (√°gil) ou orquestrador (IA como consierge ‚Ä" qualquer reda√ß√£o)
+    // Prioridade: regex (√°gil) ou orquestrador (IA como consierge ÔøΩ" qualquer reda√ß√£o)
     const bookingRequestRejected = await getBookingRequest()
     let shouldEnterBooking = hasStrongBookingIntent || bookingRequestRejected?.booking_intent === true
     const orchForBooking = await getOrchestrator()
@@ -464,11 +466,11 @@ export async function processSimulatorMessage(
       return buildResult(infoAnswer, nextState)
     }
 
-    // Confirma√ß√£o de p√∫blico (esclarecimento homens+infantil): "Sim, nos encaixamos" ‚Ü' fluxo m√∫ltiplo (antes da triagem para n√£o ser capturado pela IA)
+    // Confirma√ß√£o de p√∫blico (esclarecimento homens+infantil): "Sim, nos encaixamos" ÔøΩ' fluxo m√∫ltiplo (antes da triagem para n√£o ser capturado pela IA)
     const nQual = normalizeText(text)
     const trimmedQual = nQual.trim()
     const isAudienceConfirmation =
-      /^(1\s*[-‚Ä"".)]\s*)?(sim,?\s*nos\s+encaixamos|nos\s+encaixamos)\s*$/i.test(trimmedQual) ||
+      /^(1\s*[-ÔøΩ"".)]\s*)?(sim,?\s*nos\s+encaixamos|nos\s+encaixamos)\s*$/i.test(trimmedQual) ||
       /^sim,?\s*nos\s+encaixamos\s*$/i.test(trimmedQual) ||
       trimmedQual === "1" ||
       (trimmedQual.length <= 60 && /\bnos\s+encaixamos\b/i.test(trimmedQual))
@@ -523,7 +525,7 @@ export async function processSimulatorMessage(
       }
     }
 
-    // Regex ou orquestrador (IA como consierge ‚Ä" qualquer estilo)
+    // Regex ou orquestrador (IA como consierge ÔøΩ" qualquer estilo)
     const bookingRequestQualification = await getBookingRequest()
     let shouldEnterBookingQ = hasStrongBookingIntent || bookingRequestQualification?.booking_intent === true
     const orchForBookingQ = await getOrchestrator()
@@ -656,7 +658,7 @@ export async function processSimulatorMessage(
     {
       when: () => true,
       run: async () => {
-  // RecuperaÁ„o: se a ˙ltima pergunta foi "quem ser· o primeiro/prÛximo agendamento" (histÛrico ou last_prompt) e o usu·rio respondeu com texto plausÌvel (nome ou frase curta), forÁar booking e pular o bloco que pede "mais detalhes"
+  // RecuperaÔøΩÔøΩo: se a ÔøΩltima pergunta foi "quem serÔøΩ o primeiro/prÔøΩximo agendamento" (histÔøΩrico ou last_prompt) e o usuÔøΩrio respondeu com texto plausÔøΩvel (nome ou frase curta), forÔøΩar booking e pular o bloco que pede "mais detalhes"
   const lastAssistantInHistory = history.length > 0 ? history.filter((m) => m.role === "assistant").pop()?.content : undefined
   const lastPrompt = nextState.last_prompt || ""
   const lastAssistantText = normalizeText(String(lastAssistantInHistory || "") + " " + String(lastPrompt || ""))
@@ -771,6 +773,7 @@ export async function processSimulatorMessage(
       history,
       senderDisplayName,
       isFirst,
+      runtime,
     })
   }
 

@@ -7,6 +7,9 @@ export type ConversationRuntimeContext = {
   supabaseAdmin: any
   tenantId: string
   agentId: string
+  channel?: "web_simulator" | "whatsapp"
+  sessionId?: string
+  senderId?: string
   /** FASE 7: true = cliente externo; bloqueia cancelamento e consulta de agenda. */
   isExternalActor?: boolean
   contactId?: string
@@ -24,6 +27,7 @@ export type SimulatorHandlerContext = {
   history: Array<{ role: string; content: string }>
   senderDisplayName?: string
   isFirst: boolean
+  runtime?: ConversationRuntimeContext
 }
 
 import type { FlowOrchestratorOutput } from "./types.ts"

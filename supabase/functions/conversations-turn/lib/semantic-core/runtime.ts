@@ -36,11 +36,35 @@ export function shouldUseSemanticCore(
     forced?: boolean
     channel?: SemanticChannel
     state?: SimulatorState
+    sessionId?: string
+    senderId?: string
   } = {}
 ): boolean {
+  function parseAllowlist(name: string): string[] {
+    return String(Deno.env.get(name) || "")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+  }
+
+  function matchesAllowlist(value: string | undefined, allowlist: string[]): boolean {
+    if (allowlist.length === 0) return true
+    if (!value) return false
+    return allowlist.includes(String(value).trim().toLowerCase())
+  }
+
   if (opts.forced === true) return true
   const envFlag = (Deno.env.get("CONVERSATION_TURN_ENGINE") || "").trim().toLowerCase()
-  if (envFlag === "semantic_core") return true
+  if (envFlag === "semantic_core") {
+    const allowedChannels = parseAllowlist("CONVERSATION_TURN_ENGINE_CHANNELS")
+    const allowedSessions = parseAllowlist("CONVERSATION_TURN_ENGINE_SESSION_IDS")
+    const allowedSenders = parseAllowlist("CONVERSATION_TURN_ENGINE_SENDER_IDS")
+    return (
+      matchesAllowlist(opts.channel, allowedChannels) &&
+      matchesAllowlist(opts.sessionId, allowedSessions) &&
+      matchesAllowlist(opts.senderId, allowedSenders)
+    )
+  }
   if (envFlag === "legacy") return false
   return false
 }
