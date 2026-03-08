@@ -1228,3 +1228,5 @@ Fonte:
   - recuperacao apos same_next indisponivel
   - confirmacao de publico no meio do booking
   - resposta curta preservando contexto de selecao de data
+  - fila dinamica encadeada com varios nomes ja inferidos
+  - FAQ antes de pedido multiplo caotico sem perder continuidade

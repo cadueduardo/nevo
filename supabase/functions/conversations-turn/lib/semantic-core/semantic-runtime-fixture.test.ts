@@ -795,3 +795,138 @@ Deno.test("semantic runtime fixture keeps date selection context after short aff
   assertEquals(outputs[0].semantic.decision.action, "ask_date")
   assertEquals(outputs[1].semantic.decision.action, "ask_date")
 })
+
+Deno.test("semantic runtime fixture keeps inferred people queue across chained multi-booking confirmations", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState({
+      slots: {
+        attendee_name: "Davi",
+        service: "Corte",
+        date: "2026-03-09",
+        time: "09:00",
+        staff_name: "Cadu",
+        customer_phone: "11999999999",
+      },
+      pending_attendee_queue: ["Carlos", "Joao"],
+      pending_additional_booking: true,
+      completed_bookings: [],
+      booked_slots: {},
+    }),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.97 },
+        entities: {
+          people: [],
+          attendee_names: ["Davi", "Carlos", "Joao"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: { iso_date: "2026-03-09" },
+          time: { hhmm: "09:00" },
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 2,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "confirmar" },
+      } as any,
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.94 },
+        entities: {
+          people: [],
+          attendee_names: ["Carlos", "Joao"],
+          services: [],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "quero o proximo logo depois" },
+      } as any,
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.97 },
+        entities: {
+          people: [],
+          attendee_names: ["Carlos", "Joao"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: { iso_date: "2026-03-09" },
+          time: { hhmm: "09:30" },
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "confirmar" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "confirm_booking")
+  assertEquals(outputs[0].result.state.slots.attendee_name, "Carlos")
+  assertEquals(outputs[1].semantic.decision.action, "offer_sequence_template")
+  assertIncludes(outputs[1].result.message, "Carlos")
+  assertEquals(outputs[2].semantic.decision.action, "confirm_booking")
+  assertEquals(outputs[2].result.state.slots.attendee_name, "Joao")
+})
+
+Deno.test("semantic runtime fixture handles faq before chaotic multi-booking request with inferred names", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState(),
+    channel: "web_simulator",
+    sender_display_name: "Cadu",
+    turns: [
+      {
+        intents: { primary: "faq", secondary: [], booking: false, confidence: 0.9 },
+        entities: {
+          people: [],
+          attendee_names: [],
+          services: [],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 0,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "onde voces ficam?" },
+      } as any,
+      {
+        intents: { primary: "booking_sequence", secondary: ["booking_with_faq"], booking: true, confidence: 0.95 },
+        entities: {
+          people: [
+            { name: "Davi", confidence: 0.9 },
+            { name: "Carlos", confidence: 0.9 },
+            { name: "Joao", confidence: 0.9 },
+          ],
+          attendee_names: ["Davi", "Carlos", "Joao"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 3,
+          sequence_request: false,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "os muleque davi, carlos e joao querem cortar o cabelo ai" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "reply_faq")
+  assertIncludes(outputs[0].result.message, "Rua Gasparino Lunardi")
+  assertEquals(outputs[1].semantic.decision.action, "ask_date")
+  assertEquals(outputs[1].result.state.slots.attendee_name, "Davi")
+  assertEquals(outputs[1].result.state.pending_attendee_queue, ["Carlos", "Joao"])
+})
