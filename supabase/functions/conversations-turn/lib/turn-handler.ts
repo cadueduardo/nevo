@@ -157,11 +157,6 @@ export async function handleBookingModeMessage(context: SimulatorHandlerContext)
     }
   }
 
-  if (isFirst && !isGreeting(text)) {
-    const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
-    return buildResult(result.message, result.state, result.action_options)
-  }
-
   return await resolveBooking(config, text, nextState, history, senderDisplayName)
 }
 

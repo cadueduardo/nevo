@@ -881,6 +881,16 @@ Objetivo:
 - reduzir pontos redundantes de entrada em quote mode
 - manter a desmontagem do legado coerente por responsabilidade unica
 
+### Setimo corte de superficie duplicada do legado
+
+- a bifurcacao redundante de `handleBookingModeMessage(...)` para `isFirst && !isGreeting(text)` foi removida
+- o caminho legado de booking nesse ponto volta a ter uma unica saida: `resolveBooking(...)`
+
+Objetivo:
+
+- reduzir mais um desvio sem semantica propria no booking legado
+- manter a desmontagem incremental focada em duplicacoes reais antes de cortes mais agressivos de autoridade
+
 Observacao importante:
 
 - o semantic core ja tem renderers separados por dominio:
