@@ -871,6 +871,16 @@ Objetivo:
 - reduzir superficie duplicada de comportamento no booking legado
 - evitar que uma segunda implementacao fique desatualizada e reintroduza divergencia durante a transicao
 
+### Sexto corte de superficie duplicada do legado
+
+- wrappers locais de `resolveQuote(...)` em `turn-handler.ts` e `turn/early/reject-and-first.ts` foram removidos
+- o fluxo legado continua chamando `resolveQuote(...)`, mas sem helpers paralelos de um unico retorno
+
+Objetivo:
+
+- reduzir pontos redundantes de entrada em quote mode
+- manter a desmontagem do legado coerente por responsabilidade unica
+
 Observacao importante:
 
 - o semantic core ja tem renderers separados por dominio:

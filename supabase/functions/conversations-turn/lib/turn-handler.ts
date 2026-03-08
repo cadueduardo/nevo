@@ -98,9 +98,6 @@ async function trySemanticCoreResult(
   })
   return await renderSemanticSimulatorResult(state, semantic)
 }
-function handleQuoteModeMessage(config: SimulatorConfig, text: string, nextState: SimulatorState): SimulatorResult {
-  return resolveQuote(config, text, nextState)
-}
 
 export async function handleBookingModeMessage(context: SimulatorHandlerContext): Promise<SimulatorResult> {
   const { text, config, nextState, history, senderDisplayName, isFirst, runtime } = context

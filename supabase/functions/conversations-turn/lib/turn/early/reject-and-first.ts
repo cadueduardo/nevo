@@ -26,10 +26,6 @@ import { handleFirstMessageOrchestratorAction } from "../../orchestrator-actions
 import { resolveBooking } from "../../resolve-booking.ts"
 import { enterBookingFromIntent } from "../../qualification.ts"
 
-function handleQuoteModeMessage(config: import("../../types.ts").SimulatorConfig, text: string, nextState: import("../../types.ts").SimulatorState): SimulatorResult {
-  return resolveQuote(config, text, nextState)
-}
-
 /** Retorna resultado se rejeição unlisted, primeira saudação ou primeira mensagem (IA); senão null. */
 export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<SimulatorResult | null> {
   const { text, config, nextState, history, senderDisplayName, isFirst, textNorm, minOrchestratorConfidence, getOrchestrator } = ctx
@@ -150,7 +146,7 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
       if (detectedMode === "quote") {
         nextState.mode = "quote"
         nextState.step = "quote"
-        return handleQuoteModeMessage(config, text, nextState)
+        return resolveQuote(config, text, nextState)
       }
     }
     const aiAnswer = await answerWithContextualAI(config, text, history)
