@@ -793,6 +793,18 @@ Este e o primeiro corte efetivo de soberania:
 - o legado continua existindo como fallback para sessoes nao ativadas
 - mas perde autoridade semantica nas sessoes em que o motor novo foi habilitado
 
+### Segundo corte de autoridade do legado
+
+Com o `semantic_core` ativo:
+
+- o atalho legado de `tryHandleExternalQuote(...)` deixa de interceptar a conversa
+- o pos-processamento legado de `rewriteWithTone(...)` nao reescreve a resposta do motor novo
+- o ajuste legado de `interaction_style === conversational` nao reformatta opcoes do semantic core
+
+Objetivo:
+
+- impedir que o motor novo produza uma resposta e o legado altere semantica ou UX por fora
+
 Observacao importante:
 
 - o semantic core ja tem renderers separados por dominio:

@@ -313,6 +313,12 @@ serve(async (req) => {
 
     const senderDisplayName = (body as { sender_display_name?: string }).sender_display_name?.trim() || undefined
     let result: SimulatorResult
+    const semanticCoreEnabled = shouldUseSemanticCore({
+      channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
+      sessionId: body.session_id,
+      senderId: (body as { from?: string }).from,
+    })
+    let usedSemanticCore = false
 
     // Intents internas (modo internal, owner/admin): consulta/cancelamento de agenda.
     const incomingMode = (body as { mode?: string }).mode
@@ -367,13 +373,8 @@ serve(async (req) => {
         } else {
           // NÃ£o classificou como intent interna; segue fluxo normal.
           try {
-            if (
-              shouldUseSemanticCore({
-                channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
-                sessionId: body.session_id,
-                senderId: (body as { from?: string }).from,
-              })
-            ) {
+            if (semanticCoreEnabled) {
+              usedSemanticCore = true
               const semantic = await runSemanticCoreTurn({
                 message: body.message,
                 channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
@@ -390,6 +391,9 @@ serve(async (req) => {
                 supabaseAdmin,
                 tenantId: tenant.id,
                 agentId,
+                channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
+                sessionId: body.session_id,
+                senderId: (body as { from?: string }).from,
                 contactId: contact.id,
                 contact,
                 senderDisplayName,
@@ -409,13 +413,15 @@ serve(async (req) => {
       }
     } else {
       // FASE 5: OrÃ§amento externo (cliente pergunta preÃ§o com medidas â†’ faixa + CTA)
-      const externalQuoteResult = await tryHandleExternalQuote({
-        supabaseAdmin,
-        tenantId: tenant.id,
-        agentId,
-        conversationId: conversation.id,
-        message: body.message,
-      })
+      const externalQuoteResult = semanticCoreEnabled
+        ? { handled: false as const }
+        : await tryHandleExternalQuote({
+            supabaseAdmin,
+            tenantId: tenant.id,
+            agentId,
+            conversationId: conversation.id,
+            message: body.message,
+          })
       if (externalQuoteResult.handled) {
         result = {
           message: externalQuoteResult.message || "",
@@ -424,13 +430,8 @@ serve(async (req) => {
         }
       } else {
         try {
-          if (
-            shouldUseSemanticCore({
-              channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
-              sessionId: body.session_id,
-              senderId: (body as { from?: string }).from,
-            })
-          ) {
+          if (semanticCoreEnabled) {
+            usedSemanticCore = true
             const semantic = await runSemanticCoreTurn({
               message: body.message,
               channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
@@ -447,6 +448,9 @@ serve(async (req) => {
               supabaseAdmin,
               tenantId: tenant.id,
               agentId,
+              channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
+              sessionId: body.session_id,
+              senderId: (body as { from?: string }).from,
               isExternalActor: true,
               contactId: contact.id,
               contact,
@@ -467,7 +471,7 @@ serve(async (req) => {
     }
 
     // Estilo conversacional: nao prefixar opcoes com "1 -", "2 -", etc.
-    if (config.interaction_style === "conversational" && Array.isArray(result.action_options)) {
+    if (!usedSemanticCore && config.interaction_style === "conversational" && Array.isArray(result.action_options)) {
       const denumberedOptions = result.action_options.map((opt) => String(opt || "").replace(/^\d+\s*-\s*/, "").trim())
       result = {
         ...result,
@@ -479,7 +483,9 @@ serve(async (req) => {
       }
     }
 
-    const rewritten = await rewriteWithTone(result.message, config.tone)
+    const rewritten = usedSemanticCore
+      ? { message: result.message, used_ai: false }
+      : await rewriteWithTone(result.message, config.tone)
     const finalMessage = sessionExpiryWarning
       ? `${sessionExpiryWarning}\n\n${rewritten.message}`
       : rewritten.message
