@@ -404,35 +404,8 @@ serve(async (req) => {
           }
         } else {
           // NÃ£o classificou como intent interna; segue fluxo normal.
-            try {
-              if (semanticCoreEnabled) {
-                usedSemanticCore = true
-                const semantic = await runSemanticCoreTurn({
-                message: body.message,
-                channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
-                config,
-                state: stateWithFirstFlag,
-                history,
-                sender_display_name: senderDisplayName,
-                  session_id: body.session_id,
-                  sender_id: (body as { from?: string }).from,
-                })
-                result = await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
-              } else {
-              result = await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
-                supabaseAdmin,
-                tenantId: tenant.id,
-                agentId,
-                channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
-                sessionId: body.session_id,
-                senderId: (body as { from?: string }).from,
-                contactId: contact.id,
-                contact,
-                senderDisplayName,
-                history,
-                config,
-              })
-            }
+          try {
+            result = await runMainConversationFlow()
           } catch (err) {
             console.error("processSimulatorMessage error:", err)
             result = {

@@ -910,13 +910,12 @@ Objetivo:
 - o entrypoint da Edge Function agora tem um helper unico (`runMainConversationFlow`) para acionar:
   - `semantic_core`
   - ou `processSimulatorMessage(...)`
-- o ramo `external` ja passou a usar esse helper unico
-- o ramo `internal` ainda possui um bloco duplicado por conta de inconsistencias locais de formatacao/encoding no arquivo e permanece no radar para o proximo corte
+- os ramos `external` e `internal` passaram a usar esse helper unico
 
 Objetivo:
 
 - reduzir divergencia entre os dois caminhos principais do entrypoint
-- preparar a remocao completa do bloco duplicado restante no ramo `internal` sem forcar um patch mais agressivo neste ponto
+- concentrar o dispatch principal do entrypoint em uma unica funcao local antes de novos cortes de autoridade do legado
 
 ## Guardrails reforcados para a continuacao da refatoracao
 
