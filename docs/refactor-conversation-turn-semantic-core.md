@@ -1196,3 +1196,5 @@ Fonte:
   - continuidade multi-turno no web_simulator
   - confirmacao seguida de proxima pessoa ja inferida
   - selecao de template de sequencia seguida de escolha de servico
+  - pergunta informacional antes de booking sem perder continuidade
+  - resposta curta/imprecisa sem derrubar o contexto de sequencia

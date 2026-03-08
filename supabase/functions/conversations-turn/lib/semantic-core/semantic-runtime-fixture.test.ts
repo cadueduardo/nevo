@@ -492,3 +492,122 @@ Deno.test("semantic runtime fixture sequence keeps ask_service context after sel
     throw new Error("Expected semantic sequence flow to carry date/time suggestion after selecting same_next services")
   }
 })
+
+Deno.test("semantic runtime fixture handles informational question before booking without losing booking continuity", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState(),
+    channel: "web_simulator",
+    sender_display_name: "Cadu",
+    turns: [
+      {
+        intents: { primary: "price", secondary: [], booking: false, confidence: 0.93 },
+        entities: {
+          people: [],
+          attendee_names: [],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 0,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "quanto custa o corte?" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: ["booking_with_price"], booking: true, confidence: 0.96 },
+        entities: {
+          people: [],
+          attendee_names: [],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "fechou, quero agendar entao" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "reply_price")
+  assertIncludes(outputs[0].result.message, "R$ 50")
+  assertEquals(outputs[1].semantic.decision.action, "ask_date")
+  assertEquals(outputs[1].result.state.slots.service, "Corte")
+})
+
+Deno.test("semantic runtime fixture keeps sequence context after short affirmative reply", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState({
+      completed_bookings: [
+        {
+          attendee_name: "Carlos",
+          service: "Corte",
+          duration_minutes: 30,
+          date: "2026-03-09",
+          time: "09:00",
+          staff_name: "Cadu",
+        },
+      ],
+      pending_additional_booking: true,
+      pending_attendee_queue: ["Davi"],
+      pending_template_choice: true,
+      last_template_options: [
+        "Mesmo dia e colaborador (proximo horario)",
+        "Outro horario no mesmo dia",
+        "Outro dia",
+      ],
+      slots: {
+        attendee_name: "Davi",
+      },
+    }),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.95 },
+        entities: {
+          people: [],
+          attendee_names: ["Davi"],
+          services: [],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "1" },
+      } as any,
+      {
+        intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.83 },
+        entities: {
+          people: [],
+          attendee_names: ["Davi"],
+          services: [],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 1,
+          sequence_request: true,
+          next_question_hint: "ask_service_selection",
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "pode ser" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "ask_service")
+  assertEquals(outputs[1].semantic.decision.action, "ask_service")
+  assertIncludes(outputs[1].result.message, "Davi")
+})
