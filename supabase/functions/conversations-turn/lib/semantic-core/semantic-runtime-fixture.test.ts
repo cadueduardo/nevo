@@ -169,3 +169,139 @@ Deno.test("semantic runtime fixture offers sequence template for inferred next a
   assertIncludes(result.message, "Davi")
   assertIncludes(result.message, "logo apos")
 })
+
+Deno.test("semantic runtime fixture renders greeting fallback with business and contact name", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    sender_display_name: "Cadu",
+    snapshot: {
+      intents: { primary: "greeting", secondary: [], booking: false, confidence: 0.9 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "opa, tudo bem?" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_greeting")
+  assertIncludes(result.message, "Cadu")
+  assertIncludes(result.message, "BarberShop")
+})
+
+Deno.test("semantic runtime fixture answers price with concrete configured value", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "price", secondary: [], booking: false, confidence: 0.93 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [{ name: "Barba", normalized_name: "barba" }],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "quanto custa a barba?" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_price")
+  assertIncludes(result.message, "Barba")
+  assertIncludes(result.message, "R$ 35")
+})
+
+Deno.test("semantic runtime fixture answers service detail with configured description", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "service_detail", secondary: [], booking: false, confidence: 0.92 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [{ name: "Corte", normalized_name: "corte" }],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "como funciona o corte?" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_service_detail")
+  assertIncludes(result.message, "Corte")
+  assertIncludes(result.message, "Corte de cabelo masculino")
+})
+
+Deno.test("semantic runtime fixture asks for another date when same_next sequence is unavailable", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState({
+      completed_bookings: [
+        {
+          attendee_name: "Carlos",
+          service: "Corte, Barba",
+          duration_minutes: 60,
+          date: "2026-03-09",
+          time: "17:00",
+          staff_name: "Cadu",
+        },
+      ],
+      pending_additional_booking: true,
+      pending_attendee_queue: ["Davi"],
+      last_template_options: [
+        "Mesmo dia e colaborador (proximo horario)",
+        "Outro horario no mesmo dia",
+        "Outro dia",
+      ],
+      slots: {
+        attendee_name: "Davi",
+        service: "Corte",
+      },
+      booked_slots: {
+        cadu: {
+          "2026-03-09": ["17:00", "17:30"],
+        },
+      },
+    }),
+    snapshot: {
+      intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.95 },
+      entities: {
+        people: [],
+        attendee_names: ["Davi"],
+        services: [{ name: "Corte", normalized_name: "corte" }],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 1,
+        sequence_request: true,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "1" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "ask_date")
+  assertIncludes(result.message, "Nao encontrei um proximo horario livre")
+})

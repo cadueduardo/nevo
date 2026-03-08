@@ -1061,4 +1061,9 @@ Fonte:
   - FAQ com endereco real
   - confirmacao com proxima pessoa ja inferida
   - oferta de template de sequencia para a proxima pessoa
+- cobertura ampliada para:
+  - saudacao com fallback controlado
+  - preco com valor real configurado
+  - detalhe de servico com descricao real
+  - sequencia same_next sem slot disponivel
 
