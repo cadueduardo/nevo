@@ -99,6 +99,20 @@ async function trySemanticCoreResult(
   return await renderSemanticSimulatorResult(state, semantic)
 }
 
+function shouldEnterLegacyBookingFromSignals(params: {
+  hasStrongBookingIntent: boolean
+  bookingIntent?: boolean
+  suggested_action?: string
+  confidence?: number
+  minConfidence: number
+}): boolean {
+  if (params.hasStrongBookingIntent || params.bookingIntent === true) return true
+  return (
+    params.suggested_action === "start_booking" &&
+    (params.confidence ?? 0) >= params.minConfidence
+  )
+}
+
 export async function handleBookingModeMessage(context: SimulatorHandlerContext): Promise<SimulatorResult> {
   const { text, config, nextState, history, senderDisplayName, isFirst, runtime } = context
   const semanticResult = await trySemanticCoreResult(text, config, nextState, history, senderDisplayName, runtime)
@@ -353,16 +367,15 @@ export async function processSimulatorMessage(
     }
 
     // Prioridade: regex (ágil) ou orquestrador (IA como consierge �" qualquer redação)
-    const bookingRequestRejected = await getBookingRequest()
-    let shouldEnterBooking = hasStrongBookingIntent || bookingRequestRejected?.booking_intent === true
     const orchForBooking = await getOrchestrator()
-    if (
-      !shouldEnterBooking &&
-      orchForBooking?.suggested_action === "start_booking" &&
-      (orchForBooking.confidence ?? 0) >= minOrchestratorConfidence
-    ) {
-      shouldEnterBooking = true
-    }
+    const bookingRequestRejected = await getBookingRequest()
+    const shouldEnterBooking = shouldEnterLegacyBookingFromSignals({
+      hasStrongBookingIntent,
+      bookingIntent: bookingRequestRejected?.booking_intent,
+      suggested_action: orchForBooking?.suggested_action,
+      confidence: orchForBooking?.confidence,
+      minConfidence: minOrchestratorConfidence,
+    })
     if (shouldEnterBooking) {
       return await enterBookingFromIntent({
         text,
@@ -520,16 +533,15 @@ export async function processSimulatorMessage(
     }
 
     // Regex ou orquestrador (IA como consierge �" qualquer estilo)
-    const bookingRequestQualification = await getBookingRequest()
-    let shouldEnterBookingQ = hasStrongBookingIntent || bookingRequestQualification?.booking_intent === true
     const orchForBookingQ = await getOrchestrator()
-    if (
-      !shouldEnterBookingQ &&
-      orchForBookingQ?.suggested_action === "start_booking" &&
-      (orchForBookingQ.confidence ?? 0) >= minOrchestratorConfidence
-    ) {
-      shouldEnterBookingQ = true
-    }
+    const bookingRequestQualification = await getBookingRequest()
+    const shouldEnterBookingQ = shouldEnterLegacyBookingFromSignals({
+      hasStrongBookingIntent,
+      bookingIntent: bookingRequestQualification?.booking_intent,
+      suggested_action: orchForBookingQ?.suggested_action,
+      confidence: orchForBookingQ?.confidence,
+      minConfidence: minOrchestratorConfidence,
+    })
     if (shouldEnterBookingQ) {
       return await enterBookingFromIntent({
         text,

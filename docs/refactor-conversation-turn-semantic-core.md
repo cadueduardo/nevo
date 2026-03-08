@@ -891,6 +891,60 @@ Objetivo:
 - reduzir mais um desvio sem semantica propria no booking legado
 - manter a desmontagem incremental focada em duplicacoes reais antes de cortes mais agressivos de autoridade
 
+### Oitavo corte de superficie duplicada do legado
+
+- a decisao legada de "entrar em booking" em `qualification` e `qualification_rejected` foi consolidada em um helper unico
+- o legado continua podendo entrar em booking nesses pontos, mas sem duplicar a mesma combinacao de:
+  - `hasStrongBookingIntent`
+  - `booking_request.booking_intent`
+  - `orchestrator.suggested_action === start_booking`
+  - `confidence >= minOrchestratorConfidence`
+
+Objetivo:
+
+- reduzir mais um ponto de precedencia duplicada no caminho antigo
+- deixar mais explicito, no proprio legado, qual e o criterio unico de entrada em booking enquanto ele ainda existir
+
+## Guardrails reforcados para a continuacao da refatoracao
+
+Os pontos abaixo passam a fazer parte do plano de implementacao, nao apenas como principios gerais.
+
+### Soberania do semantic core
+
+- se o `semantic_core` estiver ativo para um turno, ele deve ser a unica autoridade semantica daquele turno
+- qualquer necessidade nova de entendimento deve entrar no `TurnSemanticSnapshot`
+- nao criar novas inferencias paralelas fora do snapshot builder
+
+### Limites por camada
+
+- `DecisionEngine` escolhe a proxima acao; nao renderiza, nao persiste, nao calcula disponibilidade detalhada
+- executores aplicam a decisao; nao reinterpretam mensagem e nao chamam IA
+- renderers adaptam apresentacao por canal; nao alteram fluxo nem regra de negocio
+
+### Estado versus interpretacao
+
+- interpretacao temporaria pertence ao snapshot
+- execucao confirmada e continuidade pertencem ao state
+- novos campos de state devem sempre responder: "isto e execucao ou interpretacao?"
+
+### Observabilidade obrigatoria
+
+Durante rollout do `semantic_core`, cada turno deve continuar registrando:
+
+- snapshot final
+- policy aplicada
+- decisao tomada
+- executor acionado
+- patches de estado
+- render final
+- motivo de fallback, reparo, ambiguidade ou sequencia nao aplicada
+
+### Multiagendamento como caso principal
+
+- multiagendamento continua tratado como caminho principal de validacao
+- respostas curtas e caoticas (`sim`, `pode ser`, `esse mesmo`, `usa o mesmo contato`) devem continuar preservando contexto
+- sequencia deve sempre respeitar duracao real e disponibilidade real
+
 Observacao importante:
 
 - o semantic core ja tem renderers separados por dominio:
