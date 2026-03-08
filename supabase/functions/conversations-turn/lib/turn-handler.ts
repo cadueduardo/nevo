@@ -121,10 +121,7 @@ async function applyLegacyPriceBookingLeadContext(
   nextState.step = undefined
   const interpreted = await interpretAdditionalBookingsWithAI(text, { has_completed_booking: false, history })
   if (interpreted?.has_additional || (typeof interpreted?.count === "number" && interpreted.count > 0)) {
-    nextState.pending_additional_booking = true
-    nextState.pending_attendee_name = true
-    nextState.pending_additional_count = Math.max(1, interpreted?.count ?? 1)
-    nextState.expected_additional_count = nextState.pending_additional_count
+    applyLegacyAdditionalBookingSetup(nextState, interpreted?.count ?? 1)
   } else if (interpreted?.for_whom) {
     nextState.slots.attendee_name = interpreted.for_whom
   }
@@ -134,6 +131,13 @@ function applyLegacyMatchedServiceState(nextState: SimulatorState, service: stri
   nextState.slots.service = service
   nextState.just_identified_service = true
   nextState.step = undefined
+}
+
+function applyLegacyAdditionalBookingSetup(nextState: SimulatorState, count = 1): void {
+  nextState.pending_additional_booking = true
+  nextState.pending_attendee_name = true
+  nextState.pending_additional_count = Math.max(1, count)
+  nextState.expected_additional_count = nextState.pending_additional_count
 }
 
 export async function handleBookingModeMessage(context: SimulatorHandlerContext): Promise<SimulatorResult> {
@@ -259,10 +263,7 @@ export async function processSimulatorMessage(
   if ((nextState.pending_attendee_name || askedForAttendeeNameHardGuard) && plausibleAttendeeAnswer) {
     nextState.mode = "booking"
     nextState.step = undefined
-    nextState.pending_attendee_name = true
-    nextState.pending_additional_booking = true
-    nextState.pending_additional_count = Math.max(1, nextState.pending_additional_count ?? 1)
-    if (nextState.expected_additional_count == null) nextState.expected_additional_count = nextState.pending_additional_count
+    applyLegacyAdditionalBookingSetup(nextState, nextState.pending_additional_count ?? 1)
     return await handleBookingModeMessage({
       text,
       config,
@@ -361,12 +362,10 @@ export async function processSimulatorMessage(
         if (!name) return null
         nextState.mode = "booking"
         nextState.step = undefined
+        applyLegacyAdditionalBookingSetup(nextState, nextState.pending_additional_count ?? 1)
         nextState.pending_attendee_name = false
         nextState.slots = { ...nextState.slots, attendee_name: name, quote_answers: nextState.slots?.quote_answers || {} }
         if (!nextState.slots.customer_name) nextState.slots.customer_name = name
-        nextState.pending_additional_booking = true
-        nextState.pending_additional_count = Math.max(1, nextState.pending_additional_count ?? 1)
-        if (nextState.expected_additional_count == null) nextState.expected_additional_count = nextState.pending_additional_count
         const result = await resolveBooking(config, text, nextState, history, senderDisplayName)
         return buildResult(result.message, result.state, result.action_options)
       },
@@ -507,10 +506,7 @@ export async function processSimulatorMessage(
     if (isAudienceConfirmation && (config.services || []).length > 0) {
       nextState.mode = "booking"
       nextState.step = undefined
-      nextState.pending_additional_booking = true
-      nextState.pending_attendee_name = true
-      nextState.pending_additional_count = 1
-      nextState.expected_additional_count = 1
+      applyLegacyAdditionalBookingSetup(nextState, 1)
       return buildResult(`${buildMultiBookingIntro()} De quem será o primeiro agendamento?`, nextState)
     }
 
@@ -679,10 +675,7 @@ export async function processSimulatorMessage(
     !isGreeting(text)
   if (askedForAttendeeName && isPlausibleAnswer) {
     nextState.mode = "booking"
-    nextState.pending_attendee_name = true
-    nextState.pending_additional_booking = true
-    nextState.pending_additional_count = Math.max(1, nextState.pending_additional_count ?? 1)
-    if (nextState.expected_additional_count === undefined) nextState.expected_additional_count = nextState.pending_additional_count
+    applyLegacyAdditionalBookingSetup(nextState, nextState.pending_additional_count ?? 1)
   }
 
   // Se é primeira mensagem, SEMPRE verificar contexto primeiro (mesmo que comece com "oi")
@@ -788,5 +781,6 @@ export async function processSimulatorMessage(
   ]
   return runPipeline(ctx, phases)
 }
+
 
 

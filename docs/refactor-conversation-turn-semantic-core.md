@@ -947,6 +947,34 @@ Objetivo:
 - reduzir mais uma superficie de escrita paralela de slots no legado
 - preparar o terreno para o semantic core assumir de vez a promocao de servico no fluxo de qualification
 
+### Decimo segundo corte de superficie duplicada do legado
+
+- o setup repetido de multiagendamento inicial no legado foi consolidado em um helper unico
+- a mesma mutacao de:
+  - `pending_additional_booking`
+  - `pending_attendee_name`
+  - `pending_additional_count`
+  - `expected_additional_count`
+  nao fica mais espalhada em varios pontos do `turn-handler.ts`
+
+Objetivo:
+
+- reduzir mais uma classe de escrita paralela de state no booking legado
+- deixar mais previsivel a continuidade do multiagendamento enquanto o semantic core ainda nao substituiu 100% esse caminho
+
+### Decimo terceiro corte de superficie duplicada do legado
+
+- os branches legados que retomam fluxo por nome de atendido agora reutilizam o mesmo helper de setup de multiagendamento
+- isso cobre:
+  - retomada quando a ultima pergunta era "de quem sera o primeiro/proximo agendamento?"
+  - extracao de nome no branch de recuperacao
+  - retomada tardia no fallback final
+
+Objetivo:
+
+- reduzir divergencia de state na continuidade do multiagendamento
+- aproximar os pontos de retomada do legado de um comportamento unico antes da substituicao total pelo semantic core
+
 ## Guardrails reforcados para a continuacao da refatoracao
 
 Os pontos abaixo passam a fazer parte do plano de implementacao, nao apenas como principios gerais.
