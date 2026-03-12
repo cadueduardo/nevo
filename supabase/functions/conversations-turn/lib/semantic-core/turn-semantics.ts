@@ -33,11 +33,59 @@ const MALE_RELATIONS = ["irmao", "irmão", "marido", "pai", "primo", "amigo", "n
 const FEMALE_RELATIONS = ["irma", "irmã", "esposa", "mae", "mãe", "prima", "amiga", "namorada", "filha", "menina", "garota"]
 const CHILD_RELATIONS = ["filho", "filha", "crianca", "criança", "bebe", "bebê", "menino", "menina", "muleque", "moleque"]
 
-function inferWaitingFor(state: SemanticTurnContext["state"]): "attendee_name" | "service" | "date" | "time" | undefined {
+function inferWaitingFor(
+  state: SemanticTurnContext["state"]
+): "attendee_name" | "service" | "date" | "time" | "contact" | undefined {
   if (state.pending_attendee_name) return "attendee_name"
   if (state.pending_second_service_choice || state.service_selection_multi || !state.slots?.service) return "service"
   if (state.pending_date_confirmation || !state.slots?.date) return "date"
   if (state.last_time_options?.length || !state.slots?.time) return "time"
+  if (state.pending_contact_field === "contact_preference") return "contact"
+  return undefined
+}
+
+export function inferContactPreferenceSignal(
+  message: string,
+  context: Pick<SemanticTurnContext, "state">,
+  waitingFor?: "attendee_name" | "service" | "date" | "time" | "contact"
+): "phone" | "email" | "both" | "skip_primary" | undefined {
+  if (waitingFor !== "contact" && context.state.pending_contact_field !== "contact_preference") return undefined
+
+  const normalized = normalizeText(message).trim()
+  const lastOptions = Array.isArray(context.state.last_action_options) ? context.state.last_action_options : []
+  const hasSkipPrimaryOption = lastOptions.some((option) => normalizeText(option).includes("usar contato do titular"))
+
+  if (
+    /\b(usa|usar|quero usar|pode usar|reutiliza|reaproveita)\b/.test(normalized) &&
+    /\b(mesmo|titular|contato|celular|numero|telefone)\b/.test(normalized)
+  ) {
+    return hasSkipPrimaryOption ? "skip_primary" : undefined
+  }
+  if (hasSkipPrimaryOption && /\b(esse mesmo|o mesmo|mesmo contato|mesmo numero|mesmo celular|pular|titular)\b/.test(normalized)) {
+    return "skip_primary"
+  }
+  if (normalized === "4" && hasSkipPrimaryOption) return "skip_primary"
+  if (normalized === "3" || /\b(os dois|ambos|celular e email|email e celular)\b/.test(normalized)) return "both"
+  if (normalized === "2" || /\b(email|e-mail)\b/.test(normalized)) return "email"
+  if (normalized === "1" || /\b(celular|telefone|whatsapp|numero)\b/.test(normalized)) return "phone"
+  return undefined
+}
+
+export function inferCalendarResponseSignal(
+  message: string,
+  context: Pick<SemanticTurnContext, "state">
+): "accept" | "decline" | undefined {
+  const lastOptions = Array.isArray(context.state.last_action_options) ? context.state.last_action_options : []
+  const isCalendarPrompt = lastOptions.some((option) => normalizeText(option).includes("adicionar no calendario"))
+  if (!isCalendarPrompt) return undefined
+
+  const normalized = normalizeText(message).trim()
+  if (normalized === "1" || /\b(adicionar|pode adicionar|sim|quero|manda|coloca)\b/.test(normalized)) {
+    return "accept"
+  }
+  if (normalized === "2" || /\b(nao|nao obrigado|dispensa|deixa|sem calendario)\b/.test(normalized)) {
+    return "decline"
+  }
   return undefined
 }
 
@@ -261,6 +309,8 @@ export async function buildTurnSemanticSnapshot(
   const audienceRisk = buildAudienceRisk(brain, people, bookingRequest?.includes_self === true)
   const ambiguities = inferAmbiguities(primaryIntent, people, serviceCandidates, audienceRisk)
   const nextQuestionHint = inferNextQuestionHint(primaryIntent, people, serviceCandidates, audienceRisk, slots)
+  const contactPreference = inferContactPreferenceSignal(trimmedMessage, context, waitingFor)
+  const calendarResponse = inferCalendarResponseSignal(trimmedMessage, context)
 
   return {
     intents: {
@@ -293,6 +343,8 @@ export async function buildTurnSemanticSnapshot(
       sequence_request: inferSequenceRequest(trimmedMessage, bookingRequest),
       availability_check: slots?.needs_availability_check === true || isAvailabilityQuestion(trimmedMessage),
       next_question_hint: nextQuestionHint,
+      contact_preference: contactPreference,
+      calendar_response: calendarResponse,
     },
     risks: {
       audience: audienceRisk,

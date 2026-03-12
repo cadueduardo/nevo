@@ -15,9 +15,7 @@ import {
   generateAvailabilityResponseWithAI,
   interpretBookingRequestWithAI,
 } from "../../ai.ts"
-import { classifyServiceMatch } from "../../services.ts"
-import { hasMatchContext } from "../../qualification.ts"
-import { generateRejectionMessageWithAI } from "../../builders.ts"
+import { resolveServiceMatchSummary } from "../../qualification.ts"
 import { detectModeFromText } from "../../detection.ts"
 import { tryAnswerInformationalQuestion } from "../../informational.ts"
 import { getEntryActionOptions } from "../../request-helpers.ts"
@@ -36,16 +34,13 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
     !nextState.slots.service &&
     !isGreeting(text)
   ) {
-    const matchUnlisted = await classifyServiceMatch(text, config)
-    if (matchUnlisted.reject) {
-      const hasContext = hasMatchContext(matchUnlisted)
-      const rejectionMessage = await generateRejectionMessageWithAI(
-        matchUnlisted.inferred_area,
-        config,
-        isFirst,
-        hasContext
-      )
-      return buildResult(rejectionMessage, { ...nextState, step: "qualification_rejected" })
+    const matchUnlisted = await resolveServiceMatchSummary({
+      text,
+      config,
+      isFirst,
+    })
+    if (matchUnlisted.match.reject) {
+      return buildResult(matchUnlisted.rejectionMessage, { ...nextState, step: "qualification_rejected" })
     }
   }
 

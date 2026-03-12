@@ -396,7 +396,7 @@ export type SlotsInterpretation = {
 export async function interpretSlotsFromMessageWithAI(
   message: string,
   context: {
-    waiting_for?: "attendee_name" | "service" | "date" | "time"
+    waiting_for?: "attendee_name" | "service" | "date" | "time" | "contact"
     current_slots?: { attendee_name?: string; service?: string; date?: string; time?: string }
     services?: Array<{ name: string }>
     history?: Array<{ role: string; content: string }>

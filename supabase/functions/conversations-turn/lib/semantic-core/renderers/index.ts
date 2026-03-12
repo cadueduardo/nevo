@@ -22,6 +22,9 @@ export async function renderSemanticSimulatorResult(
       rendered = await renderGreeting(semantic)
       break
     case "reply_identity":
+    case "reply_faq":
+    case "reply_calendar_confirmed":
+    case "reply_calendar_declined":
     case "reply_price":
     case "reply_service_detail":
     case "reply_service_list":

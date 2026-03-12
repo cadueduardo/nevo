@@ -136,6 +136,8 @@ export interface SemanticSignalsSnapshot {
   sequence_request?: boolean
   availability_check?: boolean
   next_question_hint?: string
+  contact_preference?: "phone" | "email" | "both" | "skip_primary"
+  calendar_response?: "accept" | "decline"
 }
 
 export interface SemanticRisksSnapshot {
@@ -160,6 +162,8 @@ export type SemanticDecisionAction =
   | "reply_greeting"
   | "reply_identity"
   | "reply_faq"
+  | "reply_calendar_confirmed"
+  | "reply_calendar_declined"
   | "reply_price"
   | "reply_service_detail"
   | "reply_service_list"

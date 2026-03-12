@@ -86,11 +86,11 @@ export function buildDynamicPeopleQueue(
 }
 
 function inferSlotUpdates(snapshot: TurnSemanticSnapshot) {
-  const firstService = snapshot.entities.services?.[0]?.name
+  const selectedServices = snapshot.entities.services?.map((service) => service?.name).filter(Boolean) || []
   const firstAttendee = snapshot.entities.attendee_names?.[0]
   return {
     attendee_name: firstAttendee,
-    service: firstService,
+    service: selectedServices.length > 0 ? selectedServices.join(", ") : undefined,
     date: snapshot.entities.date?.iso_date || undefined,
     time: snapshot.entities.time?.hhmm || undefined,
   }
@@ -102,11 +102,20 @@ export function deriveBookingContext(
 ): DerivedBookingContext {
   const peopleQueue = buildDynamicPeopleQueue(snapshot, context)
   const slotUpdates = inferSlotUpdates(snapshot)
-  const templateChoice = parseTemplateChoice(
-    snapshot.meta.raw_user_message,
-    context.state.last_template_options
+  const templateChoice =
+    parseTemplateChoice(
+      snapshot.meta.raw_user_message,
+      context.state.last_template_options
+    ) ||
+    (context.state.pending_second_service_choice ? "same_next" : null)
+  const includesSelfAttendee =
+    snapshot.signals.includes_self === true ||
+    snapshot.entities.people?.some((person) => person?.includes_self === true)
+  const hasAttendee = Boolean(
+    includesSelfAttendee ||
+    snapshot.entities.attendee_names?.length ||
+    context.state.slots?.attendee_name
   )
-  const hasAttendee = Boolean(snapshot.entities.attendee_names?.length || context.state.slots?.attendee_name)
   const hasService = Boolean(snapshot.entities.services?.length || context.state.slots?.service)
   const sequenceAnchorBooking =
     (Array.isArray(context.state.completed_bookings) && context.state.completed_bookings.length > 0
@@ -135,7 +144,10 @@ export function deriveBookingContext(
   const hasDate = Boolean(slotUpdates.date || snapshot.entities.date?.iso_date || context.state.slots?.date)
   const hasTime = Boolean(slotUpdates.time || snapshot.entities.time?.hhmm || context.state.slots?.time)
   const hasContact = Boolean(
-    context.state.contact_preference || context.state.slots?.customer_phone || context.state.slots?.customer_email
+    snapshot.signals.contact_preference ||
+    context.state.contact_preference ||
+    context.state.slots?.customer_phone ||
+    context.state.slots?.customer_email
   )
   const hasCompletedBookings = Boolean(context.state.completed_bookings?.length)
   const isAdditionalBooking = Boolean(context.state.pending_additional_booking || hasCompletedBookings)
@@ -147,13 +159,15 @@ export function deriveBookingContext(
   const effectiveQueue = currentAttendeeName
     ? uniqueOrderedNames([currentAttendeeName, ...peopleQueue])
     : peopleQueue
-  const serviceOptions = context.business_brain.services.map((service) => service.name)
+  const serviceOptions = (context.business_brain?.services || []).map((service) => service.name)
   const contactOptions = isAdditionalBooking
     ? ["So celular", "So email", "Celular e email", "Pular (usar contato do titular)"]
     : ["So celular", "So email", "Celular e email"]
   const shouldOfferSequenceTemplate = Boolean(
     hasCompletedBookings &&
     (snapshot.signals.sequence_request || context.state.pending_template_choice) &&
+    !hasDate &&
+    !hasTime &&
     !templateChoice
   )
 

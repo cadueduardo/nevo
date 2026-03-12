@@ -29,7 +29,11 @@ import {
   handleInternalIntent,
   tryHandleExternalQuote,
 } from "./lib/index.ts"
-import { runSemanticCoreTurn, shouldUseSemanticCore } from "./lib/semantic-core/runtime.ts"
+import {
+  runSemanticCoreTurn,
+  shouldDefaultExternalToSemanticCore,
+  shouldUseSemanticCore,
+} from "./lib/semantic-core/runtime.ts"
 import { renderSemanticSimulatorResult } from "./lib/semantic-core/renderers/index.ts"
 import type {
   ConversationTurnRequest,
@@ -40,6 +44,334 @@ import type {
 } from "./lib/index.ts"
 
 // Lógica de turno (processSimulatorMessage, handleBookingModeMessage) em lib/turn-handler.ts
+
+function buildSimulatorResult(params: {
+  state: SimulatorState
+  message: string
+  action_options?: string[]
+}): SimulatorResult {
+  const { state, message, action_options } = params
+  return {
+    message,
+    state,
+    action_options,
+  }
+}
+
+function buildProcessingErrorResult(state: SimulatorState): SimulatorResult {
+  return buildSimulatorResult({
+    state,
+    message: "Desculpe, tive um problema ao processar. Pode repetir?",
+  })
+}
+
+function isInternalOwnerActor(body: ConversationTurnRequest): boolean {
+  const incomingMode = (body as { mode?: string }).mode
+  const incomingActorType = (body as { actor_type?: string }).actor_type
+  return incomingMode === "internal" && (incomingActorType === "owner" || incomingActorType === "admin")
+}
+
+async function runConversationFlowSafely(
+  runMainConversationFlow: (options?: { isExternalActor?: boolean }) => Promise<SimulatorResult>,
+  state: SimulatorState,
+  options?: { isExternalActor?: boolean }
+): Promise<SimulatorResult> {
+  try {
+    return await runMainConversationFlow(options)
+  } catch (err) {
+    console.error("processSimulatorMessage error:", err)
+    return buildProcessingErrorResult(state)
+  }
+}
+
+async function tryHandleInternalActorFlow(params: {
+  supabaseAdmin: any
+  tenantId: string
+  agentId: string
+  channelId: string
+  conversationId: string
+  message: string
+  config: SimulatorConfig
+  state: SimulatorState
+}): Promise<SimulatorResult | null> {
+  const { supabaseAdmin, tenantId, agentId, channelId, conversationId, message, config, state } = params
+  const rateLimitResult = await resolveInternalActorRateLimit({
+    supabaseAdmin,
+    tenantId,
+    state,
+  })
+  if (rateLimitResult) return rateLimitResult
+
+  await supabaseAdmin.from("internal_action_log").insert({
+    tenant_id: tenantId,
+    action: "internal_command",
+    payload: { message },
+  })
+
+  const internalResult = await handleInternalIntent({
+    supabaseAdmin,
+    tenantId,
+    agentId,
+    message,
+    config: buildInternalActorConfig(config),
+    state,
+    conversationId,
+    channelId,
+  })
+  if (!internalResult.handled) return null
+  return buildInternalActorResult(internalResult, state)
+}
+
+async function resolveInternalActorRateLimit(params: {
+  supabaseAdmin: any
+  tenantId: string
+  state: SimulatorState
+}): Promise<SimulatorResult | null> {
+  const { supabaseAdmin, tenantId, state } = params
+  const RATE_LIMIT_WINDOW_SEC = 60
+  const RATE_LIMIT_MAX = Math.max(1, parseInt(Deno.env.get("INTERNAL_RATE_LIMIT_PER_MINUTE") || "20", 10) || 20)
+  const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_SEC * 1000).toISOString()
+  const { count: recentCount, error: countErr } = await supabaseAdmin
+    .from("internal_action_log")
+    .select("*", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .gte("created_at", windowStart)
+  if (!countErr && (recentCount ?? 0) >= RATE_LIMIT_MAX) {
+    return buildSimulatorResult({
+      message: "VocÃƒÂª enviou muitos comandos. Tenta em 30 segundos.",
+      state,
+    })
+  }
+  return null
+}
+
+function buildInternalActorConfig(config: SimulatorConfig) {
+  return {
+    business_name: config.business_name,
+    branding: config.branding,
+    schedule: config.schedule,
+    services: config.services,
+  }
+}
+
+function buildHandledFlowResult(params: {
+  message?: string
+  state?: SimulatorState
+  fallbackState: SimulatorState
+  action_options?: string[]
+}): SimulatorResult {
+  const { message, state, fallbackState, action_options } = params
+  return buildSimulatorResult({
+    message: message || "",
+    state: state ?? fallbackState,
+    action_options,
+  })
+}
+
+function buildInternalActorResult(
+  internalResult: Awaited<ReturnType<typeof handleInternalIntent>>,
+  state: SimulatorState
+): SimulatorResult {
+  return buildHandledFlowResult({
+    message: internalResult.message,
+    state: internalResult.state,
+    fallbackState: state,
+    action_options: internalResult.action_options,
+  })
+}
+
+function buildInternalActorFallbackResult(state: SimulatorState): SimulatorResult {
+  return buildSimulatorResult({
+    state,
+    message:
+      "Nao reconheci esse comando interno. Tente consultar agenda, clientes do dia ou um comando administrativo suportado.",
+  })
+}
+
+async function tryHandleExternalQuoteFlow(params: {
+  semanticCoreEnabled: boolean
+  supabaseAdmin: any
+  tenantId: string
+  agentId: string
+  conversationId: string
+  message: string
+  state: SimulatorState
+}): Promise<SimulatorResult | null> {
+  const { semanticCoreEnabled, supabaseAdmin, tenantId, agentId, conversationId, message, state } = params
+  if (semanticCoreEnabled) return null
+  const externalQuoteResult = await tryHandleExternalQuote({
+    supabaseAdmin,
+    tenantId,
+    agentId,
+    conversationId,
+    message,
+  })
+  if (!externalQuoteResult.handled) return null
+  return buildHandledFlowResult({
+    message: externalQuoteResult.message,
+    fallbackState: state,
+    action_options: externalQuoteResult.action_options,
+  })
+}
+
+function buildAssistantResponseMessage(params: {
+  content: string
+  created_at: string
+  action_options?: string[]
+  service_multi_select?: boolean
+}): ConversationTurnResponse["messages"][number] {
+  const { content, created_at, action_options, service_multi_select } = params
+  return {
+    role: "assistant",
+    content,
+    created_at,
+    action_options,
+    service_multi_select,
+  }
+}
+
+function buildAssistantConversationMessageLog(params: {
+  tenantId: string
+  conversationId: string
+  channelType: string
+  tone?: string
+  content: string
+  action_options?: string[] | null
+  used_ai?: boolean
+  base_message?: string
+}) {
+  const { tenantId, conversationId, channelType, tone, content, action_options, used_ai, base_message } = params
+  return {
+    tenant_id: tenantId,
+    conversation_id: conversationId,
+    role: "assistant",
+    content_text: content,
+    metadata: {
+      channel: channelType,
+      tone,
+      action_options: action_options || null,
+      ...(used_ai === undefined ? {} : { used_ai }),
+      ...(base_message === undefined ? {} : { base_message }),
+    },
+  }
+}
+
+function buildUserConversationMessageLog(params: {
+  tenantId: string
+  conversationId: string
+  channelType: string
+  content: string
+}) {
+  const { tenantId, conversationId, channelType, content } = params
+  return {
+    tenant_id: tenantId,
+    conversation_id: conversationId,
+    role: "user",
+    content_text: content,
+    metadata: { channel: channelType },
+  }
+}
+
+function shouldRenderServiceMultiSelect(params: {
+  usedSemanticCore: boolean
+  result: SimulatorResult
+  resultState: SimulatorState
+  config: SimulatorConfig
+}): boolean {
+  const { usedSemanticCore, result, resultState, config } = params
+  if (usedSemanticCore) return Boolean(result.render_hints?.service_multi_select)
+
+  const isServiceStep =
+    (resultState.service_selection_multi ?? false) &&
+    !resultState.slots?.service
+  if (!isServiceStep) return false
+
+  const normalizeOption = (v: string) =>
+    String(v || "")
+      .replace(/^\d+\s*-\s*/, "")
+      .trim()
+      .toLowerCase()
+
+  const actionOptions = Array.isArray(result.action_options)
+    ? result.action_options.map(normalizeOption).filter(Boolean)
+    : []
+  const serviceOptions = Array.isArray(resultState.last_service_options)
+    ? resultState.last_service_options.map(normalizeOption).filter(Boolean)
+    : []
+  if (actionOptions.length === 0 || serviceOptions.length === 0) return false
+  if (!actionOptions.every((opt) => serviceOptions.includes(opt))) return false
+
+  const catalogServiceOptions = [
+    ...(config.services || []).map((s) => String(s?.name || "")),
+    ...(config.sequence_eligible_services || []).map((s) => String(s || "")),
+    "Quero agendar uma visita",
+    "visita",
+  ]
+    .map(normalizeOption)
+    .filter(Boolean)
+  if (catalogServiceOptions.length === 0) return false
+
+  // Blindagem final: se as opcoes nao forem do catalogo de servicos, nao renderizar multi-select.
+  return actionOptions.every((opt) => catalogServiceOptions.includes(opt))
+}
+
+function buildConversationContextUpdate(params: {
+  conversationContext?: Record<string, unknown> | null
+  sessionIdForContact: string
+  config: SimulatorConfig
+  incomingMode?: string
+  incomingActorType?: string
+}): Record<string, unknown> {
+  const { conversationContext, sessionIdForContact, config, incomingMode, incomingActorType } = params
+  const contextUpdate: Record<string, unknown> = {
+    ...(conversationContext || {}),
+    session_id: sessionIdForContact,
+    business_name: config.business_name,
+    business_type: config.business_type,
+    context_mode: config.context_mode,
+    tone: config.tone,
+  }
+  if (incomingMode === "internal" || incomingMode === "external") {
+    contextUpdate.mode = incomingMode
+  }
+  if (incomingActorType != null && typeof incomingActorType === "string") {
+    contextUpdate.actor_type = incomingActorType
+  }
+  return contextUpdate
+}
+
+function buildCompletedBookingAppointmentInsert(params: {
+  tenantId: string
+  agentId: string
+  contactId: string
+  config: SimulatorConfig
+  booking: { attendee_name?: string; staff_name?: string; date?: string; time?: string; service?: string }
+}) {
+  const { tenantId, agentId, contactId, config, booking } = params
+  const staffName = booking.staff_name ?? null
+  const date = booking.date
+  const time = booking.time
+  const service = booking.service
+  if (!date || !time || !staffName) return null
+
+  // Horario e em hora local do negocio (Brasil). Usar -03:00 para que 15:30 local = 18:30 UTC.
+  const startAt = `${date}T${time}:00.000-03:00`
+  const duration = getServicesTotalDuration(config, service) ?? getServiceDurationMinutes(config, service) ?? 30
+  const endAt = new Date(Date.parse(startAt) + duration * 60 * 1000).toISOString()
+  const serviceNames = parseServiceNames(service)
+
+  return {
+    tenant_id: tenantId,
+    agent_id: agentId,
+    contact_id: contactId,
+    attendee_name: booking.attendee_name ?? null,
+    staff_name: staffName,
+    service_names: serviceNames.length > 0 ? serviceNames : service ? [service] : [],
+    start_at: startAt,
+    end_at: endAt,
+    status: "confirmed",
+  }
+}
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -313,11 +645,14 @@ serve(async (req) => {
 
     const senderDisplayName = (body as { sender_display_name?: string }).sender_display_name?.trim() || undefined
     let result: SimulatorResult
-    const semanticCoreEnabled = shouldUseSemanticCore({
-      channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
-      sessionId: body.session_id,
-      senderId: (body as { from?: string }).from,
-    })
+    const internalActor = isInternalOwnerActor(body)
+    const semanticCoreEnabled =
+      shouldUseSemanticCore({
+        channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
+        sessionId: body.session_id,
+        senderId: (body as { from?: string }).from,
+      }) ||
+      (!internalActor && shouldDefaultExternalToSemanticCore())
     let usedSemanticCore = false
     const semanticChannel = channelType === "whatsapp" ? "whatsapp" : "web_simulator"
     const runMainConversationFlow = async (options?: { isExternalActor?: boolean }): Promise<SimulatorResult> => {
@@ -353,111 +688,52 @@ serve(async (req) => {
     }
 
     // Intents internas (modo internal, owner/admin): consulta/cancelamento de agenda.
-    const incomingMode = (body as { mode?: string }).mode
-    const incomingActorType = (body as { actor_type?: string }).actor_type
-    const isInternalActor =
-      incomingMode === "internal" &&
-      (incomingActorType === "owner" || incomingActorType === "admin")
-
-    if (isInternalActor) {
-      // FASE 6: Rate limit configurÃ¡vel via ENV (default 20/min)
-      const RATE_LIMIT_WINDOW_SEC = 60
-      const RATE_LIMIT_MAX = Math.max(1, parseInt(Deno.env.get("INTERNAL_RATE_LIMIT_PER_MINUTE") || "20", 10) || 20)
-      const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_SEC * 1000).toISOString()
-      const { count: recentCount, error: countErr } = await supabaseAdmin
-        .from("internal_action_log")
-        .select("*", { count: "exact", head: true })
-        .eq("tenant_id", tenant.id)
-        .gte("created_at", windowStart)
-      if (!countErr && (recentCount ?? 0) >= RATE_LIMIT_MAX) {
-        result = {
-          message: "VocÃª enviou muitos comandos. Tenta em 30 segundos.",
-          state: stateWithFirstFlag,
-          action_options: undefined,
-        }
+    if (internalActor) {
+      const internalResult = await tryHandleInternalActorFlow({
+        supabaseAdmin,
+        tenantId: tenant.id,
+        agentId,
+        channelId: channel.id,
+        conversationId: conversation.id,
+        message: body.message,
+        config,
+        state: stateWithFirstFlag,
+      })
+      if (internalResult) {
+        result = internalResult
       } else {
-        await supabaseAdmin.from("internal_action_log").insert({
-          tenant_id: tenant.id,
-          action: "internal_command",
-          payload: { message: body.message },
-        })
-        const internalResult = await handleInternalIntent({
-          supabaseAdmin,
-          tenantId: tenant.id,
-          agentId,
-          message: body.message,
-          config: {
-            business_name: config.business_name,
-            branding: config.branding,
-            schedule: config.schedule,
-            services: config.services,
-          },
-          state: stateWithFirstFlag,
-          conversationId: conversation.id,
-          channelId: channel.id,
-        })
-        if (internalResult.handled) {
-          result = {
-            message: internalResult.message,
-            state: internalResult.state ?? stateWithFirstFlag,
-            action_options: internalResult.action_options,
-          }
-        } else {
-          // NÃ£o classificou como intent interna; segue fluxo normal.
-          try {
-            result = await runMainConversationFlow()
-          } catch (err) {
-            console.error("processSimulatorMessage error:", err)
-            result = {
-              message: "Desculpe, tive um problema ao processar. Pode repetir?",
-              state: stateWithFirstFlag,
-              action_options: undefined,
-            }
-          }
-        }
+        // NÃ£o classificou como intent interna; segue fluxo normal.
+        result = buildInternalActorFallbackResult(stateWithFirstFlag)
       }
     } else {
       // FASE 5: OrÃ§amento externo (cliente pergunta preÃ§o com medidas â†’ faixa + CTA)
-      const externalQuoteResult = semanticCoreEnabled
-        ? { handled: false as const }
-        : await tryHandleExternalQuote({
-            supabaseAdmin,
-            tenantId: tenant.id,
-            agentId,
-            conversationId: conversation.id,
-            message: body.message,
-          })
-      if (externalQuoteResult.handled) {
-        result = {
-          message: externalQuoteResult.message || "",
-          state: stateWithFirstFlag,
-          action_options: externalQuoteResult.action_options,
-        }
-      } else {
-        try {
-          result = await runMainConversationFlow({ isExternalActor: true })
-        } catch (err) {
-          console.error("processSimulatorMessage error:", err)
-          result = {
-            message: "Desculpe, tive um problema ao processar. Pode repetir?",
-            state: stateWithFirstFlag,
-            action_options: undefined,
-          }
-        }
-      }
+      const externalQuoteResult = await tryHandleExternalQuoteFlow({
+        semanticCoreEnabled,
+        supabaseAdmin,
+        tenantId: tenant.id,
+        agentId,
+        conversationId: conversation.id,
+        message: body.message,
+        state: stateWithFirstFlag,
+      })
+      result = externalQuoteResult ?? await runConversationFlowSafely(
+        runMainConversationFlow,
+        stateWithFirstFlag,
+        { isExternalActor: true }
+      )
     }
 
     // Estilo conversacional: nao prefixar opcoes com "1 -", "2 -", etc.
     if (!usedSemanticCore && config.interaction_style === "conversational" && Array.isArray(result.action_options)) {
       const denumberedOptions = result.action_options.map((opt) => String(opt || "").replace(/^\d+\s*-\s*/, "").trim())
-      result = {
-        ...result,
+      result = buildSimulatorResult({
+        message: result.message,
         action_options: denumberedOptions,
         state: {
           ...result.state,
           last_action_options: denumberedOptions,
         },
-      }
+      })
     }
 
     const rewritten = usedSemanticCore
@@ -467,44 +743,40 @@ serve(async (req) => {
       ? `${sessionExpiryWarning}\n\n${rewritten.message}`
       : rewritten.message
 
-    const extraAssistantMessages = Array.isArray((result.state as SimulatorState)?.outgoing_assistant_messages)
-      ? ((result.state as SimulatorState).outgoing_assistant_messages || [])
+    const resultState = result.state as SimulatorState
+    const extraAssistantMessages = Array.isArray(resultState?.outgoing_assistant_messages)
+      ? (resultState.outgoing_assistant_messages || [])
       : []
+    const filteredExtraAssistantMessages = extraAssistantMessages.filter(
+      (m) => typeof m?.content === "string" && m.content.trim().length > 0
+    )
     const nowIso = new Date().toISOString()
 
     await supabaseAdmin.from("conversation_messages").insert([
-      {
-        tenant_id: tenant.id,
-        conversation_id: conversation.id,
-        role: "user",
-        content_text: body.message,
-        metadata: { channel: channelType },
-      },
-      {
-        tenant_id: tenant.id,
-        conversation_id: conversation.id,
-        role: "assistant",
-        content_text: finalMessage,
-        metadata: {
-          channel: channelType,
+      buildUserConversationMessageLog({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channelType,
+        content: body.message,
+      }),
+      buildAssistantConversationMessageLog({
+        tenantId: tenant.id,
+        conversationId: conversation.id,
+        channelType,
+        tone: config.tone,
+        content: finalMessage,
+        action_options: result.action_options,
+        used_ai: rewritten.used_ai,
+        base_message: result.message,
+      }),
+      ...filteredExtraAssistantMessages
+        .map((m) => buildAssistantConversationMessageLog({
+          tenantId: tenant.id,
+          conversationId: conversation.id,
+          channelType,
           tone: config.tone,
-          base_message: result.message,
-          used_ai: rewritten.used_ai,
-          action_options: result.action_options || null,
-        },
-      },
-      ...extraAssistantMessages
-        .filter((m) => typeof m?.content === "string" && m.content.trim().length > 0)
-        .map((m) => ({
-          tenant_id: tenant.id,
-          conversation_id: conversation.id,
-          role: "assistant",
-          content_text: m.content,
-          metadata: {
-            channel: channelType,
-            tone: config.tone,
-            action_options: m.action_options || null,
-          },
+          content: m.content,
+          action_options: m.action_options,
         })),
     ])
 
@@ -514,7 +786,7 @@ serve(async (req) => {
       outgoing_assistant_messages,
       outbound_notifications,
       ...stateToSave
-    } = result.state as SimulatorState & {
+    } = resultState as SimulatorState & {
       _isFirstMessage?: boolean
       outgoing_assistant_messages?: Array<{ content: string; action_options?: string[]; service_multi_select?: boolean }>
       outbound_notifications?: Array<{ phone: string; content: string }>
@@ -522,20 +794,14 @@ serve(async (req) => {
     void outgoing_assistant_messages
     void outbound_notifications
     
-    const contextUpdate: Record<string, unknown> = {
-      ...(conversation.context || {}),
-      session_id: sessionIdForContact,
-      business_name: config.business_name,
-      business_type: config.business_type,
-      context_mode: config.context_mode,
-      tone: config.tone,
-    }
-    if (incomingMode === "internal" || incomingMode === "external") {
-      contextUpdate.mode = incomingMode
-    }
-    if (incomingActorType != null && typeof incomingActorType === "string") {
-      contextUpdate.actor_type = incomingActorType
-    }
+    const incomingMode = (body as { mode?: string }).mode
+    const contextUpdate = buildConversationContextUpdate({
+      conversationContext: conversation.context || {},
+      sessionIdForContact,
+      config,
+      incomingMode,
+      incomingActorType,
+    })
 
     await supabaseAdmin
       .from("conversation")
@@ -553,6 +819,17 @@ serve(async (req) => {
       const completed = (stateToSave as SimulatorState).completed_bookings ?? []
       const newBookings = completed.slice(prevLen)
       for (const b of newBookings) {
+        const appointmentInsert = buildCompletedBookingAppointmentInsert({
+          tenantId: tenantIdForAppointment,
+          agentId,
+          contactId: contact.id,
+          config,
+          booking: b as { attendee_name?: string; staff_name?: string; date?: string; time?: string; service?: string },
+        })
+        if (!appointmentInsert) continue
+        const { error: insErr } = await supabaseAdmin.from("appointment").insert(appointmentInsert)
+        if (insErr && insErr.code !== "23505") console.error("appointment insert error:", insErr)
+        continue
         const staffName = (b as { staff_name?: string }).staff_name ?? null
         const date = (b as { date?: string }).date
         const time = (b as { time?: string }).time
@@ -582,61 +859,27 @@ serve(async (req) => {
     const response: ConversationTurnResponse = {
       conversation_id: conversation.id,
       messages: [
-        {
-          role: "assistant",
+        buildAssistantResponseMessage({
           content: finalMessage,
           created_at: nowIso,
           action_options: result.action_options,
-          service_multi_select: usedSemanticCore
-            ? Boolean(result.render_hints?.service_multi_select)
-            : (() => {
-              const state = result.state as SimulatorState
-              const isServiceStep =
-                (state.service_selection_multi ?? false) &&
-              !state.slots?.service
-            if (!isServiceStep) return false
-
-            const normalizeOption = (v: string) =>
-              String(v || "")
-                .replace(/^\d+\s*-\s*/, "")
-                .trim()
-                .toLowerCase()
-
-            const actionOptions = Array.isArray(result.action_options)
-              ? result.action_options.map(normalizeOption).filter(Boolean)
-              : []
-            const serviceOptions = Array.isArray(state.last_service_options)
-              ? state.last_service_options.map(normalizeOption).filter(Boolean)
-              : []
-            if (actionOptions.length === 0 || serviceOptions.length === 0) return false
-            if (!actionOptions.every((opt) => serviceOptions.includes(opt))) return false
-
-            const catalogServiceOptions = [
-              ...(config.services || []).map((s) => String(s?.name || "")),
-              ...(config.sequence_eligible_services || []).map((s) => String(s || "")),
-              "Quero agendar uma visita",
-              "visita",
-            ]
-              .map(normalizeOption)
-              .filter(Boolean)
-            if (catalogServiceOptions.length === 0) return false
-
-              // Blindagem final: se as opcoes nao forem do catalogo de servicos, nao renderizar multi-select.
-              return actionOptions.every((opt) => catalogServiceOptions.includes(opt))
-            })(),
-        },
-        ...extraAssistantMessages
-          .filter((m) => typeof m?.content === "string" && m.content.trim().length > 0)
-          .map((m) => ({
-            role: "assistant" as const,
+          service_multi_select: shouldRenderServiceMultiSelect({
+            usedSemanticCore,
+            result,
+            resultState,
+            config,
+          }),
+        }),
+        ...filteredExtraAssistantMessages
+          .map((m) => buildAssistantResponseMessage({
             content: m.content,
             created_at: nowIso,
             action_options: m.action_options,
             service_multi_select: Boolean(m.service_multi_select),
         })),
       ],
-      outbound_notifications: Array.isArray((result.state as SimulatorState)?.outbound_notifications)
-        ? ((result.state as SimulatorState).outbound_notifications || []).filter(
+      outbound_notifications: Array.isArray(resultState?.outbound_notifications)
+        ? (resultState.outbound_notifications || []).filter(
             (n) => typeof n?.phone === "string" && n.phone.trim() && typeof n?.content === "string" && n.content.trim()
           )
         : undefined,

@@ -47,8 +47,8 @@ export function mergeSemanticState(
     ...statePatch,
     slots: {
       ...(baseState.slots || {}),
-      ...(statePatch.slots || {}),
       ...slotUpdates,
+      ...(statePatch.slots || {}),
     },
     last_prompt: baseState.last_prompt,
     last_action_options: formattedActionOptions,

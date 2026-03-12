@@ -1,6 +1,8 @@
 // @ts-nocheck
 import type { SemanticRuntimeResult } from "../runtime.ts"
 import {
+  buildCalendarConfirmedMessage,
+  buildCalendarDeclinedMessage,
   buildFallbackClarificationMessage,
   buildFaqFallbackMessage,
   buildIdentityMessage,
@@ -32,6 +34,14 @@ export function renderInformational(semantic: SemanticRuntimeResult): RenderedSe
       return {
         message: buildIdentityMessage(businessName),
         action_options: ["Quero agendar"],
+      }
+    case "reply_calendar_confirmed":
+      return {
+        message: buildCalendarConfirmedMessage(),
+      }
+    case "reply_calendar_declined":
+      return {
+        message: buildCalendarDeclinedMessage(),
       }
     case "reply_price":
       return {

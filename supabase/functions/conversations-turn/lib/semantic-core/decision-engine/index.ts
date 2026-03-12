@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { SemanticDecisionResult, SemanticTurnContext, TurnSemanticSnapshot } from "../types.ts"
+import { buildSemanticClarificationDecision } from "../runtime-helpers.ts"
 import { decideBooking } from "./booking.ts"
 import { decideFallback } from "./fallback.ts"
 import { decideGreeting } from "./greeting.ts"
@@ -10,16 +11,11 @@ export function decideNextSemanticAction(
   context: SemanticTurnContext
 ): SemanticDecisionResult {
   if (snapshot.risks.audience?.blocked) {
-    return {
-      action: "ask_clarification",
-      reason: snapshot.risks.audience.reason || "target_audience_blocked",
+    return buildSemanticClarificationDecision({
       confidence: snapshot.intents.confidence,
+      reason: snapshot.risks.audience.reason || "target_audience_blocked",
       next_question: snapshot.risks.audience.prompt,
-      channel_hints: {
-        prefer_numbered_options: false,
-        prefer_multi_select: false,
-      },
-    }
+    })
   }
 
   if (snapshot.intents.primary === "greeting") {
@@ -32,5 +28,5 @@ export function decideNextSemanticAction(
   const booking = decideBooking(snapshot, context)
   if (booking) return booking
 
-  return decideFallback(snapshot)
+  return decideFallback(snapshot, context)
 }

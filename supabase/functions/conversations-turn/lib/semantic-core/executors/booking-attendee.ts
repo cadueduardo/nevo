@@ -5,31 +5,27 @@ import type {
   SemanticTurnContext,
   TurnSemanticSnapshot,
 } from "../types.ts"
-import { deriveBookingContext, shiftCurrentAttendeeFromQueue } from "../booking-context.ts"
-import { buildExecutorResult } from "./shared.ts"
+import { buildExecutorResult, buildBookingQueueState } from "./shared.ts"
 
 export function executeBookingAttendee(
   decision: SemanticDecisionResult,
   snapshot: TurnSemanticSnapshot,
   context: SemanticTurnContext
 ): SemanticExecutorResult {
-  const booking = deriveBookingContext(snapshot, context)
-  const attendeeName = booking.current_attendee_name || decision.slot_updates?.attendee_name
-  const queue = decision.semantic_people_queue || booking.people_queue || []
-  const remainingQueue = shiftCurrentAttendeeFromQueue(queue, attendeeName)
+  const queueState = buildBookingQueueState(decision, snapshot, context)
 
   return buildExecutorResult({
     executor: "booking-attendee",
     decision,
-    slot_updates: attendeeName ? { attendee_name: attendeeName } : undefined,
+    slot_updates: queueState.attendee_name ? { attendee_name: queueState.attendee_name } : undefined,
     state_patch: {
-      pending_attendee_name: !attendeeName,
-      pending_attendee_queue: remainingQueue,
+      pending_attendee_name: !queueState.attendee_name,
+      pending_attendee_queue: queueState.remaining_queue,
     },
     metadata: {
-      attendee_name: attendeeName || null,
-      queue_size: queue.length,
-      remaining_queue_size: remainingQueue.length,
+      attendee_name: queueState.attendee_name || null,
+      queue_size: decision.semantic_people_queue?.length || 0,
+      remaining_queue_size: queueState.remaining_queue.length,
     },
   })
 }

@@ -54,7 +54,7 @@ export function renderBooking(semantic: SemanticRuntimeResult): RenderedSemantic
       }
     case "ask_attendee_name":
       return {
-        message: buildAttendeeQuestion(booking.is_additional_booking),
+        message: buildAttendeeQuestion(booking.has_completed_bookings),
       }
     case "ask_service":
       if (booking.template_choice === "same_next") {

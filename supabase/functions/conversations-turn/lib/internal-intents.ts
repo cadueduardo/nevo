@@ -73,6 +73,90 @@ function toBusinessDateTime(value: string): { dateIso: string; time: string } {
   }
 }
 
+function resolveInternalParsedDate(text: string, fallbackDate?: string): string | undefined {
+  return parseDateOrWeekday(text) || parseDate(text) || fallbackDate
+}
+
+function hasInternalAgendaKeywords(msg: string): boolean {
+  return /\b(agenda|agendamentos?|compromissos?|consultas?|horarios?|marcacoes?|marcações?|que\s+tem)\b/.test(
+    msg
+  )
+}
+
+function resolveInternalBaseIntentSlots(params: {
+  text: string
+  fallbackDate?: string
+  includeName?: boolean
+}): InternalIntentSlots {
+  const { text, fallbackDate, includeName = false } = params
+  const slots: InternalIntentSlots = {}
+  const time = parseTime(text)
+  const date = resolveInternalParsedDate(text, fallbackDate)
+  const name = includeName ? extractAttendeeNameFromMessage(text) : null
+  if (time) slots.time = time
+  if (date) slots.date = date
+  if (name) slots.name = name
+  return slots
+}
+
+function resolveInternalContactLookupName(msg: string): string | null {
+  const contactNameMatch = msg.match(
+    /\b(contato|buscar|dados?\s+de?|quem\s+e|telefone\s+de)\s+(.+?)(?:\s*[?.!]?)$/
+  )
+  if (contactNameMatch && contactNameMatch[2].trim().length >= 2) {
+    return contactNameMatch[2].trim()
+  }
+
+  if (/\b(contato|buscar)\s+/.test(msg)) {
+    const afterTrigger = msg.replace(/^(?:contato|buscar)\s+/, "").trim()
+    if (afterTrigger.length >= 2) return afterTrigger
+  }
+
+  return null
+}
+
+function resolveInternalTimedAgendaSlots(params: {
+  text: string
+  fallbackDate: string
+}): { date: string; time: string } | null {
+  const { text, fallbackDate } = params
+  const time = parseTime(text)
+  if (!time) return null
+  return {
+    date: resolveInternalParsedDate(text, fallbackDate)!,
+    time,
+  }
+}
+
+function resolveInternalTimedAgendaIntent(params: {
+  text: string
+  msg: string
+  fallbackDate: string
+}): ClassifiedInternalIntent | null {
+  const { text, msg, fallbackDate } = params
+  const timedAgendaSlots = resolveInternalTimedAgendaSlots({
+    text,
+    fallbackDate,
+  })
+  if (!timedAgendaSlots) return null
+
+  if (
+    /\b(contato|dados?|cliente|paciente|telefone|quem\s+e)\b/.test(msg) &&
+    /\b(das?|as|a|às|horario|hora)\b/.test(msg)
+  ) {
+    return { intent: "query_contact_by_appointment_time", slots: timedAgendaSlots }
+  }
+
+  if (
+    /\b(quem|qual|dados?|informacoes?|informações?|cliente|paciente|agendamento|tem)\b/.test(msg) ||
+    /\b(as|a|às)\s*\d/.test(msg)
+  ) {
+    return { intent: "query_appointment_by_time", slots: timedAgendaSlots }
+  }
+
+  return null
+}
+
 /**
  * Classifica a intenção interna por padrões (sem IA).
  */
@@ -87,75 +171,57 @@ export function classifyInternalIntent(text: string): ClassifiedInternalIntent {
     /\b(cancelar|desmarcar|cancela|desmarca)\b/.test(msg) ||
     /\b(quero\s+)?cancelar\s+(o\s+)?(agendamento|compromisso|horario)\b/.test(msg)
   ) {
-    const time = parseTime(text)
-    const date = parseDateOrWeekday(text) || parseDate(text)
-    if (time) slots.time = time
-    if (date) slots.date = date
-    return { intent: "cancel_appointment", slots }
+    return {
+      intent: "cancel_appointment",
+      slots: resolveInternalBaseIntentSlots({ text }),
+    }
   }
 
   // query_appointments_today
-  if (
-    /\b(hoje|dia\s+de\s+hoje)\b/.test(msg) &&
-    /\b(agenda|agendamentos?|compromissos?|consultas?|horarios?|marcacoes?|marcações?|que\s+tem)\b/.test(msg)
-  ) {
+  if (/\b(hoje|dia\s+de\s+hoje)\b/.test(msg) && hasInternalAgendaKeywords(msg)) {
     return { intent: "query_appointments_today", slots: { date: todayIso } }
   }
 
   // query_appointments_tomorrow
-  if (
-    /\b(amanha|amanhã)\b/.test(msg) &&
-    /\b(agenda|agendamentos?|compromissos?|consultas?|horarios?|marcacoes?|marcações?|que\s+tem)\b/.test(msg)
-  ) {
+  if (/\b(amanha|amanhã)\b/.test(msg) && hasInternalAgendaKeywords(msg)) {
     return { intent: "query_appointments_tomorrow", slots: { date: tomorrowIso } }
   }
 
   // query_appointments_by_date: data explícita ou dia da semana
-  const dateFromText = parseDateOrWeekday(text) || parseDate(text)
-  if (
-    dateFromText &&
-    /\b(agenda|agendamentos?|compromissos?|consultas?|horarios?|marcacoes?|marcações?|dia\s+\d)\b/.test(msg)
-  ) {
+  const dateFromText = resolveInternalParsedDate(text)
+  if (dateFromText && (hasInternalAgendaKeywords(msg) || /\bdia\s+\d\b/.test(msg))) {
     return { intent: "query_appointments_by_date", slots: { date: dateFromText } }
   }
 
   // query_contact_by_appointment_time: contato/dados do cliente por horário (reusa lógica de query_appointment_by_time)
-  const timeForContact = parseTime(text)
+  const timedAgendaSlots = resolveInternalTimedAgendaSlots({
+    text,
+    fallbackDate: todayIso,
+  })
   if (
-    timeForContact &&
+    timedAgendaSlots &&
     /\b(contato|dados?|cliente|paciente|telefone|quem\s+e)\b/.test(msg) &&
     /\b(das?|as|a|às|horario|hora)\b/.test(msg)
   ) {
-    const date = parseDateOrWeekday(text) || parseDate(text) || todayIso
-    return { intent: "query_contact_by_appointment_time", slots: { date, time: timeForContact } }
+    return { intent: "query_contact_by_appointment_time", slots: timedAgendaSlots }
   }
 
   // query_contact_by_name: buscar contato por nome
-  const contactNameMatch = msg.match(
-    /\b(contato|buscar|dados?\s+de?|quem\s+e|telefone\s+de)\s+(.+?)(?:\s*[?.!]?)$/
-  )
-  if (contactNameMatch && contactNameMatch[2].trim().length >= 2) {
-    const name = contactNameMatch[2].trim()
-    return { intent: "query_contact_by_name", slots: { name } }
-  }
-  if (/\b(contato|buscar)\s+/.test(msg)) {
-    const afterTrigger = msg.replace(/^(?:contato|buscar)\s+/, "").trim()
-    if (afterTrigger.length >= 2) return { intent: "query_contact_by_name", slots: { name: afterTrigger } }
+  const contactLookupName = resolveInternalContactLookupName(msg)
+  if (contactLookupName) {
+    return { intent: "query_contact_by_name", slots: { name: contactLookupName } }
   }
 
   // query_appointment_by_time: horário explícito (ex: "quem tem às 14h", "14:00")
-  const timeFromText = parseTime(text)
   if (
-    timeFromText &&
+    timedAgendaSlots &&
     /\b(quem|qual|dados?|informacoes?|informações?|cliente|paciente|agendamento|tem)\b/.test(msg)
   ) {
-    const date = parseDateOrWeekday(text) || parseDate(text) || todayIso
-    return { intent: "query_appointment_by_time", slots: { date, time: timeFromText } }
+    return { intent: "query_appointment_by_time", slots: timedAgendaSlots }
   }
   // Também: "às 14h", "14:00" sozinho (contexto de agenda)
-  if (timeFromText && /\b(as|a|às)\s*\d/.test(msg)) {
-    const date = parseDateOrWeekday(text) || parseDate(text) || todayIso
-    return { intent: "query_appointment_by_time", slots: { date, time: timeFromText } }
+  if (timedAgendaSlots && /\b(as|a|às)\s*\d/.test(msg)) {
+    return { intent: "query_appointment_by_time", slots: timedAgendaSlots }
   }
 
   // create_appointment_internal: criar, agendar, marcar (para dono criar em nome de cliente)
@@ -163,13 +229,14 @@ export function classifyInternalIntent(text: string): ClassifiedInternalIntent {
     /\b(criar|agendar|marcar|cadastrar)\s+(um\s+)?(agendamento|compromisso|horario|consulta)\b/.test(msg) ||
     /\b(quero\s+)?(agendar|marcar)\s+para\b/.test(msg)
   ) {
-    const time = parseTime(text)
-    const date = parseDateOrWeekday(text) || parseDate(text) || todayIso
-    const name = extractAttendeeNameFromMessage(text)
-    if (time) slots.time = time
-    if (date) slots.date = date
-    if (name) slots.name = name
-    return { intent: "create_appointment_internal", slots }
+    return {
+      intent: "create_appointment_internal",
+      slots: resolveInternalBaseIntentSlots({
+        text,
+        fallbackDate: todayIso,
+        includeName: true,
+      }),
+    }
   }
 
   // request_quote_internal: orçamento, faz orçamento, cotação, etc.
@@ -217,6 +284,445 @@ export interface HandleInternalIntentResult {
   action_options?: string[]
 }
 
+function buildHandledInternalResult(params: {
+  message: string
+  state?: SimulatorState
+  action_options?: string[]
+}): HandleInternalIntentResult {
+  return {
+    handled: true,
+    message: params.message,
+    state: params.state,
+    action_options: params.action_options,
+  }
+}
+
+function buildUnhandledInternalResult(): HandleInternalIntentResult {
+  return {
+    handled: false,
+    message: "",
+  }
+}
+
+function buildClearedPendingInternalResult(params: {
+  incomingState?: SimulatorState
+  clearKey: "quote_pending" | "appointment_pending"
+  message: string
+}): HandleInternalIntentResult {
+  const { incomingState, clearKey, message } = params
+  return buildHandledInternalResult({
+    message,
+    state: incomingState ? { ...incomingState, [clearKey]: undefined } : incomingState,
+  })
+}
+
+function buildPendingInternalResult(params: {
+  incomingState?: SimulatorState
+  pendingKey: "quote_pending" | "appointment_pending"
+  pendingValue: Record<string, unknown>
+  message: string
+  action_options?: string[]
+}): HandleInternalIntentResult {
+  const { incomingState, pendingKey, pendingValue, message, action_options } = params
+  return buildHandledInternalResult({
+    message,
+    state: {
+      ...(incomingState || {}),
+      [pendingKey]: pendingValue,
+    } as SimulatorState,
+    action_options,
+  })
+}
+
+function resolveInternalPendingDeclineResult(params: {
+  incomingState?: SimulatorState
+  pendingKey: "quote_pending" | "appointment_pending"
+}): HandleInternalIntentResult | null {
+  const { incomingState, pendingKey } = params
+  if (!(incomingState as any)?.[pendingKey]) return null
+
+  return buildClearedPendingInternalResult({
+    incomingState,
+    clearKey: pendingKey,
+    message:
+      pendingKey === "quote_pending"
+        ? "Ok, sem problema. O orçamento não foi salvo."
+        : "Ok, o agendamento não foi criado.",
+  })
+}
+
+async function runInternalPendingCompletion(params: {
+  incomingState?: SimulatorState
+  clearKey: "quote_pending" | "appointment_pending"
+  errorContext: string
+  errorMessage: string
+  onExecute: () => Promise<string>
+}): Promise<HandleInternalIntentResult> {
+  const { incomingState, clearKey, errorContext, errorMessage, onExecute } = params
+  try {
+    const successMessage = await onExecute()
+    return buildClearedPendingInternalResult({
+      incomingState,
+      clearKey,
+      message: successMessage,
+    })
+  } catch (err) {
+    console.error(`internal intent ${errorContext} error:`, err)
+    return buildClearedPendingInternalResult({
+      incomingState,
+      clearKey,
+      message: errorMessage,
+    })
+  }
+}
+
+async function queryActiveAppointmentsByDate(params: {
+  supabaseAdmin: any
+  tenantId: string
+  agentId: string
+  dateIso: string
+  select: string
+}) {
+  const { supabaseAdmin, tenantId, agentId, dateIso, select } = params
+  const start = `${dateIso}T00:00:00.000-03:00`
+  const end = `${dateIso}T23:59:59.999-03:00`
+  return await supabaseAdmin
+    .from("appointment")
+    .select(select)
+    .eq("tenant_id", tenantId)
+    .eq("agent_id", agentId)
+    .neq("status", "cancelled")
+    .gte("start_at", start)
+    .lte("start_at", end)
+}
+
+async function queryContactsByIds(params: {
+  supabaseAdmin: any
+  ids: string[]
+}) {
+  const { supabaseAdmin, ids } = params
+  if (ids.length === 0) return { data: [], error: null }
+  return await supabaseAdmin
+    .from("contact")
+    .select("id, phone, display_name")
+    .in("id", ids)
+}
+
+async function queryContactsByTerm(params: {
+  supabaseAdmin: any
+  tenantId: string
+  term: string
+}) {
+  const { supabaseAdmin, tenantId, term } = params
+  return await supabaseAdmin
+    .from("contact")
+    .select("id, display_name, phone, external_id")
+    .eq("tenant_id", tenantId)
+    .or(`display_name.ilike.${term},phone.ilike.${term}`)
+    .limit(10)
+}
+
+async function queryAppointmentsByDate(params: {
+  supabaseAdmin: any
+  tenantId: string
+  agentId: string
+  dateIso: string
+}) {
+  return await queryActiveAppointmentsByDate({
+    ...params,
+    select: "attendee_name, staff_name, service_names, start_at, status",
+  })
+    .order("start_at", { ascending: true })
+}
+
+async function queryOverlappingAppointments(params: {
+  supabaseAdmin: any
+  tenantId: string
+  agentId: string
+  startAt: string
+  endAt: string
+}) {
+  const { supabaseAdmin, tenantId, agentId, startAt, endAt } = params
+  return await supabaseAdmin
+    .from("appointment")
+    .select("id, attendee_name, start_at")
+    .eq("tenant_id", tenantId)
+    .eq("agent_id", agentId)
+    .neq("status", "cancelled")
+    .lt("start_at", endAt)
+    .gt("end_at", startAt)
+}
+
+async function queryActiveQuoteServices(params: {
+  supabaseAdmin: any
+  agentId: string
+}) {
+  const { supabaseAdmin, agentId } = params
+  return await supabaseAdmin
+    .from("quote_service")
+    .select(
+      "id, agent_id, name, pricing_type, variables_schema, pricing_rules, external_variable_keys, keywords, active"
+    )
+    .eq("agent_id", agentId)
+    .eq("active", true)
+}
+
+function validateInternalAppointmentDraft(params: {
+  schedule?: {
+    days_of_week?: string[]
+    start_time?: string
+    end_time?: string
+    breaks?: Array<{ start: string; end: string }>
+    min_booking_lead_minutes?: number
+  }
+  services: Array<{ name: string; duration_minutes?: number }>
+  dateIso: string
+  timeStr?: string
+  attendeeName?: string
+  serviceName?: string | null
+}): { message?: string; duration?: number; normalizedServiceName?: string } {
+  const { schedule, services, dateIso, timeStr, attendeeName, serviceName } = params
+
+  if (!timeStr) {
+    return { message: "Para criar o agendamento, informe o horário (ex.: às 14h, 14:00)." }
+  }
+  if (!attendeeName || attendeeName.length < 2) {
+    return { message: "Qual o nome do cliente? (ex.: agendar para João Silva amanhã 14h)" }
+  }
+  if (!serviceName) {
+    const svcList = services.slice(0, 5).map((s) => s.name).join(", ")
+    return {
+      message: `Qual serviço? ${svcList ? `Opções: ${svcList}` : "Informe o nome do serviço."}`,
+    }
+  }
+
+  const duration = getServiceDurationMinutes({ services } as any, serviceName) ?? 60
+  const scheduleForValidation = schedule
+    ? {
+        start_time: schedule.start_time || "09:00",
+        end_time: schedule.end_time || "18:00",
+        breaks: schedule.breaks,
+      }
+    : undefined
+  const within = isWithinSchedule(timeStr, scheduleForValidation)
+  if (!within.ok) {
+    return { message: within.reason || "Horário fora do expediente." }
+  }
+  if (isTimeTooSoonForDate(dateIso, timeStr, schedule?.min_booking_lead_minutes ?? 20)) {
+    return {
+      message: "Esse horário está muito próximo. Escolha um horário com pelo menos 20 min de antecedência.",
+    }
+  }
+
+  const dayKey = getWeekdayKey(dateIso)
+  const days = schedule?.days_of_week || ["monday", "tuesday", "wednesday", "thursday", "friday"]
+  if (!days.includes(dayKey)) {
+    return { message: `Não atendemos nesse dia. Nossa agenda: ${days.join(", ")}.` }
+  }
+
+  return {
+    duration,
+    normalizedServiceName: serviceName,
+  }
+}
+
+function resolveInternalQuoteService(params: {
+  quoteServices: QuoteServiceRow[]
+}): { service?: QuoteServiceRow; message?: string } {
+  const { quoteServices } = params
+  if (quoteServices.length === 0) {
+    return {
+      message:
+        "Ainda não há serviços de orçamento configurados. Configure na área logada (serviços de orçamento) para usar esta função.",
+    }
+  }
+
+  return { service: quoteServices[0] }
+}
+
+function resolveTimeWindowBounds(timeStr: string): {
+  targetMins: number
+  minMins: number
+  maxMins: number
+} {
+  const targetMins = toMinutes(timeStr)
+  return {
+    targetMins,
+    minMins: targetMins - TIME_TOLERANCE_MINUTES,
+    maxMins: targetMins + TIME_TOLERANCE_MINUTES,
+  }
+}
+
+function filterAppointmentsByTimeWindow(params: {
+  rows: any[]
+  minMins: number
+  maxMins: number
+}): any[] {
+  const { rows, minMins, maxMins } = params
+  return (rows || []).filter((r: any) => {
+    const { time } = toBusinessDateTime(r.start_at)
+    const mins = toMinutes(time)
+    return mins >= minMins && mins <= maxMins
+  })
+}
+
+async function ensureInternalContactId(params: {
+  supabaseAdmin: any
+  tenantId: string
+  channelId?: string
+  attendeeName: string
+}): Promise<string | null> {
+  const { supabaseAdmin, tenantId, channelId, attendeeName } = params
+  if (!channelId) return null
+
+  const { data: existing } = await supabaseAdmin
+    .from("contact")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("channel_id", channelId)
+    .eq("display_name", attendeeName)
+    .limit(1)
+    .maybeSingle()
+
+  if (existing?.id) return existing.id
+
+  const { data: newContact } = await supabaseAdmin
+    .from("contact")
+    .insert({
+      tenant_id: tenantId,
+      channel_id: channelId,
+      external_id: `internal:${attendeeName}:${Date.now()}`,
+      display_name: attendeeName,
+      phone: "",
+    })
+    .select("id")
+    .single()
+
+  return newContact?.id ?? null
+}
+
+function formatAppointmentAgendaMessage(params: {
+  rows: any[]
+  label: string
+}): string {
+  const { rows, label } = params
+  const items = (rows || []).map((r: any) => {
+    const { time } = toBusinessDateTime(r.start_at)
+    const svc =
+      Array.isArray(r.service_names) && r.service_names.length > 0 ? r.service_names.join(", ") : "—"
+    return `${time} – ${r.attendee_name || "—"} (${r.staff_name || "—"}) – ${svc}`
+  })
+  return items.length > 0 ? `📅 ${label}:\n${items.join("\n")}` : `📅 ${label}: Nenhum agendamento.`
+}
+
+function formatAppointmentWindowMessage(params: {
+  rows: any[]
+  contactPhones: Record<string, string>
+  timeStr: string
+}): string {
+  const { rows, contactPhones, timeStr } = params
+  const lines = rows.slice(0, 3).map((r: any) => {
+    const { time } = toBusinessDateTime(r.start_at)
+    const svc = Array.isArray(r.service_names) && r.service_names.length > 0 ? r.service_names.join(", ") : "—"
+    const phone = r.contact_id ? contactPhones[r.contact_id] || "—" : "—"
+    return `${time} – ${r.attendee_name || "—"} | Tel: ${phone} | ${svc}`
+  })
+  const suffix = rows.length > 3 ? `\n(E mais ${rows.length - 3} agendamento(s) nessa faixa.)` : ""
+  return `📅 Por volta das ${timeStr}:\n${lines.join("\n")}${suffix}`
+}
+
+function formatContactLookupMessage(params: {
+  contacts: any[]
+  searchName: string
+}): string {
+  const { contacts, searchName } = params
+  if (contacts.length === 0) {
+    return `Nenhum contato encontrado para "${searchName}".`
+  }
+
+  if (contacts.length === 1) {
+    const c = contacts[0]
+    const name = c.display_name || c.external_id || "—"
+    return `📇 ${name}\nTel: ${c.phone || "—"}`
+  }
+
+  const lines = contacts.slice(0, 5).map((c: any, i: number) => {
+    const name = c.display_name || c.external_id || c.phone || "—"
+    return `${i + 1}. ${name} – ${c.phone || "—"}`
+  })
+  return `Encontrei ${contacts.length} contato(s):\n${lines.join("\n")}\n\nQual deles? (informe o número ou nome completo)`
+}
+
+async function resolveInternalAgendaQuery(params: {
+  supabaseAdmin: any
+  tenantId: string
+  agentId: string
+  dateIso: string
+  label: string
+  errorContext:
+    | "query_appointments_today"
+    | "query_appointments_tomorrow"
+    | "query_appointments_by_date"
+}): Promise<HandleInternalIntentResult> {
+  const { supabaseAdmin, tenantId, agentId, dateIso, label, errorContext } = params
+  const { data: rows, error } = await queryAppointmentsByDate({
+    supabaseAdmin,
+    tenantId,
+    agentId,
+    dateIso,
+  })
+
+  if (error) {
+    console.error(`internal intent ${errorContext} error:`, error)
+    return buildHandledInternalResult({ message: "Não consegui consultar a agenda. Tente novamente." })
+  }
+
+  return buildHandledInternalResult({
+    message: formatAppointmentAgendaMessage({ rows: rows || [], label }),
+  })
+}
+
+async function findInternalAppointmentsAroundTime(params: {
+  supabaseAdmin: any
+  tenantId: string
+  agentId: string
+  dateIso: string
+  timeStr: string
+  select: string
+  errorContext: "query_appointment_by_time" | "cancel_appointment"
+  errorMessage: string
+}): Promise<
+  | { ok: true; matches: any[] }
+  | { ok: false; result: HandleInternalIntentResult }
+> {
+  const { supabaseAdmin, tenantId, agentId, dateIso, timeStr, select, errorContext, errorMessage } = params
+  const { minMins, maxMins } = resolveTimeWindowBounds(timeStr)
+  const { data: rows, error } = await queryActiveAppointmentsByDate({
+    supabaseAdmin,
+    tenantId,
+    agentId,
+    dateIso,
+    select,
+  })
+
+  if (error) {
+    console.error(`internal intent ${errorContext} error:`, error)
+    return {
+      ok: false,
+      result: buildHandledInternalResult({ message: errorMessage }),
+    }
+  }
+
+  return {
+    ok: true,
+    matches: filterAppointmentsByTimeWindow({
+      rows: rows || [],
+      minMins,
+      maxMins,
+    }),
+  }
+}
+
 function isQuoteConfirmation(text: string): boolean {
   const msg = normalizeText(text)
   return (
@@ -252,60 +758,43 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
   const { supabaseAdmin, tenantId, agentId, message, state: incomingState, conversationId } = params
   const todayIso = getTodayIsoBusinessTz()
 
-  // quote_pending + recusa: limpar estado
-  if (incomingState?.quote_pending && isQuoteDecline(message)) {
-    return {
-      handled: true,
+  if (isQuoteDecline(message) && incomingState?.quote_pending) {
+    return buildClearedPendingInternalResult({
+      incomingState,
+      clearKey: "quote_pending",
       message: "Ok, sem problema. O orçamento não foi salvo.",
-      state: { ...incomingState, quote_pending: undefined },
-    }
+    })
   }
 
   // appointment_pending + recusa: limpar estado
   if (incomingState?.appointment_pending && isQuoteDecline(message)) {
-    return {
-      handled: true,
+    return buildClearedPendingInternalResult({
+      incomingState,
+      clearKey: "appointment_pending",
       message: "Ok, o agendamento não foi criado.",
-      state: { ...incomingState, appointment_pending: undefined },
-    }
+    })
   }
 
   // confirm_appointment: estado tem appointment_pending e usuário confirmou
   if (incomingState?.appointment_pending && isQuoteConfirmation(message)) {
     const pending = incomingState.appointment_pending
-    try {
+    return await runInternalPendingCompletion({
+      incomingState,
+      clearKey: "appointment_pending",
+      errorContext: "confirm_appointment",
+      errorMessage: "Ocorreu um erro ao criar o agendamento. Tente novamente.",
+      onExecute: async () => {
       const startAt = `${pending.date}T${pending.time}:00.000-03:00`
       const endMins = toMinutes(pending.time) + pending.duration_minutes
       const endTime = fromMinutes(endMins)
       const endAt = `${pending.date}T${endTime}:00.000-03:00`
 
-      let contactId: string | null = null
-      if (params.channelId) {
-        const { data: existing } = await supabaseAdmin
-          .from("contact")
-          .select("id")
-          .eq("tenant_id", tenantId)
-          .eq("channel_id", params.channelId)
-          .eq("display_name", pending.attendee_name)
-          .limit(1)
-          .maybeSingle()
-        if (existing?.id) {
-          contactId = existing.id
-        } else {
-          const { data: newContact } = await supabaseAdmin
-            .from("contact")
-            .insert({
-              tenant_id: tenantId,
-              channel_id: params.channelId,
-              external_id: `internal:${pending.attendee_name}:${Date.now()}`,
-              display_name: pending.attendee_name,
-              phone: "",
-            })
-            .select("id")
-            .single()
-          contactId = newContact?.id ?? null
-        }
-      }
+      const contactId = await ensureInternalContactId({
+        supabaseAdmin,
+        tenantId,
+        channelId: params.channelId,
+        attendeeName: pending.attendee_name,
+      })
 
       const { error: insertErr } = await supabaseAdmin.from("appointment").insert({
         tenant_id: tenantId,
@@ -320,297 +809,182 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
       })
 
       if (insertErr) {
-        console.error("internal intent confirm_appointment insert error:", insertErr)
-        return {
-          handled: true,
-          message: "Não consegui criar o agendamento. Tente novamente.",
-          state: { ...incomingState, appointment_pending: undefined },
-        }
+        throw insertErr
       }
 
-      const nextState = { ...incomingState, appointment_pending: undefined }
-      return {
-        handled: true,
-        message: `✅ Agendamento criado: ${pending.attendee_name}, ${pending.service_name}, ${formatDatePt(pending.date)} às ${pending.time}.`,
-        state: nextState,
-      }
-    } catch (err) {
-      console.error("internal intent confirm_appointment error:", err)
-      return {
-        handled: true,
-        message: "Ocorreu um erro ao criar o agendamento. Tente novamente.",
-        state: { ...incomingState, appointment_pending: undefined },
-      }
-    }
+        return `✅ Agendamento criado: ${pending.attendee_name}, ${pending.service_name}, ${formatDatePt(pending.date)} às ${pending.time}.`
+      },
+    })
   }
 
   // confirm_quote_pdf: estado tem quote_pending e usuário confirmou (Sim, Confirmar, etc.)
   if (incomingState?.quote_pending && isQuoteConfirmation(message)) {
     const pending = incomingState.quote_pending
     if (!conversationId) {
-      return {
-        handled: true,
+      return buildClearedPendingInternalResult({
+        incomingState,
+        clearKey: "quote_pending",
         message: "Não foi possível salvar o orçamento (conversa não identificada). Tente novamente.",
-        state: { ...incomingState, quote_pending: undefined },
-      }
+      })
     }
-    try {
-      const { error: insertErr } = await supabaseAdmin
-        .from("request")
-        .insert({
-          tenant_id: tenantId,
-          conversation_id: conversationId,
-          status: "pending",
-          slots: pending.slots,
-          blueprint_id: pending.service_id,
-          total_value: pending.result.total,
+    return await runInternalPendingCompletion({
+      incomingState,
+      clearKey: "quote_pending",
+      errorContext: "confirm_quote_pdf",
+      errorMessage: "Ocorreu um erro ao processar. Tente novamente.",
+      onExecute: async () => {
+        const { error: insertErr } = await supabaseAdmin
+          .from("request")
+          .insert({
+            tenant_id: tenantId,
+            conversation_id: conversationId,
+            status: "pending",
+            slots: pending.slots,
+            blueprint_id: pending.service_id,
+            total_value: pending.result.total,
+            currency: pending.result.currency || "BRL",
+            calculation_result: pending.result,
+            is_estimated: false,
+          })
+
+        if (insertErr) {
+          throw insertErr
+        }
+
+        const totalFormatted = new Intl.NumberFormat("pt-BR", {
+          style: "currency",
           currency: pending.result.currency || "BRL",
-          calculation_result: pending.result,
-          is_estimated: false,
+        }).format(pending.result.total)
+        const branding = params.config?.branding
+        const pdfResult = await generateQuotePdf(supabaseAdmin, tenantId, {
+          serviceName: pending.service_name,
+          total: pending.result.total,
+          currency: pending.result.currency || "BRL",
+          breakdown: pending.result.breakdown,
+          businessName: params.config?.business_name,
+          branding,
         })
 
-      if (insertErr) {
-        console.error("internal intent confirm_quote_pdf insert error:", insertErr)
-        return {
-          handled: true,
-          message: "Não consegui salvar o orçamento. Tente novamente.",
-          state: { ...incomingState, quote_pending: undefined },
+        if (pdfResult?.url) {
+          const upgradeNote =
+            branding?.enabled !== true
+              ? " Quer deixar esse orçamento mais profissional com seu logo e dados da empresa? Configure na área logada."
+              : ""
+          return `✅ Orçamento de ${pending.service_name} (${totalFormatted}) salvo no histórico.\n\n📄 PDF gerado. Link para download (válido por 7 dias):\n${pdfResult.url}${upgradeNote}`
         }
-      }
 
-      const totalFormatted = new Intl.NumberFormat("pt-BR", {
-        style: "currency",
-        currency: pending.result.currency || "BRL",
-      }).format(pending.result.total)
-      const nextState = { ...incomingState, quote_pending: undefined }
-
-      const branding = params.config?.branding
-      const pdfResult = await generateQuotePdf(supabaseAdmin, tenantId, {
-        serviceName: pending.service_name,
-        total: pending.result.total,
-        currency: pending.result.currency || "BRL",
-        breakdown: pending.result.breakdown,
-        businessName: params.config?.business_name,
-        branding,
-      })
-
-      if (pdfResult?.url) {
-        const upgradeNote =
-          branding?.enabled !== true
-            ? " Quer deixar esse orçamento mais profissional com seu logo e dados da empresa? Configure na área logada."
-            : ""
-        return {
-          handled: true,
-          message: `✅ Orçamento de ${pending.service_name} (${totalFormatted}) salvo no histórico.\n\n📄 PDF gerado. Link para download (válido por 7 dias):\n${pdfResult.url}${upgradeNote}`,
-          state: nextState,
-        }
-      }
-
-      return {
-        handled: true,
-        message: `✅ Orçamento de ${pending.service_name} (${totalFormatted}) salvo no histórico. Não foi possível gerar o PDF agora; acesse pela área logada.`,
-        state: nextState,
-      }
-    } catch (err) {
-      console.error("internal intent confirm_quote_pdf error:", err)
-      return {
-        handled: true,
-        message: "Ocorreu um erro ao processar. Tente novamente.",
-        state: { ...incomingState, quote_pending: undefined },
-      }
-    }
+        return `✅ Orçamento de ${pending.service_name} (${totalFormatted}) salvo no histórico. Não foi possível gerar o PDF agora; acesse pela área logada.`
+      },
+    })
   }
 
   const { intent, slots } = classifyInternalIntent(message)
-  if (!intent) return { handled: false, message: "" }
+  if (!intent) return buildUnhandledInternalResult()
 
   switch (intent) {
     case "query_appointments_today": {
       const dateIso = slots.date || todayIso
-      const start = `${dateIso}T00:00:00.000-03:00`
-      const end = `${dateIso}T23:59:59.999-03:00`
-      const { data: rows, error } = await supabaseAdmin
-        .from("appointment")
-        .select("attendee_name, staff_name, service_names, start_at, status")
-        .eq("tenant_id", tenantId)
-        .eq("agent_id", agentId)
-        .neq("status", "cancelled")
-        .gte("start_at", start)
-        .lte("start_at", end)
-        .order("start_at", { ascending: true })
-
-      if (error) {
-        console.error("internal intent query_appointments_today error:", error)
-        return { handled: true, message: "Não consegui consultar a agenda. Tente novamente." }
-      }
-
-      const items = (rows || []).map((r: any) => {
-        const { time } = toBusinessDateTime(r.start_at)
-        const svc = Array.isArray(r.service_names) && r.service_names.length > 0 ? r.service_names.join(", ") : "—"
-        return `${time} – ${r.attendee_name || "—"} (${r.staff_name || "—"}) – ${svc}`
-      })
       const label = dateIso === todayIso ? "Hoje" : formatDatePt(dateIso)
-      const text = items.length > 0 ? `📅 ${label}:\n${items.join("\n")}` : `📅 ${label}: Nenhum agendamento.`
-      return { handled: true, message: text }
+      return await resolveInternalAgendaQuery({
+        supabaseAdmin,
+        tenantId,
+        agentId,
+        dateIso,
+        label,
+        errorContext: "query_appointments_today",
+      })
     }
 
     case "query_appointments_tomorrow": {
       const tomorrowIso = addDaysToIsoDate(todayIso, 1)
-      const start = `${tomorrowIso}T00:00:00.000-03:00`
-      const end = `${tomorrowIso}T23:59:59.999-03:00`
-      const { data: rows, error } = await supabaseAdmin
-        .from("appointment")
-        .select("attendee_name, staff_name, service_names, start_at, status")
-        .eq("tenant_id", tenantId)
-        .eq("agent_id", agentId)
-        .neq("status", "cancelled")
-        .gte("start_at", start)
-        .lte("start_at", end)
-        .order("start_at", { ascending: true })
-
-      if (error) {
-        console.error("internal intent query_appointments_tomorrow error:", error)
-        return { handled: true, message: "Não consegui consultar a agenda. Tente novamente." }
-      }
-
-      const items = (rows || []).map((r: any) => {
-        const { time } = toBusinessDateTime(r.start_at)
-        const svc = Array.isArray(r.service_names) && r.service_names.length > 0 ? r.service_names.join(", ") : "—"
-        return `${time} – ${r.attendee_name || "—"} (${r.staff_name || "—"}) – ${svc}`
+      return await resolveInternalAgendaQuery({
+        supabaseAdmin,
+        tenantId,
+        agentId,
+        dateIso: tomorrowIso,
+        label: "Amanhã",
+        errorContext: "query_appointments_tomorrow",
       })
-      const text =
-        items.length > 0 ? `📅 Amanhã:\n${items.join("\n")}` : "📅 Amanhã: Nenhum agendamento."
-      return { handled: true, message: text }
     }
 
     case "query_appointments_by_date": {
       const dateIso = slots.date || todayIso
-      const start = `${dateIso}T00:00:00.000-03:00`
-      const end = `${dateIso}T23:59:59.999-03:00`
-      const { data: rows, error } = await supabaseAdmin
-        .from("appointment")
-        .select("attendee_name, staff_name, service_names, start_at, status")
-        .eq("tenant_id", tenantId)
-        .eq("agent_id", agentId)
-        .neq("status", "cancelled")
-        .gte("start_at", start)
-        .lte("start_at", end)
-        .order("start_at", { ascending: true })
-
-      if (error) {
-        console.error("internal intent query_appointments_by_date error:", error)
-        return { handled: true, message: "Não consegui consultar a agenda. Tente novamente." }
-      }
-
-      const items = (rows || []).map((r: any) => {
-        const { time } = toBusinessDateTime(r.start_at)
-        const svc = Array.isArray(r.service_names) && r.service_names.length > 0 ? r.service_names.join(", ") : "—"
-        return `${time} – ${r.attendee_name || "—"} (${r.staff_name || "—"}) – ${svc}`
+      return await resolveInternalAgendaQuery({
+        supabaseAdmin,
+        tenantId,
+        agentId,
+        dateIso,
+        label: formatDatePt(dateIso),
+        errorContext: "query_appointments_by_date",
       })
-      const label = formatDatePt(dateIso)
-      const text = items.length > 0 ? `📅 ${label}:\n${items.join("\n")}` : `📅 ${label}: Nenhum agendamento.`
-      return { handled: true, message: text }
     }
 
     case "query_appointment_by_time":
     case "query_contact_by_appointment_time": {
       const dateIso = slots.date || todayIso
       const timeStr = slots.time || ""
-      const targetMins = toMinutes(timeStr)
-      const minMins = targetMins - TIME_TOLERANCE_MINUTES
-      const maxMins = targetMins + TIME_TOLERANCE_MINUTES
-
-      const start = `${dateIso}T00:00:00.000-03:00`
-      const end = `${dateIso}T23:59:59.999-03:00`
-      const { data: rows, error } = await supabaseAdmin
-        .from("appointment")
-        .select("attendee_name, staff_name, service_names, start_at, contact_id")
-        .eq("tenant_id", tenantId)
-        .eq("agent_id", agentId)
-        .neq("status", "cancelled")
-        .gte("start_at", start)
-        .lte("start_at", end)
-        .order("start_at", { ascending: true })
-
-      if (error) {
-        console.error("internal intent query_appointment_by_time error:", error)
-        return { handled: true, message: "Não consegui consultar. Tente novamente." }
-      }
-
-      const inWindow = (rows || []).filter((r: any) => {
-        const { time } = toBusinessDateTime(r.start_at)
-        const mins = toMinutes(time)
-        return mins >= minMins && mins <= maxMins
+      const timeWindowLookup = await findInternalAppointmentsAroundTime({
+        supabaseAdmin,
+        tenantId,
+        agentId,
+        dateIso,
+        timeStr,
+        select: "attendee_name, staff_name, service_names, start_at, contact_id",
+        errorContext: "query_appointment_by_time",
+        errorMessage: "Não consegui consultar. Tente novamente.",
       })
+      if (!timeWindowLookup.ok) return timeWindowLookup.result
 
-      if (inWindow.length === 0) {
-        return { handled: true, message: `Nenhum agendamento encontrado por volta das ${timeStr}.` }
+      if (timeWindowLookup.matches.length === 0) {
+        return buildHandledInternalResult({ message: `Nenhum agendamento encontrado por volta das ${timeStr}.` })
       }
 
       // Buscar telefone do contato quando houver contact_id
-      const contactIds = [...new Set(inWindow.map((r: any) => r.contact_id).filter(Boolean))]
+      const contactIds = [...new Set(timeWindowLookup.matches.map((r: any) => r.contact_id).filter(Boolean))]
       let contactPhones: Record<string, string> = {}
       if (contactIds.length > 0) {
-        const { data: contacts } = await supabaseAdmin
-          .from("contact")
-          .select("id, phone, display_name")
-          .in("id", contactIds)
+        const { data: contacts } = await queryContactsByIds({
+          supabaseAdmin,
+          ids: contactIds,
+        })
         for (const c of contacts || []) {
           contactPhones[c.id] = c.phone || c.display_name || "—"
         }
       }
 
-      const lines = inWindow.slice(0, 3).map((r: any) => {
-        const { time } = toBusinessDateTime(r.start_at)
-        const svc = Array.isArray(r.service_names) && r.service_names.length > 0 ? r.service_names.join(", ") : "—"
-        const phone = r.contact_id ? contactPhones[r.contact_id] || "—" : "—"
-        return `${time} – ${r.attendee_name || "—"} | Tel: ${phone} | ${svc}`
+      return buildHandledInternalResult({
+        message: formatAppointmentWindowMessage({
+          rows: timeWindowLookup.matches,
+          contactPhones,
+          timeStr,
+        }),
       })
-      const suffix = inWindow.length > 3 ? `\n(E mais ${inWindow.length - 3} agendamento(s) nessa faixa.)` : ""
-      return { handled: true, message: `📅 Por volta das ${timeStr}:\n${lines.join("\n")}${suffix}` }
     }
 
     case "query_contact_by_name": {
       const searchName = slots.name?.trim()
       if (!searchName || searchName.length < 2) {
-        return { handled: true, message: "Informe o nome para buscar (ex.: contato João)." }
+        return buildHandledInternalResult({ message: "Informe o nome para buscar (ex.: contato João)." })
       }
 
       const term = `%${searchName}%`
-      const { data: contacts, error } = await supabaseAdmin
-        .from("contact")
-        .select("id, display_name, phone, external_id")
-        .eq("tenant_id", tenantId)
-        .or(`display_name.ilike.${term},phone.ilike.${term}`)
-        .limit(10)
+      const { data: contacts, error } = await queryContactsByTerm({
+        supabaseAdmin,
+        tenantId,
+        term,
+      })
 
       if (error) {
         console.error("internal intent query_contact_by_name error:", error)
-        return { handled: true, message: "Não consegui buscar. Tente novamente." }
+        return buildHandledInternalResult({ message: "Não consegui buscar. Tente novamente." })
       }
 
-      const list = contacts || []
-      if (list.length === 0) {
-        return { handled: true, message: `Nenhum contato encontrado para "${searchName}".` }
-      }
-
-      if (list.length === 1) {
-        const c = list[0]
-        const name = c.display_name || c.external_id || "—"
-        return {
-          handled: true,
-          message: `📇 ${name}\nTel: ${c.phone || "—"}`,
-        }
-      }
-
-      const lines = list.slice(0, 5).map((c: any, i: number) => {
-        const name = c.display_name || c.external_id || c.phone || "—"
-        return `${i + 1}. ${name} – ${c.phone || "—"}`
+      return buildHandledInternalResult({
+        message: formatContactLookupMessage({
+          contacts: contacts || [],
+          searchName,
+        }),
       })
-      return {
-        handled: true,
-        message: `Encontrei ${list.length} contato(s):\n${lines.join("\n")}\n\nQual deles? (informe o número ou nome completo)`,
-      }
     }
 
     case "cancel_appointment": {
@@ -618,40 +992,27 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
       const timeStr = slots.time
 
       if (!timeStr) {
-        return {
-          handled: true,
+        return buildHandledInternalResult({
           message: "Para cancelar, informe o horário do agendamento (ex.: cancelar o das 14h).",
-        }
+        })
       }
 
-      const targetMins = toMinutes(timeStr)
-      const minMins = targetMins - TIME_TOLERANCE_MINUTES
-      const maxMins = targetMins + TIME_TOLERANCE_MINUTES
-      const start = `${dateIso}T00:00:00.000-03:00`
-      const end = `${dateIso}T23:59:59.999-03:00`
-
-      const { data: rows, error } = await supabaseAdmin
-        .from("appointment")
-        .select("id, attendee_name, start_at")
-        .eq("tenant_id", tenantId)
-        .eq("agent_id", agentId)
-        .neq("status", "cancelled")
-        .gte("start_at", start)
-        .lte("start_at", end)
-
-      if (error) {
-        console.error("internal intent cancel_appointment query error:", error)
-        return { handled: true, message: "Não consegui localizar o agendamento. Tente novamente." }
-      }
-
-      const match = (rows || []).find((r: any) => {
-        const { time } = toBusinessDateTime(r.start_at)
-        const mins = toMinutes(time)
-        return mins >= minMins && mins <= maxMins
+      const timeWindowLookup = await findInternalAppointmentsAroundTime({
+        supabaseAdmin,
+        tenantId,
+        agentId,
+        dateIso,
+        timeStr,
+        select: "id, attendee_name, start_at",
+        errorContext: "cancel_appointment",
+        errorMessage: "Não consegui localizar o agendamento. Tente novamente.",
       })
+      if (!timeWindowLookup.ok) return timeWindowLookup.result
+
+      const match = timeWindowLookup.matches[0]
 
       if (!match) {
-        return { handled: true, message: `Nenhum agendamento encontrado por volta das ${timeStr} em ${formatDatePt(dateIso)}.` }
+        return buildHandledInternalResult({ message: `Nenhum agendamento encontrado por volta das ${timeStr} em ${formatDatePt(dateIso)}.` })
       }
 
       const { error: updateErr } = await supabaseAdmin
@@ -666,14 +1027,13 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
 
       if (updateErr) {
         console.error("internal intent cancel_appointment update error:", updateErr)
-        return { handled: true, message: "Não consegui cancelar. Tente novamente." }
+        return buildHandledInternalResult({ message: "Não consegui cancelar. Tente novamente." })
       }
 
       const { time } = toBusinessDateTime(match.start_at)
-      return {
-        handled: true,
+      return buildHandledInternalResult({
         message: `✅ Agendamento de ${match.attendee_name || "—"} às ${time} foi cancelado.`,
-      }
+      })
     }
 
     case "create_appointment_internal": {
@@ -683,116 +1043,79 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
       const timeStr = slots.time
       const serviceName = slots.service || findServiceFromText(message, services)
       const attendeeName = slots.name || extractAttendeeNameFromMessage(message)
-
-      if (!timeStr) {
-        return {
-          handled: true,
-          message: "Para criar o agendamento, informe o horário (ex.: às 14h, 14:00).",
-        }
-      }
-      if (!attendeeName || attendeeName.length < 2) {
-        return {
-          handled: true,
-          message: "Qual o nome do cliente? (ex.: agendar para João Silva amanhã 14h)",
-        }
-      }
-      if (!serviceName) {
-        const svcList = services.slice(0, 5).map((s) => s.name).join(", ")
-        return {
-          handled: true,
-          message: `Qual serviço? ${svcList ? `Opções: ${svcList}` : "Informe o nome do serviço."}`,
-        }
+      const appointmentDraft = validateInternalAppointmentDraft({
+        schedule,
+        services,
+        dateIso,
+        timeStr,
+        attendeeName: attendeeName || undefined,
+        serviceName,
+      })
+      if (appointmentDraft.message) {
+        return buildHandledInternalResult({ message: appointmentDraft.message })
       }
 
-      const duration = getServiceDurationMinutes(
-        { services } as any,
-        serviceName
-      ) ?? 60
-      const scheduleForValidation = schedule
-        ? { start_time: schedule.start_time || "09:00", end_time: schedule.end_time || "18:00", breaks: schedule.breaks }
-        : undefined
-      const within = isWithinSchedule(timeStr, scheduleForValidation)
-      if (!within.ok) {
-        return { handled: true, message: within.reason || "Horário fora do expediente." }
-      }
-      if (isTimeTooSoonForDate(dateIso, timeStr, schedule?.min_booking_lead_minutes ?? 20)) {
-        return {
-          handled: true,
-          message: "Esse horário está muito próximo. Escolha um horário com pelo menos 20 min de antecedência.",
-        }
-      }
-      const dayKey = getWeekdayKey(dateIso)
-      const days = schedule?.days_of_week || ["monday", "tuesday", "wednesday", "thursday", "friday"]
-      if (!days.includes(dayKey)) {
-        return {
-          handled: true,
-          message: `Não atendemos nesse dia. Nossa agenda: ${days.join(", ")}.`,
-        }
-      }
+      const duration = appointmentDraft.duration ?? 60
+      const normalizedServiceName = appointmentDraft.normalizedServiceName || serviceName
 
       const startAt = `${dateIso}T${timeStr}:00.000-03:00`
       const endMins = toMinutes(timeStr) + duration
       const endAt = `${dateIso}T${fromMinutes(endMins)}:00.000-03:00`
-      const { data: conflicts } = await supabaseAdmin
-        .from("appointment")
-        .select("id, attendee_name, start_at")
-        .eq("tenant_id", tenantId)
-        .eq("agent_id", agentId)
-        .neq("status", "cancelled")
-        .lt("start_at", endAt)
-        .gt("end_at", startAt)
+      const { data: conflicts } = await queryOverlappingAppointments({
+        supabaseAdmin,
+        tenantId,
+        agentId,
+        startAt,
+        endAt,
+      })
 
       if (Array.isArray(conflicts) && conflicts.length > 0) {
         const first = conflicts[0] as any
         const { time } = toBusinessDateTime(first.start_at)
-        return {
-          handled: true,
+        return buildHandledInternalResult({
           message: `Já existe agendamento às ${time} (${first.attendee_name || "—"}). Escolha outro horário.`,
-        }
+        })
       }
 
-      const nextState: SimulatorState = {
-        ...(incomingState || {}),
-        appointment_pending: {
+      return buildPendingInternalResult({
+        incomingState,
+        pendingKey: "appointment_pending",
+        pendingValue: {
           date: dateIso,
           time: timeStr,
-          service_name: serviceName,
+          service_name: normalizedServiceName,
           attendee_name: attendeeName.trim(),
           duration_minutes: duration,
         },
-      }
-      return {
-        handled: true,
-        message: `Confirma: **${attendeeName.trim()}**, ${serviceName}, ${formatDatePt(dateIso)} às ${timeStr}?`,
-        state: nextState,
+        message: `Confirma: **${attendeeName.trim()}**, ${normalizedServiceName}, ${formatDatePt(dateIso)} às ${timeStr}?`,
         action_options: ["Sim", "Não"],
-      }
+      })
     }
 
     case "request_quote_internal": {
       // Carregar quote_service do agente
-      const { data: quoteServices, error: qsError } = await supabaseAdmin
-        .from("quote_service")
-        .select("id, agent_id, name, pricing_type, variables_schema, pricing_rules, external_variable_keys, keywords, active")
-        .eq("agent_id", agentId)
-        .eq("active", true)
+      const { data: quoteServices, error: qsError } = await queryActiveQuoteServices({
+        supabaseAdmin,
+        agentId,
+      })
 
       if (qsError) {
         console.error("internal intent request_quote_internal quote_service error:", qsError)
-        return { handled: true, message: "Não consegui carregar os serviços de orçamento. Tente novamente." }
+        return buildHandledInternalResult({ message: "Não consegui carregar os serviços de orçamento. Tente novamente." })
       }
 
       const services = (quoteServices || []) as QuoteServiceRow[]
-      if (services.length === 0) {
-        return {
-          handled: true,
-          message:
-            "Ainda não há serviços de orçamento configurados. Configure na área logada (serviços de orçamento) para usar esta função.",
-        }
+      const quoteServiceSelection = resolveInternalQuoteService({
+        quoteServices: services,
+      })
+      if (quoteServiceSelection.message) {
+        return buildHandledInternalResult({
+          message: quoteServiceSelection.message,
+        })
       }
 
       // Usar o primeiro serviço (MVP: um por agente; futuro: detectar por keywords)
-      const service = services[0]
+      const service = quoteServiceSelection.service!
       const schema = (service.variables_schema || []) as Array<{ key: string; label?: string; required?: boolean }>
 
       const slots: QuoteSlots = extractQuoteSlotsFromText(message)
@@ -800,34 +1123,29 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
 
       if (!validation.valid) {
         const missingList = validation.missing.join(", ")
-        return {
-          handled: true,
+        return buildHandledInternalResult({
           message: `Para o orçamento de ${service.name}, preciso de: ${missingList}. Informe na mensagem (ex.: cortina 2,80 x 2,60 blackout wave com instalação).`,
-        }
+        })
       }
 
       const calcResult = calculateQuote(service, slots)
       const formatted = formatInternalQuote(calcResult)
 
-      const nextState: SimulatorState = {
-        ...(incomingState || {}),
-        quote_pending: {
+      return buildPendingInternalResult({
+        incomingState,
+        pendingKey: "quote_pending",
+        pendingValue: {
           service_id: service.id,
           service_name: service.name,
           slots: slots as Record<string, unknown>,
           result: calcResult,
         },
-      }
-
-      return {
-        handled: true,
         message: `${formatted}\n\nDeseja gerar o PDF do orçamento?`,
-        state: nextState,
         action_options: ["Sim", "Não"],
-      }
+      })
     }
 
     default:
-      return { handled: false, message: "" }
+      return buildUnhandledInternalResult()
   }
 }

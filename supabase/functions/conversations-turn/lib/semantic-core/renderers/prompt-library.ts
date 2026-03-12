@@ -65,7 +65,7 @@ export function buildTimeQuestion(): string {
 }
 
 export function buildContactQuestion(): string {
-  return "Como prefere ser contatado para confirmar o agendamento?"
+  return "Qual contato voce prefere usar para confirmar o agendamento?"
 }
 
 export function buildBookingConfirmationMessage(
@@ -80,6 +80,14 @@ export function buildBookingConfirmationMessage(
 
 export function buildCalendarOfferMessage(): string {
   return "Gostaria de adicionar este compromisso no seu calendario?"
+}
+
+export function buildCalendarConfirmedMessage(): string {
+  return "Perfeito. Pode adicionar no calendario. Se precisar de mais alguma coisa, sigo por aqui."
+}
+
+export function buildCalendarDeclinedMessage(): string {
+  return "Perfeito, sem problemas. Se precisar de mais alguma coisa, sigo por aqui."
 }
 
 export function buildBookingConfirmedMessage(draft: SemanticCompletedBookingDraft): string {

@@ -29,9 +29,8 @@ import {
   isBusinessClosedForToday,
 } from "../utils.ts"
 import { isYes, isNo, isGreeting, isPriceQuestion } from "../detection.ts"
-import { findServiceFromText, getServiceWithPrice, classifyServiceMatch } from "../services.ts"
-import { hasMatchContext } from "../qualification.ts"
-import { generateRejectionMessageWithAI } from "../builders.ts"
+import { findServiceFromText, getServiceWithPrice } from "../services.ts"
+import { resolveServiceMatchSummary } from "../qualification.ts"
 import { isDateBlocked } from "../holidays.ts"
 import { buildServicesListResult } from "../anytime-handlers.ts"
 import type { BookingContext } from "./context.ts"
@@ -222,10 +221,13 @@ export async function handleStaffAndDate(ctx: BookingContext): Promise<Simulator
       )
     }
     if (!serviceName && (config.services || []).length > 0) {
-      const match = await classifyServiceMatch(text, config)
-      if (hasMatchContext(match) && !match.service) {
-        const rejectionMessage = await generateRejectionMessageWithAI(match.inferred_area, config, false, true)
-        return buildResult(rejectionMessage, nextState)
+      const summary = await resolveServiceMatchSummary({
+        text,
+        config,
+        isFirst: false,
+      })
+      if (summary.hasContext && !summary.match.service) {
+        return buildResult(summary.rejectionMessage, nextState)
       }
     }
     const withPrice = (config.services || []).filter((s) => s.base_price != null)

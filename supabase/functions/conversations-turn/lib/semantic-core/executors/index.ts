@@ -6,6 +6,7 @@ import type {
   TurnSemanticSnapshot,
 } from "../types.ts"
 import { executeBookingAttendee } from "./booking-attendee.ts"
+import { executeCalendarOffer } from "./calendar-offer.ts"
 import { executeBookingContact } from "./booking-contact.ts"
 import { executeBookingDate } from "./booking-date.ts"
 import { executeBookingFinalization } from "./booking-finalization.ts"
@@ -33,6 +34,8 @@ export function executeSemanticDecision(
       return executeBookingSequence(decision, snapshot, context)
     case "confirm_booking":
       return executeBookingFinalization(decision, snapshot, context)
+    case "offer_calendar":
+      return executeCalendarOffer(decision, snapshot, context)
     default:
       return null
   }

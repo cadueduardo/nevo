@@ -34,6 +34,7 @@ export function buildCompletedBookingDraft(
   decision: SemanticDecisionResult,
   context: SemanticTurnContext
 ): SemanticCompletedBookingDraft {
+  const effectiveContactPreference = snapshot.signals.contact_preference || context.state.contact_preference
   const serviceNames = getServiceNames(snapshot, decision, context)
   const serviceValue = serviceNames.join(", ") || decision.slot_updates?.service || context.state.slots?.service
   const attendeeName =
@@ -57,7 +58,7 @@ export function buildCompletedBookingDraft(
     staff_name: staffName,
     customer_phone: context.state.slots?.customer_phone,
     customer_email: context.state.slots?.customer_email,
-    contact_delivery: context.state.contact_preference === "skip_primary" ? "primary" : "own",
+    contact_delivery: effectiveContactPreference === "skip_primary" ? "primary" : "own",
   }
 }
 

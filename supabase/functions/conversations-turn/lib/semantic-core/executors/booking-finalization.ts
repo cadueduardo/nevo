@@ -29,13 +29,24 @@ export function executeBookingFinalization(
     intervalMinutes
   )
   const baseResetSlots = resetSlotsForNextBooking(context.state)
+  const clearedBookingSlots = {
+    attendee_name: undefined,
+    service: undefined,
+    date: undefined,
+    time: undefined,
+    staff_name: undefined,
+  }
   const nextSlots = postConfirmationPlan.has_more_people
     ? {
+        ...clearedBookingSlots,
         ...baseResetSlots,
         attendee_name: postConfirmationPlan.next_attendee_name,
         customer_name: context.state.slots?.customer_name,
       }
-    : baseResetSlots
+    : {
+        ...clearedBookingSlots,
+        ...baseResetSlots,
+      }
 
   return buildExecutorResult({
     executor: "booking-finalization",
@@ -66,7 +77,7 @@ export function executeBookingFinalization(
         ? postConfirmationPlan.next_action_options
         : undefined,
       service_selection_multi: false,
-      contact_preference: postConfirmationPlan.has_more_people ? undefined : context.state.contact_preference,
+      contact_preference: undefined,
       outbound_notifications: postConfirmationPlan.outbound_notifications,
       slots: nextSlots,
     },
