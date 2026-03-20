@@ -205,6 +205,7 @@ export function decideBooking(
       booking,
       action: "ask_attendee_name",
       reason: "missing_attendee_name",
+      slot_updates: booking.slot_updates,
       next_question: resolveBookingNextQuestion(
         snapshot,
         booking.missing_step,

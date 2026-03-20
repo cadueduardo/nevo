@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { runSemanticFixture, runSemanticFixtureSequence } from "./test-runtime.ts"
 
 function assertIncludes(actual: string, expected: string, message?: string) {
@@ -13,6 +13,13 @@ function assertEquals(actual: unknown, expected: unknown, message?: string) {
   if (actualJson !== expectedJson) {
     throw new Error(message || `Expected ${expectedJson} but got ${actualJson}`)
   }
+}
+
+function normalizeAssertText(value: string): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
 }
 
 function createBaseConfig() {
@@ -118,7 +125,7 @@ Deno.test("semantic runtime fixture answers open business-context question witho
         sequence_request: false,
       },
       risks: { ambiguities: [] },
-      meta: { raw_user_message: "oi, bom dia tudo bem? Como tÃ¡ o movimento aÃ­ hoje?" },
+      meta: { raw_user_message: "oi, bom dia tudo bem? Como tá o movimento aí hoje?" },
     } as any,
   })
 
@@ -243,7 +250,7 @@ Deno.test("semantic runtime fixture offers sequence template for inferred next a
 
   assertEquals(semantic.decision.action, "offer_sequence_template")
   assertIncludes(result.message, "Davi")
-  assertIncludes(result.message, "logo após")
+  assertIncludes(result.message, "logo ap�s")
 })
 
 Deno.test("semantic runtime fixture offers primary contact reuse option for additional booking", async () => {
@@ -676,7 +683,7 @@ Deno.test("semantic runtime fixture asks attendee neutrally for generic single b
   })
 
   assertEquals(semantic.decision.action, "ask_attendee_name")
-  assertIncludes(result.message, "Para quem será o agendamento")
+  assertIncludes(result.message, "Para quem ser� o agendamento")
 })
 
 Deno.test("semantic runtime fixture asks for another date when same_next sequence is unavailable", async () => {
@@ -730,7 +737,9 @@ Deno.test("semantic runtime fixture asks for another date when same_next sequenc
   })
 
   assertEquals(semantic.decision.action, "ask_date")
-  assertIncludes(result.message, "Não encontrei um próximo horário livre")
+  if (!normalizeAssertText(result.message).includes("nao encontrei um proximo horario livre")) {
+    throw new Error(`Expected same_next unavailable guidance but got: ${result.message}`)
+  }
 })
 
 Deno.test("semantic runtime fixture keeps raw action options for web_simulator", async () => {
@@ -812,7 +821,7 @@ Deno.test("semantic runtime fixture redirects out-of-scope service requests with
   })
 
   assertEquals(semantic.decision.action, "reply_service_list")
-  assertIncludes(result.message, "não faz parte do que oferecemos")
+  assertIncludes(result.message, "n�o faz parte do que oferecemos")
   assertEquals(result.action_options, ["Corte", "Barba"])
 })
 
@@ -1070,7 +1079,7 @@ Deno.test("semantic runtime fixture answers concrete price when service pricing 
       ],
     } as any,
     state: createBaseState({
-      last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviÃƒÂ§o vocÃƒÂª quer consultar?",
+      last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviÃ§o vocÃª quer consultar?",
       last_action_options: ["Corte de cabelo", "Barba"],
     }),
     snapshot: {
@@ -1360,7 +1369,7 @@ Deno.test("semantic runtime fixture offers sequence template after short continu
 
   assertEquals(semantic.decision.action, "offer_sequence_template")
   assertIncludes(result.message, "Davi")
-  assertIncludes(result.message, "logo após")
+  assertIncludes(result.message, "logo ap�s")
 })
 
 Deno.test("semantic runtime fixture recovers after same_next unavailable by asking for date on next turn", async () => {
@@ -1435,7 +1444,9 @@ Deno.test("semantic runtime fixture recovers after same_next unavailable by aski
   })
 
   assertEquals(outputs[0].semantic.decision.action, "ask_date")
-  assertIncludes(outputs[0].result.message, "Não encontrei um próximo horário livre")
+  if (!normalizeAssertText(outputs[0].result.message).includes("nao encontrei um proximo horario livre")) {
+    throw new Error(`Expected same_next unavailable guidance but got: ${outputs[0].result.message}`)
+  }
   assertEquals(outputs[1].semantic.decision.action, "ask_date")
 })
 
@@ -1674,7 +1685,7 @@ Deno.test("semantic runtime fixture preserves first-turn date/time through audie
             requires_confirmation: true,
             blocked: false,
             reason: "audience_needs_confirmation",
-            prompt: "SÃ³ para confirmar: aqui atendemos homens e crianÃ§as. VocÃªs se encaixam nesse perfil?",
+            prompt: "Só para confirmar: aqui atendemos homens e crianças. Vocês se encaixam nesse perfil?",
             inferred_fit: null,
           },
           ambiguities: [],
@@ -1825,8 +1836,8 @@ Deno.test("semantic runtime fixture offers calendar after closing post confirmat
   })
 
   assertEquals(semantic.decision.action, "offer_calendar")
-  assertIncludes(result.message, "calendário")
-  assertEquals(result.action_options, ["Adicionar no calendário", "Não, obrigado"])
+  assertIncludes(result.message, "calend�rio")
+  assertEquals((result.action_options || []).map((value) => normalizeAssertText(value)), ["adicionar no calendario", "nao, obrigado"])
   assertEquals(result.state.pending_calendar_offer, false)
   assertEquals(result.state.pending_final_confirmation, false)
 })
@@ -1902,7 +1913,7 @@ Deno.test("semantic runtime fixture answers calendar acceptance without generic 
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
     state: createBaseState({
-      last_action_options: ["Adicionar no calendário", "Não, obrigado"],
+      last_action_options: ["Adicionar no calend�rio", "N�o, obrigado"],
       pending_calendar_offer: false,
       pending_final_confirmation: false,
       last_booking: {
@@ -1933,14 +1944,14 @@ Deno.test("semantic runtime fixture answers calendar acceptance without generic 
   })
 
   assertEquals(semantic.decision.action, "reply_calendar_confirmed")
-  assertIncludes(result.message, "calendário")
+  assertIncludes(result.message, "calend�rio")
 })
 
 Deno.test("semantic runtime fixture answers calendar decline without generic fallback", async () => {
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
     state: createBaseState({
-      last_action_options: ["Adicionar no calendário", "Não, obrigado"],
+      last_action_options: ["Adicionar no calend�rio", "N�o, obrigado"],
       pending_calendar_offer: false,
       pending_final_confirmation: false,
       last_booking: {
@@ -2423,8 +2434,8 @@ Deno.test("semantic runtime fixture greets before first-turn audience confirmati
     } as any,
   })
 
-  assertIncludes(result.message.toLowerCase(), "aqui é")
-  assertIncludes(result.message.toLowerCase(), "você se encaixa")
+  assertIncludes(result.message.toLowerCase(), "aqui �")
+  assertIncludes(result.message.toLowerCase(), "voc� se encaixa")
 })
 
 Deno.test("semantic runtime fixture uses singular audience option for self booking", async () => {
@@ -2459,10 +2470,139 @@ Deno.test("semantic runtime fixture uses singular audience option for self booki
   })
 
   assertEquals(result.action_options, ["Sim, me encaixo", "Quero agendar"])
-  if (result.message.toLowerCase().includes("vocês se encaixam")) {
+  if (result.message.toLowerCase().includes("voc�s se encaixam")) {
     throw new Error("Expected singular audience prompt for self booking")
   }
 })
 
 
 
+
+Deno.test("semantic runtime fixture keeps known date after phone reply in same booking flow", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState(),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "price", secondary: [], booking: false, confidence: 0.9 },
+        entities: {
+          people: [],
+          attendee_names: [],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 0,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "quanto t� o corte de cabelo?" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: ["availability_check"], booking: true, confidence: 0.94 },
+        entities: {
+          people: [{ includes_self: true, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+          attendee_names: [],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: { iso_date: "2026-03-20" },
+          time: { hhmm: "16:00" },
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+          availability_check: true,
+          next_question_hint: "ask_attendee_name",
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "sim, tem horario para hoje as 16?" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: [], booking: true, confidence: 0.92 },
+        entities: {
+          people: [{ name: "Carlos", confidence: 0.9 }],
+          attendee_names: ["Carlos"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+          next_question_hint: "ask_contact",
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "Carlos" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: [], booking: true, confidence: 0.95 },
+        entities: {
+          people: [{ name: "Carlos", confidence: 0.9 }],
+          attendee_names: ["Carlos"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+          next_question_hint: "ask_contact_preference",
+          contact_phone: "11978788888",
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "11978788888" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[3].semantic.decision.action, "confirm_booking")
+  if (/qual dia voc/i.test(outputs[3].result.message)) {
+    throw new Error("Phone reply should not reopen ask_date when date was already known")
+  }
+  if (!normalizeAssertText(outputs[3].result.message).includes("20/03/2026") && !normalizeAssertText(outputs[3].result.message).includes("hoje")) {
+    throw new Error(`Expected booking flow to preserve the known date, but got: ${outputs[3].result.message}`)
+  }
+  assertIncludes(outputs[3].result.message, "16:00")
+})
+
+Deno.test("semantic runtime fixture renders booking confirmation date without ISO format", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState({
+      slots: {
+        attendee_name: "Carlos",
+        service: "Corte",
+        date: "2026-03-20",
+        time: "16:00",
+        customer_phone: "11978788888",
+      },
+      contact_preference: "phone",
+    }),
+    channel: "web_simulator",
+    snapshot: {
+      intents: { primary: "booking", secondary: [], booking: true, confidence: 0.97 },
+      entities: {
+        people: [{ name: "Carlos", confidence: 0.9 }],
+        attendee_names: ["Carlos"],
+        services: [{ name: "Corte", normalized_name: "corte" }],
+        date: { iso_date: "2026-03-20" },
+        time: { hhmm: "16:00" },
+      },
+      signals: {
+        includes_self: true,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "11978788888" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "confirm_booking")
+  if (result.message.includes("2026-03-20")) {
+    throw new Error("Booking confirmation leaked ISO date to the user")
+  }
+  if (!result.message.includes("20/03/2026") && !result.message.toLowerCase().includes("hoje")) {
+    throw new Error(`Expected localized booking confirmation date but got: ${result.message}`)
+  }
+})

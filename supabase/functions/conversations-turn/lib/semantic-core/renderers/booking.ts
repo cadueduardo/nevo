@@ -84,10 +84,11 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
   const dateLabel = (() => {
     if (!dateIso) return "hoje"
     if (dateIso === "hoje") return "hoje"
-    if (dateIso === "amanha") return "amanhã"
-    if (dateIso === "hoje") return formatDatePt(getTodayIsoBusinessTz())
-    if (dateIso === "amanha") return formatDatePt(addDaysToIsoDate(getTodayIsoBusinessTz(), 1))
-    // Se for ISO YYYY-MM-DD, formatamos para dd/mm/yyyy.
+    if (dateIso === "amanha") return "amanh�"
+    const todayIso = getTodayIsoBusinessTz()
+    const tomorrowIso = addDaysToIsoDate(todayIso, 1)
+    if (dateIso === todayIso) return "hoje"
+    if (dateIso === tomorrowIso) return "amanh�"
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) return formatDatePt(dateIso)
     return dateIso
   })()
@@ -264,7 +265,7 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
       return {
         message:
           (await safeTryContextualReply("ask_time", { avoidSpecificTimes: true })) ||
-          (dateIso ? `Para ${dateIso}, qual horário você prefere?` : buildTimeQuestion()),
+          (dateLabel ? `Para ${dateLabel}, qual horário você prefere?` : buildTimeQuestion()),
         action_options: execution?.action_options,
       }
     case "ask_contact":
@@ -331,7 +332,7 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
       return {
         // Blindagem: quando ainda NÃO finalizamos (pendência de confirmação),
         // não deixamos o AI reescrever a mensagem como se estivesse "confirmado".
-        message: buildBookingConfirmationMessage(serviceNames, attendeeName, dateIso, time),
+        message: buildBookingConfirmationMessage(serviceNames, attendeeName, dateLabel, time),
         // Quando ainda não finalizamos (pendência de confirmação), mostrar a opção para o usuário.
         action_options: execution?.action_options,
       }

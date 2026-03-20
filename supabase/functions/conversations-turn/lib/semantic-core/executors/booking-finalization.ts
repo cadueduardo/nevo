@@ -29,6 +29,18 @@ export function executeBookingFinalization(
         context.state.slots?.customer_phone ||
         context.state.slots?.customer_email)
   )
+  const pendingDraft = buildCompletedBookingDraft(snapshot, decision, context)
+  const pendingSlots = Object.fromEntries(
+    Object.entries({
+      attendee_name: pendingDraft.attendee_name,
+      service: pendingDraft.service,
+      date: pendingDraft.date,
+      time: pendingDraft.time,
+      staff_name: pendingDraft.staff_name,
+      customer_phone: pendingDraft.customer_phone,
+      customer_email: pendingDraft.customer_email,
+    }).filter(([, value]) => value !== undefined)
+  )
 
   // Etapa 1: quando chegamos no "confirm_booking", primeiro perguntamos se o cliente realmente
   // quer confirmar. Só na próxima resposta "sim" é que o agendamento é finalizado.
@@ -38,6 +50,7 @@ export function executeBookingFinalization(
       decision,
       state_patch: {
         pending_final_confirmation: true,
+        slots: pendingSlots,
         // Ainda não faz sentido oferecer calendário antes do agendamento ser confirmado.
         pending_calendar_offer: false,
         last_confirm_options: ["Confirmar agendamento"],
@@ -70,6 +83,7 @@ export function executeBookingFinalization(
       decision,
       state_patch: {
         pending_final_confirmation: true,
+        slots: pendingSlots,
       },
       action_options: ["Confirmar agendamento"],
       metadata: {},

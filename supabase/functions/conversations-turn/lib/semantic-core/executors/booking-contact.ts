@@ -141,9 +141,12 @@ export function executeBookingContact(
   }
 
   // "O meu mesmo" / "pode ser o meu" etc. → contact_preference "phone"; no WhatsApp preencher com número do remetente.
-  const contactPref = snapshot.signals.contact_preference || context.state.contact_preference
+  const inferredContactPref =
+    snapshot.signals.contact_preference ||
+    (phone ? "phone" : snapshot.signals.contact_email ? "email" : undefined) ||
+    context.state.contact_preference
   const useSenderAsPhone =
-    contactPref === "phone" &&
+    inferredContactPref === "phone" &&
     context.channel === "whatsapp" &&
     hasSenderPhone &&
     !context.state.slots?.customer_phone &&
@@ -152,19 +155,22 @@ export function executeBookingContact(
   const slotUpdates: Record<string, unknown> = {
     ...(decision.slot_updates || {}),
     ...(queueState.attendee_name ? { attendee_name: queueState.attendee_name } : {}),
+    ...(phone ? { customer_phone: phone } : {}),
+    ...(snapshot.signals.contact_email ? { customer_email: snapshot.signals.contact_email } : {}),
     ...(useSenderAsPhone ? { customer_phone: senderDigits } : {}),
   }
-  const hasSlotUpdates = queueState.attendee_name || decision.slot_updates || useSenderAsPhone
+  const hasContactValue = Boolean(phone || snapshot.signals.contact_email || useSenderAsPhone)
+  const hasSlotUpdates = queueState.attendee_name || decision.slot_updates || hasContactValue
 
   return buildExecutorResult({
     executor: "booking-contact",
     decision,
     slot_updates: hasSlotUpdates ? slotUpdates : undefined,
     state_patch: {
-      ...((contactPref || decision.slot_updates?.customer_phone || decision.slot_updates?.customer_email || useSenderAsPhone)
+      ...((inferredContactPref || decision.slot_updates?.customer_phone || decision.slot_updates?.customer_email || hasContactValue)
         ? {
             pending_contact_field: undefined,
-            contact_preference: contactPref || context.state.contact_preference,
+            contact_preference: inferredContactPref || context.state.contact_preference,
           }
         : {
             pending_contact_field: "contact_preference",

@@ -327,12 +327,30 @@ export function deriveBookingContext(
 
   const stateDate = context.state.slots?.date
   const stateTime = context.state.slots?.time
+  const statePhone = context.state.slots?.customer_phone
+  const stateEmail = context.state.slots?.customer_email
+
+  if (!slotUpdates.service && stateServiceOk) {
+    slotUpdates.service = stateSvcRaw
+  }
+  if (!slotUpdates.customer_phone && statePhone) {
+    slotUpdates.customer_phone = String(statePhone)
+  }
+  if (!slotUpdates.customer_email && stateEmail) {
+    slotUpdates.customer_email = String(stateEmail)
+  }
   const stateDateOk =
     stateDate &&
     (String(stateDate).toLowerCase() === "hoje" ||
       String(stateDate).toLowerCase().startsWith("amanh") ||
       isPlausibleBookingIsoDate(String(stateDate)))
   const stateTimeOk = isValidBookingHHMM(String(stateTime || ""))
+  if (!slotUpdates.date && stateDate && (String(stateDate).toLowerCase() === "hoje" || String(stateDate).toLowerCase().startsWith("amanh") || isPlausibleBookingIsoDate(String(stateDate)))) {
+    slotUpdates.date = String(stateDate)
+  }
+  if (!slotUpdates.time && stateTimeOk) {
+    slotUpdates.time = String(stateTime)
+  }
   const hasDate = Boolean(
     (slotUpdates.date && isPlausibleBookingIsoDate(slotUpdates.date)) ||
       (stateDateOk ? stateDate : false)

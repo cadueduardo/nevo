@@ -1,16 +1,17 @@
-ï»¿// @ts-nocheck
+// @ts-nocheck
 import type {
   BusinessBrain,
   SemanticCompletedBookingDraft,
   SemanticPostConfirmationPlan,
 } from "../types.ts"
+import { formatDatePt } from "../../utils.ts"
 
 export function formatAudienceLabel(modes: string[] = []): string {
-  if (modes.includes("men_only") && modes.includes("kids_only")) return "homens e crianÃ§as"
+  if (modes.includes("men_only") && modes.includes("kids_only")) return "homens e crianças"
   if (modes.includes("men_only")) return "homens"
   if (modes.includes("women_only")) return "mulheres"
-  if (modes.includes("kids_only")) return "crianÃ§as"
-  return "todos os pÃºblicos"
+  if (modes.includes("kids_only")) return "crianças"
+  return "todos os públicos"
 }
 
 export function buildGreetingFallbackMessage(
@@ -21,25 +22,25 @@ export function buildGreetingFallbackMessage(
   const company = businessName || "a empresa"
   const lead = informal ? "Opa" : "Oi"
   if (contactName) {
-    return `${lead} ${contactName}! Tudo bem por aqui, e vocÃª? Aqui Ã© da ${company}. Estou Ã  disposiÃ§Ã£o para ajudar no que precisar!`
+    return `${lead} ${contactName}! Tudo bem por aqui, e você? Aqui é da ${company}. Estou à disposição para ajudar no que precisar!`
   }
-  return `${lead}! Tudo bem por aqui, e vocÃª? Aqui Ã© da ${company}. Estou Ã  disposiÃ§Ã£o para ajudar no que precisar!`
+  return `${lead}! Tudo bem por aqui, e você? Aqui é da ${company}. Estou à disposição para ajudar no que precisar!`
 }
 
 export function buildIdentityMessage(businessName?: string): string {
-  return `Aqui Ã© da ${businessName || "a empresa"}. Vou te ajudar no que precisar.`
+  return `Aqui é da ${businessName || "a empresa"}. Vou te ajudar no que precisar.`
 }
 
 export function buildFaqFallbackMessage(businessName?: string): string {
-  return `Posso te ajudar com informaÃ§Ãµes sobre ${businessName || "a empresa"} e, se quiser, jÃ¡ seguimos para o agendamento.`
+  return `Posso te ajudar com informações sobre ${businessName || "a empresa"} e, se quiser, já seguimos para o agendamento.`
 }
 
 export function buildServiceListMessage(businessName: string | undefined): string {
-  return `Estes sÃ£o os serviÃ§os disponÃ­veis em ${businessName || "a empresa"}. Qual vocÃª quer agendar?`
+  return `Estes são os serviços disponíveis em ${businessName || "a empresa"}. Qual você quer agendar?`
 }
 
 export function buildOutOfScopeServiceRedirectMessage(businessName?: string): string {
-  return `Entendi. Esse pedido nÃ£o faz parte do que oferecemos em ${businessName || "a empresa"}. Posso te mostrar os serviÃ§os com que trabalhamos por aqui.`
+  return `Entendi. Esse pedido não faz parte do que oferecemos em ${businessName || "a empresa"}. Posso te mostrar os serviços com que trabalhamos por aqui.`
 }
 
 export function shouldUsePluralAudienceCopy(params?: {
@@ -57,8 +58,8 @@ export function buildAudienceConfirmationMessage(
   brain: BusinessBrain,
   params?: { plural?: boolean }
 ): string {
-  const pronoun = params?.plural ? "VocÃªs se encaixam" : "VocÃª se encaixa"
-  return `SÃ³ para confirmar: aqui atendemos ${formatAudienceLabel(brain.audience?.modes)}. ${pronoun} nesse perfil?`
+  const pronoun = params?.plural ? "Vocês se encaixam" : "Você se encaixa"
+  return `Só para confirmar: aqui atendemos ${formatAudienceLabel(brain.audience?.modes)}. ${pronoun} nesse perfil?`
 }
 
 export function adjustAudiencePromptPerson(prompt: string, params?: { plural?: boolean }): string {
@@ -66,15 +67,15 @@ export function adjustAudiencePromptPerson(prompt: string, params?: { plural?: b
   if (!text) return text
   if (params?.plural) {
     return text
-      .replace(/\bVocÃª\b/g, "VocÃªs")
-      .replace(/\bVoce\b/g, "VocÃªs")
-      .replace(/\bvoce\b/g, "vocÃªs")
+      .replace(/\bVocê\b/g, "Vocês")
+      .replace(/\bVoce\b/g, "Vocês")
+      .replace(/\bvoce\b/g, "vocês")
       .replace(/\bse encaixa\b/gi, "se encaixam")
   }
   return text
-    .replace(/\bVocÃªs\b/g, "VocÃª")
-    .replace(/\bVoces\b/g, "VocÃª")
-    .replace(/\bvoces\b/g, "vocÃª")
+    .replace(/\bVocês\b/g, "Você")
+    .replace(/\bVoces\b/g, "Você")
+    .replace(/\bvoces\b/g, "você")
     .replace(/\bse encaixam\b/gi, "se encaixa")
 }
 
@@ -88,49 +89,56 @@ export function buildAttendeeQuestion(params: {
   is_additional: boolean
   is_explicit_multi: boolean
 }): string {
-  if (params.is_additional) return "Qual Ã© o nome da prÃ³xima pessoa?"
-  if (params.is_explicit_multi) return "Qual Ã© o nome da primeira pessoa?"
-  return "Para quem serÃ¡ o agendamento?"
+  if (params.is_additional) return "Qual é o nome da próxima pessoa?"
+  if (params.is_explicit_multi) return "Qual é o nome da primeira pessoa?"
+  return "Para quem será o agendamento?"
 }
 
 export function buildServiceQuestion(attendeeName?: string, params?: { allowSequence?: boolean }): string {
   const allow = params?.allowSequence === true
   const suffix = allow ? " Pode escolher mais de um." : ""
   return attendeeName
-    ? `Perfeito! Vamos agendar para ${attendeeName}. Qual serviÃ§o vocÃª gostaria?${suffix}`
-    : `Qual serviÃ§o vocÃª gostaria de agendar?${suffix}`
+    ? `Perfeito! Vamos agendar para ${attendeeName}. Qual serviço você gostaria?${suffix}`
+    : `Qual serviço você gostaria de agendar?${suffix}`
 }
 
 export function buildSequenceOfferQuestion(attendeeName?: string): string {
-  return `VocÃª gostaria de agendar ${attendeeName || "a prÃ³xima pessoa"} logo apÃ³s o atendimento anterior? O prÃ³ximo horÃ¡rio estÃ¡ disponÃ­vel. Prefere esse horÃ¡rio, outro horÃ¡rio no mesmo dia ou em outro dia?`
+  return `Você gostaria de agendar ${attendeeName || "a próxima pessoa"} logo após o atendimento anterior? O próximo horário está disponível. Prefere esse horário, outro horário no mesmo dia ou em outro dia?`
 }
 
 export function buildDateQuestion(): string {
-  return "Qual dia vocÃª prefere agendar? (ex.: Hoje, amanhÃ£ ou dia da semana)"
+  return "Qual dia você prefere agendar? (ex.: Hoje, amanhã ou dia da semana)"
 }
 
 export function buildTimeQuestion(): string {
-  return "Qual horÃ¡rio vocÃª prefere?"
+  return "Qual horário você prefere?"
 }
 
 export function buildContactQuestion(): string {
-  return "Qual contato vocÃª prefere usar para confirmar o agendamento?"
+  return "Qual contato você prefere usar para confirmar o agendamento?"
 }
 
 export function buildSecondaryContactQuestion(params: { attendeeName?: string }): string {
   const name = String(params.attendeeName || "").trim()
   const who = name ? `do ${name}` : "da segunda pessoa"
-  return `Perfeito. Quer que eu envie a confirmaÃ§Ã£o do agendamento ${who} por WhatsApp? Se sim, me passe o telefone. Se nÃ£o, diga â€œnÃ£oâ€.`
+  return `Perfeito. Quer que eu envie a confirmação do agendamento ${who} por WhatsApp? Se sim, me passe o telefone. Se não, diga “não”.`
 }
 
 export function buildWhatsAppPrimaryPhoneConfirmQuestion(phoneDigits?: string): string {
   const digits = String(phoneDigits || "").replace(/\D+/g, "")
-  const masked = digits.length >= 4 ? `****${digits.slice(-4)}` : "este nÃºmero"
-  return `Perfeito! Posso usar esse mesmo nÃºmero (${masked}) como contato? Se sim, responda â€œsimâ€. Se quiser outro, me envie o telefone.`
+  const masked = digits.length >= 4 ? `****${digits.slice(-4)}` : "este número"
+  return `Perfeito! Posso usar esse mesmo número (${masked}) como contato? Se sim, responda “sim”. Se quiser outro, me envie o telefone.`
 }
 
 export function buildPrimaryPhoneQuestion(): string {
   return "Perfeito. Qual telefone devo usar como contato?"
+}
+function formatBookingDateForDisplay(dateValue?: string): string | undefined {
+  if (!dateValue) return undefined
+  const normalized = String(dateValue).trim()
+  if (!normalized) return undefined
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return formatDatePt(normalized)
+  return normalized
 }
 
 export function resolveSemanticPromptText(params: {
@@ -149,11 +157,11 @@ export function resolveSemanticPromptText(params: {
     confirm_audience_fit_before_booking: params.brain
       ? buildAudienceConfirmationMessage(params.brain, { plural: params.audiencePlural })
       : params.fallback,
-    ask_attendee_name: "Para quem serÃ¡ o agendamento?",
-    ask_first_attendee_name: "Para quem serÃ¡ o agendamento?",
-    ask_next_attendee_name: "Qual Ã© o nome da prÃ³xima pessoa?",
-    ask_service: "Qual serviÃ§o vocÃª gostaria de agendar?",
-    ask_service_selection: "Qual serviÃ§o vocÃª gostaria de agendar?",
+    ask_attendee_name: "Para quem será o agendamento?",
+    ask_first_attendee_name: "Para quem será o agendamento?",
+    ask_next_attendee_name: "Qual é o nome da próxima pessoa?",
+    ask_service: "Qual serviço você gostaria de agendar?",
+    ask_service_selection: "Qual serviço você gostaria de agendar?",
     ask_date: buildDateQuestion(),
     ask_date_preference: buildDateQuestion(),
     ask_time: buildTimeQuestion(),
@@ -174,15 +182,16 @@ export function buildBookingConfirmationMessage(
   time?: string
 ): string {
   const serviceLabel = services.join(", ") || "o atendimento"
-  return `Perfeito! Vou confirmar ${serviceLabel}${attendeeName ? ` para ${attendeeName}` : ""}${dateIso ? ` em ${dateIso}` : ""}${time ? ` Ã s ${time}` : ""}.`
+  const dateLabel = formatBookingDateForDisplay(dateIso)
+  return `Perfeito! Vou confirmar ${serviceLabel}${attendeeName ? ` para ${attendeeName}` : ""}${dateLabel ? ` em ${dateLabel}` : ""}${time ? ` às ${time}` : ""}.`
 }
 
 export function buildCalendarOfferMessage(): string {
-  return "Gostaria de adicionar este compromisso no seu calendÃ¡rio?"
+  return "Gostaria de adicionar este compromisso no seu calendário?"
 }
 
 export function buildCalendarConfirmedMessage(): string {
-  return "Perfeito. Pode adicionar no calendÃ¡rio. Se precisar de mais alguma coisa, sigo por aqui."
+  return "Perfeito. Pode adicionar no calendário. Se precisar de mais alguma coisa, sigo por aqui."
 }
 
 export function buildCalendarDeclinedMessage(): string {
@@ -196,47 +205,47 @@ export function buildClosingMessage(): string {
 export function buildBookingConfirmedMessage(draft: SemanticCompletedBookingDraft): string {
   const serviceLabel = draft.service || draft.service_names.join(", ") || "o atendimento"
   const attendeeLabel = draft.attendee_name ? ` de ${draft.attendee_name}` : ""
-  const dateLabel = draft.date ? ` para ${draft.date}` : ""
-  const timeLabel = draft.time ? ` Ã s ${draft.time}` : ""
+  const dateLabel = draft.date ? ` para ${formatBookingDateForDisplay(draft.date)}` : ""
+  const timeLabel = draft.time ? ` às ${draft.time}` : ""
   return `Perfeito! O agendamento${attendeeLabel} de ${serviceLabel} ficou confirmado${dateLabel}${timeLabel}.`
 }
 
 export function buildNextAttendeePrompt(plan: SemanticPostConfirmationPlan): string {
   const suggestionLine =
     plan.suggested_next_time && plan.suggested_next_date
-      ? `Posso te sugerir ${plan.suggested_next_time} em ${plan.suggested_next_date} para seguir na sequÃªncia.`
+      ? `Posso te sugerir ${plan.suggested_next_time} em ${plan.suggested_next_date} para seguir na sequência.`
       : ""
   if (plan.next_attendee_name && plan.should_offer_sequence_template) {
     const base = buildSequenceOfferQuestion(plan.next_attendee_name)
     return suggestionLine ? `${base} ${suggestionLine}` : base
   }
   if (plan.next_attendee_name) {
-    const base = `Vamos seguir com o prÃ³ximo agendamento de ${plan.next_attendee_name}. Qual serviÃ§o vocÃª gostaria de agendar? Pode escolher mais de um.`
+    const base = `Vamos seguir com o próximo agendamento de ${plan.next_attendee_name}. Qual serviço você gostaria de agendar? Pode escolher mais de um.`
     return suggestionLine ? `${base} ${suggestionLine}` : base
   }
-  return `Vamos seguir com o prÃ³ximo agendamento. Qual Ã© o nome da prÃ³xima pessoa?${suggestionLine ? ` ${suggestionLine}` : ""}`
+  return `Vamos seguir com o próximo agendamento. Qual é o nome da próxima pessoa?${suggestionLine ? ` ${suggestionLine}` : ""}`
 }
 
 export function buildPriceGuidanceMessage(): string {
-  return "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviÃ§o vocÃª quer consultar?"
+  return "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviço você quer consultar?"
 }
 
 export function buildServiceDetailMessage(serviceName?: string, description?: string): string {
   if (serviceName && description) {
-    return `${serviceName}: ${description} Se quiser, jÃ¡ posso seguir com o agendamento.`
+    return `${serviceName}: ${description} Se quiser, já posso seguir com o agendamento.`
   }
-  return "Posso te explicar melhor esse serviÃ§o e, se quiser, jÃ¡ seguimos para o agendamento."
+  return "Posso te explicar melhor esse serviço e, se quiser, já seguimos para o agendamento."
 }
 
 export function buildServicePriceMessage(serviceName?: string, basePrice?: number): string {
   if (serviceName && typeof basePrice === "number") {
-    return `O valor de ${serviceName} Ã© R$ ${basePrice}. Se quiser, jÃ¡ posso seguir com o agendamento.`
+    return `O valor de ${serviceName} é R$ ${basePrice}. Se quiser, já posso seguir com o agendamento.`
   }
   return buildPriceGuidanceMessage()
 }
 
 export function buildQuoteMeasurementsMessage(serviceName?: string): string {
-  return `Para te passar uma estimativa de ${serviceName || "esse serviÃ§o"}, preciso das medidas (ex.: largura x altura em metros). Pode me informar?`
+  return `Para te passar uma estimativa de ${serviceName || "esse serviço"}, preciso das medidas (ex.: largura x altura em metros). Pode me informar?`
 }
 
 export function buildQuoteEstimateMessage(message?: string): string {
@@ -244,5 +253,5 @@ export function buildQuoteEstimateMessage(message?: string): string {
 }
 
 export function buildFallbackClarificationMessage(): string {
-  return "Pode me dar mais detalhes sobre o que vocÃª precisa? Assim, consigo te ajudar melhor."
+  return "Pode me dar mais detalhes sobre o que você precisa? Assim, consigo te ajudar melhor."
 }
