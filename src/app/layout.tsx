@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import dynamic from 'next/dynamic'
 import '@/styles/globals.css'
+import { ThemeProvider } from '@/components/providers/ThemeProvider'
 
 const SentryProvider = dynamic(
   () => import('@/components/providers/SentryProvider').then((mod) => mod.SentryProvider),
@@ -17,6 +18,19 @@ export const metadata: Metadata = {
   },
 }
 
+const themeBootstrapScript = `
+(() => {
+  try {
+    const savedTheme = localStorage.getItem('theme');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const theme = savedTheme === 'dark' || savedTheme === 'light'
+      ? savedTheme
+      : (prefersDark ? 'dark' : 'light');
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  } catch {}
+})();
+`
+
 export default function RootLayout({
   children,
 }: {
@@ -24,8 +38,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript }} />
+      </head>
       <body>
-        <SentryProvider>{children}</SentryProvider>
+        <ThemeProvider>
+          <SentryProvider>{children}</SentryProvider>
+        </ThemeProvider>
       </body>
     </html>
   )

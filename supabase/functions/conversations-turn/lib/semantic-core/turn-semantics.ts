@@ -12,6 +12,7 @@ import {
   isAvailabilityQuestion,
   isGreeting,
   isBusinessContextQuestion,
+  isExplicitBookingIntent,
   isListServicesQuestion,
   isPriceQuestion,
   isServiceDetailQuestion,
@@ -21,7 +22,7 @@ import {
 import { isAddressQuestion, isScheduleQuestion } from "../informational.ts"
 import { extractQuoteSlotsFromText } from "../quote-engine.ts"
 import { findServicesFromText } from "../services.ts"
-import { normalizeText, parseEmail, parsePhone } from "../utils.ts"
+import { normalizeText, parseDateOrWeekday, parseEmail, parsePhone, parseTime } from "../utils.ts"
 import {
   detectSemanticContinuation,
   getLastActionOptions,
@@ -41,9 +42,9 @@ import type {
   TurnSemanticSnapshot,
 } from "./types.ts"
 
-const MALE_RELATIONS = ["irmao", "irmÃ£o", "marido", "pai", "primo", "amigo", "namorado", "filho", "menino", "garoto"]
-const FEMALE_RELATIONS = ["irma", "irmÃ£", "esposa", "mae", "mÃ£e", "prima", "amiga", "namorada", "filha", "menina", "garota"]
-const CHILD_RELATIONS = ["filho", "filha", "crianca", "crianÃ§a", "bebe", "bebÃª", "menino", "menina", "muleque", "moleque"]
+const MALE_RELATIONS = ["irmao", "irmÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o", "marido", "pai", "primo", "amigo", "namorado", "filho", "menino", "garoto"]
+const FEMALE_RELATIONS = ["irma", "irmÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£", "esposa", "mae", "mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£e", "prima", "amiga", "namorada", "filha", "menina", "garota"]
+const CHILD_RELATIONS = ["filho", "filha", "crianca", "crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a", "bebe", "bebÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âª", "menino", "menina", "muleque", "moleque"]
 
 function inferWaitingFor(
   state: SemanticTurnContext["state"]
@@ -82,7 +83,7 @@ export function inferContactPreferenceSignal(
   if (hasSkipPrimaryOption && /\b(esse mesmo|o mesmo|mesmo contato|mesmo numero|mesmo celular|pular|titular)\b/.test(normalized)) {
     return "skip_primary"
   }
-  // "O meu mesmo", "pode ser o meu", "usa o meu" etc. = usar o contato já disponível (ex.: WhatsApp do remetente).
+  // "O meu mesmo", "pode ser o meu", "usa o meu" etc. = usar o contato jÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ disponÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­vel (ex.: WhatsApp do remetente).
   if (/\b(o )?meu mesmo\b/.test(normalized) || /\b(pode ser|pode usar|quero usar)\s+(o )?meu\b/.test(normalized)) {
     return "phone"
   }
@@ -193,6 +194,44 @@ type ResolvedPrimaryIntent = {
   source: NonNullable<SemanticIntentsSnapshot["source"]>
 }
 
+type DeterministicBookingHints = {
+  booking_intent: boolean
+  includes_self: boolean
+  date?: string
+  time?: string
+  needs_availability_check: boolean
+}
+
+export function inferDeterministicBookingHints(
+  message: string,
+  waitingFor?: "attendee_name" | "service" | "date" | "time" | "contact",
+  continuationKind?: SemanticContinuationKind
+): DeterministicBookingHints {
+  const normalized = normalizeText(message)
+  const availabilityCheck = isAvailabilityQuestion(message)
+  const explicitBooking =
+    isExplicitBookingIntent(message) ||
+    /\b(agendamento|agendar|marcar|marcacao|marcacao)\b/.test(normalized)
+  const hasBookingContext = Boolean(continuationKind) || waitingFor === "date" || waitingFor === "time" || waitingFor === "contact"
+  const date = parseDateOrWeekday(message) || undefined
+  const time = parseTime(message) || undefined
+  const bookingIntent =
+    explicitBooking ||
+    availabilityCheck ||
+    (hasBookingContext && Boolean(date || time)) ||
+    (Boolean(date || time) && /\b(vaga|horario|disponibilidade)\b/.test(normalized))
+  const mentionsOtherPerson =
+    /\b(meu|minha|pro|pra|para)\s+(filho|filha|marido|esposa|irmao|irmÃƒÆ’Ã‚Â£o|irma|irmÃƒÆ’Ã‚Â£|pai|mae|mÃƒÆ’Ã‚Â£e|amigo|amiga|namorado|namorada)\b/.test(normalized)
+  const includesSelf = bookingIntent && !mentionsOtherPerson
+  return {
+    booking_intent: bookingIntent,
+    includes_self: includesSelf,
+    date,
+    time,
+    needs_availability_check: availabilityCheck,
+  }
+}
+
 export function resolvePrimaryIntent(
   message: string,
   brain: BusinessBrain,
@@ -242,7 +281,7 @@ function inferSecondaryIntents(
   if (continuationKind === "price_followup") secondary.add("booking_with_price")
   if (primary === "booking" || primary === "booking_sequence") {
     if (isPriceQuestion(message)) secondary.add("booking_with_price")
-    if (/\b(depois do outro|um depois do outro|em sequencia|em sequÃªncia|logo depois|proximo horario|prÃ³ximo horÃ¡rio)\b/.test(normalized)) {
+    if (/\b(depois do outro|um depois do outro|em sequencia|em sequÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia|logo depois|proximo horario|prÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ximo horÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡rio)\b/.test(normalized)) {
       secondary.add("availability_check")
     }
     if (bookingRequest?.additional_count && bookingRequest.additional_count > 0) {
@@ -357,13 +396,13 @@ function buildAudienceRisk(
     return { requires_confirmation: false, inferred_fit: true }
   }
 
-  // Ninguém foi mencionado (sem nome, sem "para meu filho" etc.): não pedir confirmação de público.
+  // NinguÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©m foi mencionado (sem nome, sem "para meu filho" etc.): nÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o pedir confirmaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o de pÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºblico.
   if (people.length === 0) {
     return { requires_confirmation: false, inferred_fit: null }
   }
 
-  // Agendamento único para si: cliente não mencionou outra pessoa (ex.: "para meu filho").
-  // Não exibir CTA "Sim, nos encaixamos?" — a IA segue direto para serviço/data/horário.
+  // Agendamento ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºnico para si: cliente nÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o mencionou outra pessoa (ex.: "para meu filho").
+  // NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o exibir CTA "Sim, nos encaixamos?" ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â a IA segue direto para serviÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§o/data/horÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡rio.
   const onlySelf =
     includesSelf &&
     people.length <= 1 &&
@@ -465,7 +504,7 @@ export function resolveNextQuestionHint(
 function inferSequenceRequest(message: string, bookingRequest: BookingRequestInterpretation | null): boolean {
   const normalized = normalizeText(message)
   if (bookingRequest?.additional_count && bookingRequest.additional_count > 0) return true
-  return /\b(em sequencia|em sequÃªncia|um depois do outro|logo depois|proximo horario|prÃ³ximo horÃ¡rio|na sequencia|na sequÃªncia|tambem|tambÃ©m|mais um|tbm)\b/.test(normalized)
+  return /\b(em sequencia|em sequÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia|um depois do outro|logo depois|proximo horario|prÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ximo horÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡rio|na sequencia|na sequÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia|tambem|tambÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©m|mais um|tbm)\b/.test(normalized)
 }
 
 function deriveIntentConfidence(
@@ -540,13 +579,38 @@ export async function buildTurnSemanticSnapshot(
     config
   )
   const flow = interpretation?.flow || null
-  const bookingRequest = interpretation?.booking_request || null
-  const slots = interpretation?.slots || null
+  const deterministicHints = inferDeterministicBookingHints(trimmedMessage, waitingFor, continuation?.kind)
+  const rawBookingRequest = interpretation?.booking_request || null
+  const bookingRequest = rawBookingRequest
+    ? {
+        ...rawBookingRequest,
+        booking_intent: rawBookingRequest.booking_intent === true || deterministicHints.booking_intent,
+        includes_self:
+          rawBookingRequest.includes_self === true ||
+          (deterministicHints.includes_self && !(rawBookingRequest.attendee_names?.length || 0) && !rawBookingRequest.for_whom),
+      }
+    : deterministicHints.booking_intent
+      ? {
+          booking_intent: true,
+          includes_self: deterministicHints.includes_self,
+          attendee_names: [],
+          additional_count: 0,
+          for_whom: null,
+          service_names: [],
+        }
+      : null
+  const slots = {
+    ...(interpretation?.slots || {}),
+    ...(deterministicHints.date ? { date: deterministicHints.date } : {}),
+    ...(deterministicHints.time ? { time: deterministicHints.time } : {}),
+    needs_availability_check:
+      interpretation?.slots?.needs_availability_check === true || deterministicHints.needs_availability_check,
+  }
 
   const fallbackAttendeeNames = inferFallbackAttendeeNames(trimmedMessage, waitingFor)
   const quoteService = inferQuoteServiceCandidate(trimmedMessage, brain)
   const quoteSlots = quoteService ? extractQuoteSlotsFromText(trimmedMessage) : undefined
-  const people = buildPeople(bookingRequest, slots, fallbackAttendeeNames)
+  const people = buildPeople(bookingRequest, slots as any, fallbackAttendeeNames)
   const serviceCandidates = buildServiceCandidates(trimmedMessage, brain, bookingRequest, flow, slots)
   const resolvedPrimaryIntent = resolvePrimaryIntent(
     trimmedMessage,
@@ -665,6 +729,10 @@ export async function buildTurnSemanticSnapshot(
 
   return snapshot
 }
+
+
+
+
 
 
 

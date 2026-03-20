@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { generateBookingReplyWithAI } from "../../ai.ts"
+import { generateAdaptiveGreetingWithAI, generateBookingReplyWithAI } from "../../ai.ts"
 import { deriveBookingContext } from "../booking-context.ts"
 import type { SemanticRuntimeResult } from "../runtime.ts"
 import {
@@ -14,11 +14,13 @@ import {
   buildPrimaryPhoneQuestion,
   buildDateQuestion,
   buildFallbackClarificationMessage,
+  buildGreetingFallbackMessage,
   buildNextAttendeePrompt,
   buildSequenceOfferQuestion,
   buildServiceQuestion,
   buildTimeQuestion,
   resolveSemanticPromptText,
+  shouldUsePluralAudienceCopy,
 } from "./prompt-library.ts"
 import type { RenderedSemanticMessage } from "./shared.ts"
 import { formatDatePt } from "../../utils.ts"
@@ -52,6 +54,14 @@ function isValidHHMM(value?: string): boolean {
   return true
 }
 
+function hasLeadingGreeting(message?: string): boolean {
+  return /^(oi|oii|oa|ola|olá|opa|fala|salve|bom dia|boa tarde|boa noite)\b/i.test(String(message || "").trim())
+}
+
+function isFirstMeaningfulTurn(semantic: SemanticRuntimeResult): boolean {
+  return !Array.isArray(semantic.context.history) || semantic.context.history.length === 0
+}
+
 export async function renderBooking(semantic: SemanticRuntimeResult): Promise<RenderedSemanticMessage> {
   const booking = deriveBookingContext(semantic.snapshot, semantic.context)
   const attendeeName = getAttendeeName(semantic) || booking.current_attendee_name
@@ -64,6 +74,12 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
   const decision = semantic.decision
   const execution = semantic.execution
   const brain = semantic.business_brain
+  const rawUserMessage = semantic.snapshot.meta.raw_user_message || ""
+  const usePluralAudienceCopy = shouldUsePluralAudienceCopy({
+    additional_count: semantic.snapshot.signals.additional_count,
+    attendee_names: semantic.snapshot.entities.attendee_names,
+    people_count: Array.isArray(semantic.snapshot.entities.people) ? semantic.snapshot.entities.people.length : 0,
+  })
 
   const dateLabel = (() => {
     if (!dateIso) return "hoje"
@@ -131,15 +147,50 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
     return txt
   }
 
+  const buildIntroGreetingPrefix = async (): Promise<string | null> => {
+    if (!isFirstMeaningfulTurn(semantic) || !hasLeadingGreeting(rawUserMessage)) return null
+
+    const aiGreeting = await generateAdaptiveGreetingWithAI(
+      semantic.business_brain.raw_config,
+      rawUserMessage,
+      semantic.context.history,
+      semantic.context.sender_display_name,
+      {
+        business_brain: semantic.business_brain,
+        agent_narrative: semantic.business_brain.agent_narrative,
+      }
+    )
+
+    const businessName = semantic.business_brain.business_name
+    const identityLine = businessName ? `Aqui e o assistente virtual da ${businessName}.` : "Aqui e o assistente virtual."
+    const fallback = buildGreetingFallbackMessage(
+      semantic.business_brain.business_name,
+      semantic.context.sender_display_name?.trim(),
+      /\b(opa|fala|salve|e ai|suave|tranquilo|man)\b/.test(rawUserMessage.toLowerCase())
+    )
+    const base = String(aiGreeting || fallback).trim()
+    if (!base) return null
+    if (base.toLowerCase().includes("assistente") || (businessName && base.toLowerCase().includes(String(businessName).toLowerCase()))) {
+      return base
+    }
+    return `${identityLine} ${base}`.trim()
+  }
+
+  const introGreetingPrefix = await buildIntroGreetingPrefix()
+  const withIntroGreeting = (message: string) => (introGreetingPrefix ? `${introGreetingPrefix}\n\n${message}` : message)
+
   switch (decision.action) {
     case "ask_audience_confirmation":
       return {
         message:
-          resolveSemanticPromptText({
-            next_question: decision.next_question,
-            fallback: buildAudienceConfirmationMessage(brain),
-            brain,
-          }),
+          withIntroGreeting(
+            resolveSemanticPromptText({
+              next_question: decision.next_question,
+              fallback: buildAudienceConfirmationMessage(brain, { plural: usePluralAudienceCopy }),
+              brain,
+              audiencePlural: usePluralAudienceCopy,
+            })
+          ),
         action_options: decision.action_options,
       }
     case "ask_attendee_name": {
@@ -153,12 +204,13 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
         (Array.isArray(semantic.context.state.pending_attendee_queue) &&
           semantic.context.state.pending_attendee_queue.length > 0)
       return {
-        message:
+        message: withIntroGreeting(
           (await safeTryContextualReply("ask_attendee_name")) ||
-          buildAttendeeQuestion({
-            is_additional: isOngoingAdditionalBooking,
-            is_explicit_multi: isExplicitMulti,
-          }),
+            buildAttendeeQuestion({
+              is_additional: isOngoingAdditionalBooking,
+              is_explicit_multi: isExplicitMulti,
+            })
+        ),
       }
     }
     case "ask_service":
@@ -295,3 +347,11 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
       }
   }
 }
+
+
+
+
+
+
+
+

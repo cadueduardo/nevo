@@ -71,6 +71,10 @@ export function parseTime(text: string): string | null {
   if (hasExplicitDate(text)) return null
   // Evitar confundir "1", "2", etc. (opção numerada) com horário
   if (/^[1-9]$/.test(t)) return null
+  const digitsOnly = text.replace(/\D/g, "")
+  const hasPhoneLikePayload = digitsOnly.length >= 10 && digitsOnly.length <= 13
+  const hasExplicitTimeCue = /(?:\b(?:as|a)\b|:\d{2}\b|\d{1,2}\s*h(?:s)?\b|\bhoras?\b)/i.test(text)
+  if (hasPhoneLikePayload && !hasExplicitTimeCue) return null
   const msg = normalizeText(text)
   const match = msg.match(/(?:as|a|às)?\s*(\d{1,2})(?::(\d{2}))?\s*(?:h|hs)?\b/)
   if (!match) return null
@@ -410,3 +414,4 @@ export function getMockAvailability(
     occupied: Array.from(occupied),
   }
 }
+

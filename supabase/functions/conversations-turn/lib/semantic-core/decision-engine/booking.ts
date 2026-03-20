@@ -89,7 +89,7 @@ export function decideBooking(
   const preferNumberedOptions = interactionStyle !== "conversational"
   const booking = deriveBookingContext(snapshot, context)
 
-  // Log extra para depuração do booking (evita adivinhar por que “pula” para “Qual contato?”)
+  // Log extra para depuraÃ§Ã£o do booking (evita adivinhar por que â€œpulaâ€ para â€œQual contato?â€)
   // Ativo quando SEMANTIC_CORE_DEBUG estiver setado no ambiente da edge function.
   const debugEnabled = String(Deno.env.get("SEMANTIC_CORE_DEBUG") || "")
     .trim()
@@ -126,7 +126,7 @@ export function decideBooking(
     )
   }
 
-  // Pós-finalização: se temos 2º agendamento e ainda falta telefone para avisar a 2ª pessoa.
+  // PÃ³s-finalizaÃ§Ã£o: se temos 2Âº agendamento e ainda falta telefone para avisar a 2Âª pessoa.
   if (context.state.pending_secondary_contact) {
     return buildBookingDecision({
       snapshot,
@@ -138,7 +138,7 @@ export function decideBooking(
     })
   }
 
-  // Após finalizar, oferecer calendário imediatamente (sem depender do cliente encerrar a conversa).
+  // ApÃ³s finalizar, oferecer calendÃ¡rio imediatamente (sem depender do cliente encerrar a conversa).
   if (context.state.pending_calendar_offer === true && !context.state.pending_secondary_contact) {
     return buildBookingDecision({
       snapshot,
@@ -150,7 +150,7 @@ export function decideBooking(
     })
   }
 
-  // WhatsApp: antes de pedir "preferência de contato", confirmar se pode usar o número do remetente.
+  // WhatsApp: antes de pedir "preferÃªncia de contato", confirmar se pode usar o nÃºmero do remetente.
   if (
     booking.missing_step === "contact" &&
     context.channel === "whatsapp" &&
@@ -169,7 +169,7 @@ export function decideBooking(
     })
   }
 
-  // WhatsApp: usuário disse "não" para usar o mesmo; agora aguardamos ele informar um telefone.
+  // WhatsApp: usuÃ¡rio disse "nÃ£o" para usar o mesmo; agora aguardamos ele informar um telefone.
   if (context.state.pending_contact_field === "phone") {
     return buildBookingDecision({
       snapshot,
@@ -182,12 +182,17 @@ export function decideBooking(
   }
 
   if (booking.missing_step === "audience") {
+    const usePluralAudienceCopy =
+      (snapshot.signals.additional_count || 0) > 0 ||
+      (Array.isArray(snapshot.entities.attendee_names) && snapshot.entities.attendee_names.filter(Boolean).length > 1) ||
+      (Array.isArray(snapshot.entities.people) && snapshot.entities.people.filter((person) => person && person.name).length > 1)
     return buildBookingDecision({
       snapshot,
       booking,
       action: "ask_audience_confirmation",
       reason: snapshot.risks.audience?.reason || "audience_requires_confirmation",
-      action_options: ["Sim, nos encaixamos", "Quero agendar"],
+      slot_updates: booking.slot_updates,
+      action_options: [usePluralAudienceCopy ? "Sim, nos encaixamos" : "Sim, me encaixo", "Quero agendar"],
       next_question:
         snapshot.risks.audience?.prompt || "confirm_audience_fit_before_booking",
       channel_hints: buildBookingChannelHints(true),
@@ -295,7 +300,7 @@ export function decideBooking(
   })
 }
 
-/** Monta a decisão de booking a partir da ação sugerida pela IA (sem ordem fixa). Reutiliza deriveBookingContext e buildBookingDecision. */
+/** Monta a decisÃ£o de booking a partir da aÃ§Ã£o sugerida pela IA (sem ordem fixa). Reutiliza deriveBookingContext e buildBookingDecision. */
 export function buildBookingDecisionFromSuggestedAction(
   snapshot: TurnSemanticSnapshot,
   context: SemanticTurnContext,
@@ -327,9 +332,9 @@ export function buildBookingDecisionFromSuggestedAction(
     ],
   }
 
-  // Importante: ao usar a sugestão da IA, NÃO devemos aplicar slot_updates "inteiros"
-  // em ações que só perguntam um único item. Caso contrário, o modelo pode extrair
-  // números/frases como se fossem date/time e contaminar o estado (alucinações).
+  // Importante: ao usar a sugestÃ£o da IA, NÃƒO devemos aplicar slot_updates "inteiros"
+  // em aÃ§Ãµes que sÃ³ perguntam um Ãºnico item. Caso contrÃ¡rio, o modelo pode extrair
+  // nÃºmeros/frases como se fossem date/time e contaminar o estado (alucinaÃ§Ãµes).
   const su = booking.slot_updates || {}
   let filteredSlotUpdates: SemanticDecisionResult["slot_updates"] | undefined
   switch (suggestedAction) {
@@ -380,3 +385,5 @@ export function buildBookingDecisionFromSuggestedAction(
     ),
   })
 }
+
+

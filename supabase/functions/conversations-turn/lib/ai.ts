@@ -7,6 +7,8 @@ import {
   getNowInBusinessTz,
   isBusinessClosedForToday,
   formatDatePt,
+  parseDateOrWeekday,
+  parseTime,
 } from "./utils.ts"
 import { fetchNationalHolidays } from "./holidays.ts"
 import type { SimulatorState, SimulatorConfig, FlowOrchestratorOutput } from "./types.ts"
@@ -47,11 +49,11 @@ ${rules.map((rule) => `- ${rule}`).join("\n")}`
 
 const DAY_NAMES: Record<string, string> = {
   monday: "segunda",
-  tuesday: "terça",
+  tuesday: "terÃ§a",
   wednesday: "quarta",
   thursday: "quinta",
   friday: "sexta",
-  saturday: "sábado",
+  saturday: "sÃ¡bado",
   sunday: "domingo",
 }
 
@@ -62,15 +64,15 @@ function buildConfigSummary(config: SimulatorConfig): string {
   const addr = config.establishment_address
   if (addr?.logradouro) {
     const a = `${addr.logradouro}, ${addr.numero}${addr.complemento ? ` ${addr.complemento}` : ""} - ${addr.bairro}, ${addr.localidade}/${addr.uf}`
-    parts.push(`Endereço: ${a}`)
+    parts.push(`EndereÃ§o: ${a}`)
   }
   const sched = config.schedule
   if (sched?.days_of_week?.length && sched.start_time && sched.end_time) {
     const days = sched.days_of_week.map((d) => DAY_NAMES[d] || d).join(", ")
-    parts.push(`Horário: ${days}, das ${sched.start_time} às ${sched.end_time}`)
+    parts.push(`HorÃ¡rio: ${days}, das ${sched.start_time} Ã s ${sched.end_time}`)
     if (sched.interval_minutes) parts.push(`Intervalo entre atendimentos: ${sched.interval_minutes} min`)
     if (sched.breaks?.length) {
-      const breaksStr = sched.breaks.map((b) => `${b.start} às ${b.end}`).join("; ")
+      const breaksStr = sched.breaks.map((b) => `${b.start} Ã s ${b.end}`).join("; ")
       parts.push(`Pausa no expediente (nao atendemos nesses horarios): ${breaksStr}`)
     }
   }
@@ -82,9 +84,9 @@ function buildConfigSummary(config: SimulatorConfig): string {
       const d = s.duration_minutes ? ` (${s.duration_minutes} min)` : ""
       return `- ${s.name}: ${p}${d}`
     })
-    parts.push(`Serviços e preços:\n${svcLines.join("\n")}`)
+    parts.push(`ServiÃ§os e preÃ§os:\n${svcLines.join("\n")}`)
     if (withPrice.length > 0) {
-      parts.push(`\n[IMPORTANTE: ${withPrice.length} serviço(s) tem preço. Quando o cliente perguntar preço, informe o valor exato.]`)
+      parts.push(`\n[IMPORTANTE: ${withPrice.length} serviÃ§o(s) tem preÃ§o. Quando o cliente perguntar preÃ§o, informe o valor exato.]`)
     }
   }
   const faq = Array.isArray(config.faq) ? config.faq.filter((item) => item?.question || item?.answer) : []
@@ -130,7 +132,7 @@ ${faqLines}`)
   return parts.join("\n")
 }
 
-/** Retorna contexto de feriados para hoje e amanhã: se são feriados e se o negócio atende nesses dias. Usa Brasil API (mesma do onboarding). */
+/** Retorna contexto de feriados para hoje e amanhÃ£: se sÃ£o feriados e se o negÃ³cio atende nesses dias. Usa Brasil API (mesma do onboarding). */
 async function getHolidaysContextForPrompt(
   config: SimulatorConfig,
   todayIso: string,
@@ -164,7 +166,7 @@ async function getHolidaysContextForPrompt(
   return `Feriados (Brasil): ${lines.join(" ")} Ao sugerir data, so sugira dias em que atendemos (dias de expediente e, se for feriado, so se estiver na lista de feriados em que atende).`
 }
 
-/** Contexto de hora atual, data (hoje/amanhã em DD/MM), dia da semana e se hoje/amanhã têm expediente. A IA usa para não dizer "tem vaga hoje" quando já encerrou e para só sugerir dias em que há atendimento. */
+/** Contexto de hora atual, data (hoje/amanhÃ£ em DD/MM), dia da semana e se hoje/amanhÃ£ tÃªm expediente. A IA usa para nÃ£o dizer "tem vaga hoje" quando jÃ¡ encerrou e para sÃ³ sugerir dias em que hÃ¡ atendimento. */
 function getNowAndTodayAvailabilityContext(
   config: SimulatorConfig,
   now: Date = new Date()
@@ -185,18 +187,18 @@ function getNowAndTodayAvailabilityContext(
   const workingDaysLabel =
     daysOfWeek.length > 0
       ? daysOfWeek.map((d) => DAY_NAMES[d] || d).join(", ")
-      : "não definido"
+      : "nÃ£o definido"
 
-  const dateLine = `DATA: Hoje é ${todayDdMm} (${todayLabel}-feira). Amanhã é ${tomorrowDdMm} (${tomorrowLabel}-feira). Use APENAS estas datas; nunca invente dia ou mês.`
-  const dayContext = `Atendemos apenas em: ${workingDaysLabel}. Amanhã ${tomorrowHasExpediente ? "temos" : "NÃO temos"} expediente. Ao sugerir "outro dia" ou "amanhã", só sugira dias em que há atendimento; se amanhã não for dia de expediente, sugira o próximo dia útil. Se o cliente JÁ disse que quer amanhã, NÃO repita que o expediente de hoje encerrou.`
+  const dateLine = `DATA: Hoje Ã© ${todayDdMm} (${todayLabel}-feira). AmanhÃ£ Ã© ${tomorrowDdMm} (${tomorrowLabel}-feira). Use APENAS estas datas; nunca invente dia ou mÃªs.`
+  const dayContext = `Atendemos apenas em: ${workingDaysLabel}. AmanhÃ£ ${tomorrowHasExpediente ? "temos" : "NÃƒO temos"} expediente. Ao sugerir "outro dia" ou "amanhÃ£", sÃ³ sugira dias em que hÃ¡ atendimento; se amanhÃ£ nÃ£o for dia de expediente, sugira o prÃ³ximo dia Ãºtil. Se o cliente JÃ disse que quer amanhÃ£, NÃƒO repita que o expediente de hoje encerrou.`
 
   if (closed) {
     const suggestLine = tomorrowHasExpediente
-      ? "Diga que já encerrou e sugira amanhã ou outro dia em que haja expediente."
-      : "Diga que já encerrou. NÃO sugira amanhã se amanhã não for dia de atendimento; sugira o próximo dia em que há expediente ou pergunte qual dia prefere."
-    return `AGORA (horário do negócio): ${nowTime}. Expediente de hoje encerra às ${end}. O expediente de hoje JÁ ENCERROU. NÃO diga que há horários disponíveis para hoje. ${suggestLine}\n\n${dateLine}\n${dayContext}`
+      ? "Diga que jÃ¡ encerrou e sugira amanhÃ£ ou outro dia em que haja expediente."
+      : "Diga que jÃ¡ encerrou. NÃƒO sugira amanhÃ£ se amanhÃ£ nÃ£o for dia de atendimento; sugira o prÃ³ximo dia em que hÃ¡ expediente ou pergunte qual dia prefere."
+    return `AGORA (horÃ¡rio do negÃ³cio): ${nowTime}. Expediente de hoje encerra Ã s ${end}. O expediente de hoje JÃ ENCERROU. NÃƒO diga que hÃ¡ horÃ¡rios disponÃ­veis para hoje. ${suggestLine}\n\n${dateLine}\n${dayContext}`
   }
-  return `AGORA (horário do negócio): ${nowTime}. Expediente de hoje encerra às ${end}. Se o cliente perguntar "tem horário para hoje?", só diga que sim se ainda estiver dentro do expediente.\n\n${dateLine}\n${dayContext}`
+  return `AGORA (horÃ¡rio do negÃ³cio): ${nowTime}. Expediente de hoje encerra Ã s ${end}. Se o cliente perguntar "tem horÃ¡rio para hoje?", sÃ³ diga que sim se ainda estiver dentro do expediente.\n\n${dateLine}\n${dayContext}`
 }
 
 function resolveNarrativeArtifacts(params: {
@@ -318,9 +320,9 @@ async function requestOpenAIChat(params: {
 
 /**
  * Responde de forma natural usando o config como contexto.
- * A IA entende QUALQUER mensagem e responde com os dados disponíveis.
- * Como um ChatGPT que tem as informações do negócio.
- * @param finalizedContext - Se true, o agendamento já foi confirmado; a IA não deve pedir dados de contato.
+ * A IA entende QUALQUER mensagem e responde com os dados disponÃ­veis.
+ * Como um ChatGPT que tem as informaÃ§Ãµes do negÃ³cio.
+ * @param finalizedContext - Se true, o agendamento jÃ¡ foi confirmado; a IA nÃ£o deve pedir dados de contato.
  */
 export async function answerWithContextualAI(
   config: SimulatorConfig,
@@ -348,30 +350,30 @@ export async function answerWithContextualAI(
           .slice(-8)
           .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
           .join("\n")
-      : "(sem histórico)"
+      : "(sem histÃ³rico)"
 
   const finalizedHint = finalizedContext
-    ? `\nCONTEXTO CRÍTICO: O agendamento do cliente JÁ FOI CONFIRMADO. Ele pode estar agradecendo, perguntando endereço/horário ou se despedindo. NUNCA peça telefone, email ou qualquer dado de contato novamente. NUNCA sugira "agendar um horário" ou "marcar consulta" — conecte à conversa que ele acabou de concluir (ex.: "Se precisar de algo mais, estou à disposição."). Responda só ao que foi perguntado, de forma cordial e breve.\n\n`
+    ? `\nCONTEXTO CRÃTICO: O agendamento do cliente JÃ FOI CONFIRMADO. Ele pode estar agradecendo, perguntando endereÃ§o/horÃ¡rio ou se despedindo. NUNCA peÃ§a telefone, email ou qualquer dado de contato novamente. NUNCA sugira "agendar um horÃ¡rio" ou "marcar consulta" â€” conecte Ã  conversa que ele acabou de concluir (ex.: "Se precisar de algo mais, estou Ã  disposiÃ§Ã£o."). Responda sÃ³ ao que foi perguntado, de forma cordial e breve.\n\n`
     : ""
 
   const style = config.interaction_style || "numbered_options"
   const styleHint =
     style === "conversational"
-      ? `\nESTILO DE INTERAÇÃO: O dono do negócio escolheu CONVERSA NATURAL. O cliente responde em texto livre; não assuma que ele vai escolher por número. Responda de forma natural e humana, como um consierge; evite listar "1 - X, 2 - Y" a menos que seja realmente necessário.\n\n`
+      ? `\nESTILO DE INTERAÃ‡ÃƒO: O dono do negÃ³cio escolheu CONVERSA NATURAL. O cliente responde em texto livre; nÃ£o assuma que ele vai escolher por nÃºmero. Responda de forma natural e humana, como um consierge; evite listar "1 - X, 2 - Y" a menos que seja realmente necessÃ¡rio.\n\n`
       : style === "hybrid"
-        ? `\nESTILO DE INTERAÇÃO: O dono escolheu MISTO (natural + opções quando fizer sentido). Equilibre conversa natural com clareza; pode sugerir opções em alguns momentos.\n\n`
-        : `\nESTILO DE INTERAÇÃO: O dono escolheu OPÇÕES NUMERADAS. As respostas podem ser exibidas como botões numerados para o cliente responder de forma ágil.\n\n`
+        ? `\nESTILO DE INTERAÃ‡ÃƒO: O dono escolheu MISTO (natural + opÃ§Ãµes quando fizer sentido). Equilibre conversa natural com clareza; pode sugerir opÃ§Ãµes em alguns momentos.\n\n`
+        : `\nESTILO DE INTERAÃ‡ÃƒO: O dono escolheu OPÃ‡Ã•ES NUMERADAS. As respostas podem ser exibidas como botÃµes numerados para o cliente responder de forma Ã¡gil.\n\n`
 
   const now = new Date()
   const todayIso = getTodayIsoBusinessTz(now)
   const tomorrowIso = addDaysToIsoDate(todayIso, 1)
   const todayDdMm = formatDatePt(todayIso)
   const tomorrowDdMm = formatDatePt(tomorrowIso)
-  const dateContext = `DATA E HORA (use APENAS estas; NUNCA invente dia, mês ou ano): Hoje é ${todayDdMm} (${todayIso}, ${DAY_NAMES[getWeekdayKey(todayIso)] || "?"}). Amanhã é ${tomorrowDdMm} (${tomorrowIso}, ${DAY_NAMES[getWeekdayKey(tomorrowIso)] || "?"}). Ao dizer "amanhã" use sempre a data ${tomorrowDdMm}.`
+  const dateContext = `DATA E HORA (use APENAS estas; NUNCA invente dia, mÃªs ou ano): Hoje Ã© ${todayDdMm} (${todayIso}, ${DAY_NAMES[getWeekdayKey(todayIso)] || "?"}). AmanhÃ£ Ã© ${tomorrowDdMm} (${tomorrowIso}, ${DAY_NAMES[getWeekdayKey(tomorrowIso)] || "?"}). Ao dizer "amanhÃ£" use sempre a data ${tomorrowDdMm}.`
   const nowAvailabilityContext = getNowAndTodayAvailabilityContext(config)
   const holidaysContext = await getHolidaysContextForPrompt(config, todayIso, tomorrowIso)
 
-  const systemPrompt = `Você é a assistente virtual do negócio. O cliente está falando com você pelo chat.
+  const systemPrompt = `VocÃª Ã© a assistente virtual do negÃ³cio. O cliente estÃ¡ falando com vocÃª pelo chat.
 ${finalizedHint}${styleHint}${dateContext}
 
 ${nowAvailabilityContext}
@@ -386,20 +388,20 @@ REGRAS:
 - Se o cliente perguntar identidade (ex: "quem estou falando?" ou "quem e voce?"), responda claramente que voce e a assistente virtual da empresa.
 - Responda de forma natural e humana, como se estivesse numa conversa real.
 - CONSULTE O DOSSIE ACIMA: use apenas as informacoes consolidadas. Nunca invente servicos, areas, publicos ou ofertas.
-- ENDEREÇO/LOCALIZAÇÃO: Se o cliente perguntar onde ficam, endereço ou localização, use APENAS o endereço do DOSSIE. NUNCA invente rua, número ou endereço; se não houver no dossiê, diga que não tem o endereço cadastrado.
+- ENDEREÃ‡O/LOCALIZAÃ‡ÃƒO: Se o cliente perguntar onde ficam, endereÃ§o ou localizaÃ§Ã£o, use APENAS o endereÃ§o do DOSSIE. NUNCA invente rua, nÃºmero ou endereÃ§o; se nÃ£o houver no dossiÃª, diga que nÃ£o tem o endereÃ§o cadastrado.
 - TRIAGEM NATURAL: se o pedido estiver fora do escopo, fora do publico atendido ou bater em restricao operacional, reconheca a necessidade, explique o limite com naturalidade e redirecione para o que o negocio realmente faz.
-- PREÇOS: Se um serviço tem valor em "R$ X" nos dados, o cliente está perguntando o preço e você DEVE informar esse valor. NUNCA diga "não tenho os valores" se o preço está nos dados. Use o nome exato do serviço do config ao informar.
-- HORÁRIO PARA UM DIA ESPECÍFICO: Se o cliente perguntar se tem horário/disponibilidade para um dia (ex.: "tem horário para amanhã?", "atendem amanhã?", "tem vaga hoje?"), use os dados de "Horário" e dias de atendimento acima E o bloco "AGORA / Expediente de hoje" acima. Se o expediente de hoje JÁ ENCERROU, NÃO diga que há horários para hoje; diga que já encerrou e sugira amanhã ou outro dia. Se esse dia está entre os dias que atendemos e (para hoje) ainda estamos em expediente, diga que sim e repita o horário; se esse dia NÃO está (ex.: amanhã é sábado e só atendemos segunda a sexta), diga claramente e sugira outro dia.
-- Se o cliente JÁ disse que quer agendar para AMANHÃ (ou para outro dia), NÃO repita que "o expediente de hoje encerrou"; vá direto ao ponto (confirmar horário, serviço, etc.). Repetir que hoje encerrou só quando ele ainda estiver falando de hoje.
-- NUNCA invente data, dia ou mês. Use somente as datas do bloco "DATA E HORA" acima (hoje e amanhã com dia/mês/ano corretos).
+- PREÃ‡OS: Se um serviÃ§o tem valor em "R$ X" nos dados, o cliente estÃ¡ perguntando o preÃ§o e vocÃª DEVE informar esse valor. NUNCA diga "nÃ£o tenho os valores" se o preÃ§o estÃ¡ nos dados. Use o nome exato do serviÃ§o do config ao informar.
+- HORÃRIO PARA UM DIA ESPECÃFICO: Se o cliente perguntar se tem horÃ¡rio/disponibilidade para um dia (ex.: "tem horÃ¡rio para amanhÃ£?", "atendem amanhÃ£?", "tem vaga hoje?"), use os dados de "HorÃ¡rio" e dias de atendimento acima E o bloco "AGORA / Expediente de hoje" acima. Se o expediente de hoje JÃ ENCERROU, NÃƒO diga que hÃ¡ horÃ¡rios para hoje; diga que jÃ¡ encerrou e sugira amanhÃ£ ou outro dia. Se esse dia estÃ¡ entre os dias que atendemos e (para hoje) ainda estamos em expediente, diga que sim e repita o horÃ¡rio; se esse dia NÃƒO estÃ¡ (ex.: amanhÃ£ Ã© sÃ¡bado e sÃ³ atendemos segunda a sexta), diga claramente e sugira outro dia.
+- Se o cliente JÃ disse que quer agendar para AMANHÃƒ (ou para outro dia), NÃƒO repita que "o expediente de hoje encerrou"; vÃ¡ direto ao ponto (confirmar horÃ¡rio, serviÃ§o, etc.). Repetir que hoje encerrou sÃ³ quando ele ainda estiver falando de hoje.
+- NUNCA invente data, dia ou mÃªs. Use somente as datas do bloco "DATA E HORA" acima (hoje e amanhÃ£ com dia/mÃªs/ano corretos).
 - Seja objetiva e prestativa.
-- Se não tiver a informação que ele pediu, diga com naturalidade.
+- Se nÃ£o tiver a informaÃ§Ã£o que ele pediu, diga com naturalidade.
 - Mantenha o tom profissional mas cordial.
 - Diretriz de atendimento e booking: ${agentRuntimeContext.booking_context}
 - Diretriz de triagem: ${agentRuntimeContext.triage_context}
-- IMPORTANTE: Tenha atitude e conduza o cliente. Após responder qualquer pergunta informativa (endereço, serviços, horários etc.), SEMPRE adicione uma pergunta ou convite para engajar: ex. "Quer agendar um horário conosco?", "Precisa de ajuda em alguma dessas áreas?", "Posso te ajudar a marcar uma consulta?". O objetivo é converter o lead — seja simpático e proativo, puxando o assunto para o agendamento.`
+- IMPORTANTE: Tenha atitude e conduza o cliente. ApÃ³s responder qualquer pergunta informativa (endereÃ§o, serviÃ§os, horÃ¡rios etc.), SEMPRE adicione uma pergunta ou convite para engajar: ex. "Quer agendar um horÃ¡rio conosco?", "Precisa de ajuda em alguma dessas Ã¡reas?", "Posso te ajudar a marcar uma consulta?". O objetivo Ã© converter o lead â€” seja simpÃ¡tico e proativo, puxando o assunto para o agendamento.`
 
-  const userPrompt = `Histórico da conversa:
+  const userPrompt = `HistÃ³rico da conversa:
 ${historyText}
 
 Cliente disse: "${message}"
@@ -571,52 +573,52 @@ export async function generateInformationalReplyWithAI(params: {
           .slice(-8)
           .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
           .join("\n")
-      : "(sem histórico)"
+      : "(sem histÃ³rico)"
 
-  const businessName = params.businessName || businessBrain.business_name || "o negócio"
+  const businessName = params.businessName || businessBrain.business_name || "o negÃ³cio"
   const serviceNames = Array.isArray(params.serviceNames) ? params.serviceNames.filter(Boolean) : []
-  const serviceListText = serviceNames.length > 0 ? serviceNames.join(", ") : "(nenhum serviço configurado)"
+  const serviceListText = serviceNames.length > 0 ? serviceNames.join(", ") : "(nenhum serviÃ§o configurado)"
   const actionGuidance: Record<string, string> = {
     reply_identity:
-      "Explique quem está falando de forma cordial, situada no negócio, e ofereça ajuda de forma natural. Não soe como mensagem institucional dura.",
+      "Explique quem estÃ¡ falando de forma cordial, situada no negÃ³cio, e ofereÃ§a ajuda de forma natural. NÃ£o soe como mensagem institucional dura.",
     reply_faq:
-      "Responda diretamente a dúvida do cliente com base na resposta disponível. Depois ofereça continuidade com naturalidade, sem parecer script.",
+      "Responda diretamente a dÃºvida do cliente com base na resposta disponÃ­vel. Depois ofereÃ§a continuidade com naturalidade, sem parecer script.",
     reply_price:
-      "Responda primeiro e claramente o preço do serviço perguntado. Se houver nome e preço, diga isso de forma cordial e natural. Depois ofereça ajuda para agendar, sem repetir pergunta desnecessária.",
+      "Responda primeiro e claramente o preÃ§o do serviÃ§o perguntado. Se houver nome e preÃ§o, diga isso de forma cordial e natural. Depois ofereÃ§a ajuda para agendar, sem repetir pergunta desnecessÃ¡ria.",
     reply_service_detail:
-      "Explique o serviço citado com linguagem humana e natural. Depois ofereça continuidade para agendamento, sem soar robótico.",
+      "Explique o serviÃ§o citado com linguagem humana e natural. Depois ofereÃ§a continuidade para agendamento, sem soar robÃ³tico.",
     reply_service_list:
-      "Apresente os serviços do negócio de forma conversacional, como recepção real. Não use tom burocrático nem uma enumeração fria se não for necessário.",
+      "Apresente os serviÃ§os do negÃ³cio de forma conversacional, como recepÃ§Ã£o real. NÃ£o use tom burocrÃ¡tico nem uma enumeraÃ§Ã£o fria se nÃ£o for necessÃ¡rio.",
     reply_closing:
-      "Encerre a conversa com educação, naturalidade e abertura cordial para retorno futuro.",
+      "Encerre a conversa com educaÃ§Ã£o, naturalidade e abertura cordial para retorno futuro.",
   }
 
-  const systemPrompt = `Você é a assistente virtual de ${businessName}.
+  const systemPrompt = `VocÃª Ã© a assistente virtual de ${businessName}.
 
 ${nowAvailabilityContext}
 
 ${holidaysContext}
 
-DOSSIE DO NEGÓCIO:
+DOSSIE DO NEGÃ“CIO:
 ${businessContext}
 
 REGRAS:
-- Responda em português do Brasil.
-- Soe como alguém do negócio atendendo o cliente de verdade.
-- Seja cordial, contextual e natural. Não escreva como fluxo técnico.
-- Use o contexto do negócio já conhecido; não peça de novo algo que o cliente acabou de dizer.
-- Não transforme uma pergunta objetiva em triagem desnecessária.
-- Se o cliente já citou um serviço específico, use essa informação.
-- Se houver preço configurado para o serviço citado, informe o valor diretamente.
-- ENDEREÇO/LOCALIZAÇÃO: Se perguntarem onde ficam, endereço ou localização, use APENAS o endereço do DOSSIE. NUNCA invente rua, número ou endereço; se não houver no dossiê, diga que não tem o endereço cadastrado.
-- Depois da resposta principal, você pode conduzir com suavidade para o próximo passo, mas sem soar insistente nem genérico.
+- Responda em portuguÃªs do Brasil.
+- Soe como alguÃ©m do negÃ³cio atendendo o cliente de verdade.
+- Seja cordial, contextual e natural. NÃ£o escreva como fluxo tÃ©cnico.
+- Use o contexto do negÃ³cio jÃ¡ conhecido; nÃ£o peÃ§a de novo algo que o cliente acabou de dizer.
+- NÃ£o transforme uma pergunta objetiva em triagem desnecessÃ¡ria.
+- Se o cliente jÃ¡ citou um serviÃ§o especÃ­fico, use essa informaÃ§Ã£o.
+- Se houver preÃ§o configurado para o serviÃ§o citado, informe o valor diretamente.
+- ENDEREÃ‡O/LOCALIZAÃ‡ÃƒO: Se perguntarem onde ficam, endereÃ§o ou localizaÃ§Ã£o, use APENAS o endereÃ§o do DOSSIE. NUNCA invente rua, nÃºmero ou endereÃ§o; se nÃ£o houver no dossiÃª, diga que nÃ£o tem o endereÃ§o cadastrado.
+- Depois da resposta principal, vocÃª pode conduzir com suavidade para o prÃ³ximo passo, mas sem soar insistente nem genÃ©rico.
 - Diretriz de atendimento: ${agentRuntimeContext.booking_context}
 - Diretriz de triagem: ${agentRuntimeContext.triage_context}
 
 OBJETIVO DESTA RESPOSTA:
 ${actionGuidance[params.action]}`
 
-  const userPrompt = `Histórico recente:
+  const userPrompt = `HistÃ³rico recente:
 ${historyText}
 
 Mensagem atual do cliente:
@@ -701,39 +703,39 @@ export async function generateBookingReplyWithAI(params: {
           .slice(-10)
           .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
           .join("\n")
-      : "(sem histórico)"
+      : "(sem histÃ³rico)"
 
-  const businessName = businessBrain.business_name || "o negócio"
+  const businessName = businessBrain.business_name || "o negÃ³cio"
   const now = new Date()
   const todayIso = getTodayIsoBusinessTz(now)
   const tomorrowIso = addDaysToIsoDate(todayIso, 1)
   const todayDdMm = formatDatePt(todayIso)
   const tomorrowDdMm = formatDatePt(tomorrowIso)
-  const bookingDateContext = `DATA: Hoje é ${todayDdMm}. Amanhã é ${tomorrowDdMm}. Use APENAS estas datas; nunca invente dia ou mês. Se o cliente disse amanhã, amanhã é ${tomorrowDdMm}.`
+  const bookingDateContext = `DATA: Hoje Ã© ${todayDdMm}. AmanhÃ£ Ã© ${tomorrowDdMm}. Use APENAS estas datas; nunca invente dia ou mÃªs. Se o cliente disse amanhÃ£, amanhÃ£ Ã© ${tomorrowDdMm}.`
   const holidaysContext = await getHolidaysContextForPrompt(params.config, todayIso, tomorrowIso)
 
   const actionGuidance: Record<string, string> = {
     ask_audience_confirmation:
-      "Confirme o encaixe no público de forma natural (ex.: 'Só para confirmar: atendemos [público]. Vocês se encaixam?'). NUNCA pergunte idade (ex.: 'tem mais de 6 anos?') nem peça que o cliente se classifique por idade.",
+      "Confirme o encaixe no pÃºblico de forma natural (ex.: 'SÃ³ para confirmar: atendemos [pÃºblico]. VocÃªs se encaixam?'). NUNCA pergunte idade (ex.: 'tem mais de 6 anos?') nem peÃ§a que o cliente se classifique por idade.",
     ask_attendee_name:
-      "Peça o nome da pessoa de forma humana e situada no atendimento. Se parecer single booking, não sugira múltiplos atendidos à toa.",
+      "PeÃ§a o nome da pessoa de forma humana e situada no atendimento. Se parecer single booking, nÃ£o sugira mÃºltiplos atendidos Ã  toa.",
     ask_service:
-      "Conduza a escolha do serviço de forma natural, sem soar formulário. Se já houver contexto suficiente, reconheça isso.",
+      "Conduza a escolha do serviÃ§o de forma natural, sem soar formulÃ¡rio. Se jÃ¡ houver contexto suficiente, reconheÃ§a isso.",
     offer_sequence_template:
-      "Ofereça a continuação do próximo atendimento de forma natural e acolhedora.",
+      "OfereÃ§a a continuaÃ§Ã£o do prÃ³ximo atendimento de forma natural e acolhedora.",
     ask_date:
-      "Peça data ou preferência de dia/turno de forma fluida, como recepção real. Consulte o bloco AGORA/Expediente: se hoje já encerrou, não ofereça hoje; sugira amanhã ou outro dia.",
+      "PeÃ§a data ou preferÃªncia de dia/turno de forma fluida, como recepÃ§Ã£o real. Consulte o bloco AGORA/Expediente: se hoje jÃ¡ encerrou, nÃ£o ofereÃ§a hoje; sugira amanhÃ£ ou outro dia.",
     ask_time:
-      "Peça o horário ou preferência de horário de forma natural. Consulte o bloco AGORA/Expediente: se o cliente pediu horário para hoje e o expediente de hoje já encerrou, NÃO diga que tem horários; diga que já encerramos e sugira amanhã ou outro dia.",
+      "PeÃ§a o horÃ¡rio ou preferÃªncia de horÃ¡rio de forma natural. Consulte o bloco AGORA/Expediente: se o cliente pediu horÃ¡rio para hoje e o expediente de hoje jÃ¡ encerrou, NÃƒO diga que tem horÃ¡rios; diga que jÃ¡ encerramos e sugira amanhÃ£ ou outro dia.",
     ask_contact:
-      "Peça o contato necessário de forma leve e contextual, explicando isso com naturalidade quando fizer sentido.",
+      "PeÃ§a o contato necessÃ¡rio de forma leve e contextual, explicando isso com naturalidade quando fizer sentido.",
     confirm_booking:
-      "Confirme o que foi entendido do agendamento de forma clara, cordial e humana, preparando a confirmação final.",
+      "Confirme o que foi entendido do agendamento de forma clara, cordial e humana, preparando a confirmaÃ§Ã£o final.",
     offer_calendar:
-      "Ofereça adicionar ao calendário de forma simples e natural, sem linguagem técnica.",
+      "OfereÃ§a adicionar ao calendÃ¡rio de forma simples e natural, sem linguagem tÃ©cnica.",
   }
 
-  const systemPrompt = `Você é a assistente virtual de ${businessName}.
+  const systemPrompt = `VocÃª Ã© a assistente virtual de ${businessName}.
 
 ${bookingDateContext}
 
@@ -741,27 +743,27 @@ ${nowAvailabilityContext}
 
 ${holidaysContext}
 
-DOSSIE DO NEGÓCIO:
+DOSSIE DO NEGÃ“CIO:
 ${businessContext}
 
 REGRAS:
-- Responda em português do Brasil.
-- Soe como recepção real do estabelecimento.
+- Responda em portuguÃªs do Brasil.
+- Soe como recepÃ§Ã£o real do estabelecimento.
 - Seja cordial, natural e contextual.
-- Não escreva como um fluxo técnico ou formulário.
-- Use o que já foi dito na conversa; não repita pergunta desnecessária.
-- Se existir nome, serviço, data ou horário no contexto, use isso naturalmente.
-- Se o cliente JÁ disse que quer amanhã (ou outro dia), NÃO repita que "o expediente de hoje encerrou"; vá direto ao ponto.
-- NUNCA invente data ou mês; use só as datas do bloco DATA acima.
-- Se a data que o cliente quer for feriado e nós não atendemos nesse feriado, diga com naturalidade e sugira outro dia (use o bloco Feriados acima).
-- INTERRUPÇÃO NO MEIO DO AGENDAMENTO: Se a mensagem atual do cliente for uma pergunta informativa (ex.: "Onde vocês ficam?", "Qual o horário?", "Quanto custa o X?", "Tem estacionamento?"), responda à pergunta usando o dossiê e, na MESMA mensagem, retome o fluxo: recapitule em uma frase o que já temos (nome, serviço, data, horário, etc.) e peça o próximo dado que falta (ex.: contato). Uma única mensagem: resposta à dúvida + recap + pergunta do próximo slot.
+- NÃ£o escreva como um fluxo tÃ©cnico ou formulÃ¡rio.
+- Use o que jÃ¡ foi dito na conversa; nÃ£o repita pergunta desnecessÃ¡ria.
+- Se existir nome, serviÃ§o, data ou horÃ¡rio no contexto, use isso naturalmente.
+- Se o cliente JÃ disse que quer amanhÃ£ (ou outro dia), NÃƒO repita que "o expediente de hoje encerrou"; vÃ¡ direto ao ponto.
+- NUNCA invente data ou mÃªs; use sÃ³ as datas do bloco DATA acima.
+- Se a data que o cliente quer for feriado e nÃ³s nÃ£o atendemos nesse feriado, diga com naturalidade e sugira outro dia (use o bloco Feriados acima).
+- INTERRUPÃ‡ÃƒO NO MEIO DO AGENDAMENTO: Se a mensagem atual do cliente for uma pergunta informativa (ex.: "Onde vocÃªs ficam?", "Qual o horÃ¡rio?", "Quanto custa o X?", "Tem estacionamento?"), responda Ã  pergunta usando o dossiÃª e, na MESMA mensagem, retome o fluxo: recapitule em uma frase o que jÃ¡ temos (nome, serviÃ§o, data, horÃ¡rio, etc.) e peÃ§a o prÃ³ximo dado que falta (ex.: contato). Uma Ãºnica mensagem: resposta Ã  dÃºvida + recap + pergunta do prÃ³ximo slot.
 - Diretriz de atendimento: ${agentRuntimeContext.booking_context}
 - Diretriz de triagem: ${agentRuntimeContext.triage_context}
 
 OBJETIVO DESTA RESPOSTA:
 ${actionGuidance[params.action]}`
 
-  const userPrompt = `Histórico recente:
+  const userPrompt = `HistÃ³rico recente:
 ${historyText}
 
 Mensagem atual do cliente:
@@ -823,40 +825,40 @@ export async function interpretFlowWithAI(
           .slice(-6)
           .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
           .join("\n")
-      : "(sem histórico)"
+      : "(sem histÃ³rico)"
 
-  const systemPrompt = `Você é um orquestrador de fluxo para assistente virtual de negócios.
-O negócio pode ser de QUALQUER ramo (barbearia, advocacia, manicure, personal organizer, etc.) - NUNCA assuma ramo específico.
-Você recebe a config do negócio (tipo, serviços) e deve mapear a intenção do cliente aos fluxos disponíveis.
+  const systemPrompt = `VocÃª Ã© um orquestrador de fluxo para assistente virtual de negÃ³cios.
+O negÃ³cio pode ser de QUALQUER ramo (barbearia, advocacia, manicure, personal organizer, etc.) - NUNCA assuma ramo especÃ­fico.
+VocÃª recebe a config do negÃ³cio (tipo, serviÃ§os) e deve mapear a intenÃ§Ã£o do cliente aos fluxos disponÃ­veis.
 
-Fluxos disponíveis:
-1. answer_price - Cliente quer saber preço/valor. DEVE responder o preço ANTES de qualquer outra ação.
+Fluxos disponÃ­veis:
+1. answer_price - Cliente quer saber preÃ§o/valor. DEVE responder o preÃ§o ANTES de qualquer outra aÃ§Ã£o.
 2. list_services - Cliente quer saber o que oferecemos.
 3. start_booking - Cliente quer agendar/marcar.
-4. service_detail - Cliente quer detalhes de um serviço específico.
-5. ask_clarification - Mensagem ambígua; sugerir pergunta de clarificação.
-6. no_match_fallback - Não conseguiu mapear a mensagem a nenhum fluxo. Use quando não houver encaixe.
+4. service_detail - Cliente quer detalhes de um serviÃ§o especÃ­fico.
+5. ask_clarification - Mensagem ambÃ­gua; sugerir pergunta de clarificaÃ§Ã£o.
+6. no_match_fallback - NÃ£o conseguiu mapear a mensagem a nenhum fluxo. Use quando nÃ£o houver encaixe.
 
 REGRAS:
-- Se o cliente PERGUNTOU preço (quanto custa, valor, etc.), retorne suggested_action: "answer_price". NUNCA pule para start_booking.
-- Se o cliente fez pergunta DIRETA sobre serviço que não oferecemos (ex: "não tem X?", "tem Y?") NUNCA retorne ask_clarification com "não ficou claro". Use no_match_fallback ou considere que a intenção é saber se oferecemos - a resposta deve explicar o que oferecemos.
-- PEDIDO GENÉRICO vs ESPECÍFICO (muito importante):
-  * Se o cliente expressou vontade de forma GENÉRICA (ex: "quero um atendimento", "preciso de um serviço", "quero agendar algo") sem citar o nome exato de um serviço da lista, retorne suggested_action: "list_services" e NÃO preencha inferred_service. O sistema vai mostrar todas as opções para o cliente ESCOLHER.
-  * Só retorne suggested_action: "start_booking" com inferred_service quando o cliente tiver mencionado um serviço ESPECÍFICO da lista. NUNCA assuma um serviço específico só porque o cliente usou termo genérico da área.
-- inferred_service: use apenas quando a mensagem citar claramente um serviço da lista (nome exato ou variação direta). Para pedidos genéricos (categoria/tema sem escolha explícita), retorne list_services sem inferred_service.
-- Se o histórico indica que o cliente perguntou sobre X antes e agora pede Y para outra(s) pessoa(s), considere inferred_attendees: "other_person" ou "multiple".
-- Se não conseguir mapear, retorne suggested_action: "no_match_fallback".
-- MENSAGENS VAGAS OU INCOMPLETAS: Se a mensagem for muito curta, incompleta ou não transmitir intenção clara (ex: letra solta, "a", "o", "kk", fragmento), retorne suggested_action: "ask_clarification" com clarification_question amigável como "Não entendi, pode repetir? Como posso ajudar?" — NUNCA assuma serviço ou intenção em mensagens ambíguas.
+- Se o cliente PERGUNTOU preÃ§o (quanto custa, valor, etc.), retorne suggested_action: "answer_price". NUNCA pule para start_booking.
+- Se o cliente fez pergunta DIRETA sobre serviÃ§o que nÃ£o oferecemos (ex: "nÃ£o tem X?", "tem Y?") NUNCA retorne ask_clarification com "nÃ£o ficou claro". Use no_match_fallback ou considere que a intenÃ§Ã£o Ã© saber se oferecemos - a resposta deve explicar o que oferecemos.
+- PEDIDO GENÃ‰RICO vs ESPECÃFICO (muito importante):
+  * Se o cliente expressou vontade de forma GENÃ‰RICA (ex: "quero um atendimento", "preciso de um serviÃ§o", "quero agendar algo") sem citar o nome exato de um serviÃ§o da lista, retorne suggested_action: "list_services" e NÃƒO preencha inferred_service. O sistema vai mostrar todas as opÃ§Ãµes para o cliente ESCOLHER.
+  * SÃ³ retorne suggested_action: "start_booking" com inferred_service quando o cliente tiver mencionado um serviÃ§o ESPECÃFICO da lista. NUNCA assuma um serviÃ§o especÃ­fico sÃ³ porque o cliente usou termo genÃ©rico da Ã¡rea.
+- inferred_service: use apenas quando a mensagem citar claramente um serviÃ§o da lista (nome exato ou variaÃ§Ã£o direta). Para pedidos genÃ©ricos (categoria/tema sem escolha explÃ­cita), retorne list_services sem inferred_service.
+- Se o histÃ³rico indica que o cliente perguntou sobre X antes e agora pede Y para outra(s) pessoa(s), considere inferred_attendees: "other_person" ou "multiple".
+- Se nÃ£o conseguir mapear, retorne suggested_action: "no_match_fallback".
+- MENSAGENS VAGAS OU INCOMPLETAS: Se a mensagem for muito curta, incompleta ou nÃ£o transmitir intenÃ§Ã£o clara (ex: letra solta, "a", "o", "kk", fragmento), retorne suggested_action: "ask_clarification" com clarification_question amigÃ¡vel como "NÃ£o entendi, pode repetir? Como posso ajudar?" â€” NUNCA assuma serviÃ§o ou intenÃ§Ã£o em mensagens ambÃ­guas.
 - Contexto de triagem do negocio: ${agentRuntimeContext.triage_context}
-- Retorne APENAS JSON válido.`
+- Retorne APENAS JSON vÃ¡lido.`
 
   const style = resolveInteractionStyle({ config, businessBrain })
   const styleNote =
     style === "conversational"
-      ? " Estilo: CONVERSA NATURAL — priorize interpretar intenção em texto livre; retorne start_booking quando o cliente manifestar vontade de agendar/marcar em QUALQUER redação (não exija palavras como 'agendar' ou 'marcar')."
+      ? " Estilo: CONVERSA NATURAL â€” priorize interpretar intenÃ§Ã£o em texto livre; retorne start_booking quando o cliente manifestar vontade de agendar/marcar em QUALQUER redaÃ§Ã£o (nÃ£o exija palavras como 'agendar' ou 'marcar')."
       : style === "hybrid"
-        ? " Estilo: MISTO — interpre contexto; em dúvida, aceite formas naturais de pedir agendamento como start_booking."
-        : " Estilo: OPÇÕES NUMERADAS — cliente pode responder por número em alguns momentos."
+        ? " Estilo: MISTO â€” interpre contexto; em dÃºvida, aceite formas naturais de pedir agendamento como start_booking."
+        : " Estilo: OPÃ‡Ã•ES NUMERADAS â€” cliente pode responder por nÃºmero em alguns momentos."
 
   const continuationPrompt = buildSemanticContinuationPrompt(semanticContext, [
     'Se continuation_kind = "price_followup", priorize "answer_price" em vez de "start_booking".',
@@ -865,12 +867,12 @@ REGRAS:
 
   const userPrompt = `Mensagem atual do cliente: "${message}"
 
-Histórico recente:
+HistÃ³rico recente:
 ${historyText}
 
-Config do negócio:
+Config do negÃ³cio:
 - Tipo: ${businessType}
-- Serviços oferecidos: ${servicesJson}
+- ServiÃ§os oferecidos: ${servicesJson}
 - Radar do negocio: ${agentRuntimeContext.service_context}
 - Publico e elegibilidade: ${agentRuntimeContext.audience_context}
 -${styleNote}
@@ -911,21 +913,21 @@ Retorne JSON com: intent, inferred_service (o que o cliente pediu ou nome exato 
   }
 }
 
-/** Extração de slots a partir de mensagem livre. Usa IA para interpretar contexto. */
+/** ExtraÃ§Ã£o de slots a partir de mensagem livre. Usa IA para interpretar contexto. */
 export type SlotsInterpretation = {
-  /** Nome da pessoa que receberá o agendamento. NÃO incluir termos de parentesco. */
+  /** Nome da pessoa que receberÃ¡ o agendamento. NÃƒO incluir termos de parentesco. */
   attendee_name?: string | null
-  /** Cliente citou apenas parentesco sem nome (ex: "meu filho") — perguntar o nome. */
+  /** Cliente citou apenas parentesco sem nome (ex: "meu filho") â€” perguntar o nome. */
   relationship_only?: boolean
   /** Parentesco citado (ex: "filho", "marido") para contexto. */
   relationship?: string | null
-  /** Serviço da lista que corresponde ao pedido. */
+  /** ServiÃ§o da lista que corresponde ao pedido. */
   service?: string | null
   /** Data em ISO (YYYY-MM-DD) ou dia da semana. */
   date?: string | null
-  /** Horário no formato HH:MM. */
+  /** HorÃ¡rio no formato HH:MM. */
   time?: string | null
-  /** Cliente quer saber se há horário disponível — consultar agenda antes de responder. */
+  /** Cliente quer saber se hÃ¡ horÃ¡rio disponÃ­vel â€” consultar agenda antes de responder. */
   needs_availability_check?: boolean
 }
 
@@ -937,7 +939,8 @@ export type SemanticTurnAIInterpretation = {
 
 function normalizeSemanticTurnInterpretation(
   parsed: Record<string, unknown>,
-  servicesList: string[]
+  servicesList: string[],
+  message?: string
 ): SemanticTurnAIInterpretation {
   const validActions = ["answer_price", "start_booking", "list_services", "ask_clarification", "no_match_fallback", "service_detail"]
   const action =
@@ -990,27 +993,42 @@ function normalizeSemanticTurnInterpretation(
     service_names: Array.from(new Set(matchedServices.filter(Boolean))),
   }
 
+  const normalizedRelationship =
+    typeof parsed.relationship === "string" && parsed.relationship.trim()
+      ? normalizeText(String(parsed.relationship).trim())
+      : ""
+  const shouldDiscardSelfRelationship =
+    normalizedRelationship === "self" ||
+    normalizedRelationship === "eu" ||
+    normalizedRelationship === "mim" ||
+    normalizedRelationship === "me" ||
+    normalizedRelationship === "titular" ||
+    normalizedRelationship === "cliente"
+  const deterministicDate = message ? parseDateOrWeekday(message) : null
+  const deterministicTime = message ? parseTime(message) : null
+
   const slots: SlotsInterpretation = {
     attendee_name:
       typeof parsed.attendee_name === "string" && parsed.attendee_name.trim()
         ? parsed.attendee_name.trim()
         : null,
-    relationship_only: parsed.relationship_only === true,
+    relationship_only: shouldDiscardSelfRelationship ? false : parsed.relationship_only === true,
     relationship:
-      typeof parsed.relationship === "string" && parsed.relationship.trim()
+      !shouldDiscardSelfRelationship && typeof parsed.relationship === "string" && parsed.relationship.trim()
         ? parsed.relationship.trim()
         : null,
     service:
       typeof parsed.service === "string" && parsed.service.trim()
         ? servicesList.find((s) => normalizeText(s) === normalizeText(parsed.service as string)) || String(parsed.service).trim()
         : null,
-    date: typeof parsed.date === "string" ? parsed.date : null,
+    date: deterministicDate || (typeof parsed.date === "string" ? parsed.date : null),
     time:
-      typeof parsed.time === "string" && parsed.time.trim()
+      deterministicTime ||
+      (typeof parsed.time === "string" && parsed.time.trim()
         ? (String(parsed.time).includes(":")
           ? String(parsed.time)
           : `${String(parseInt(String(parsed.time), 10)).padStart(2, "0")}:00`)
-        : null,
+        : null),
     needs_availability_check: parsed.needs_availability_check === true,
   }
 
@@ -1065,6 +1083,9 @@ export async function interpretSemanticTurnWithAI(
   const senderLine = context.sender_display_name?.trim()
     ? `Nome do remetente atual: "${context.sender_display_name.trim()}".`
     : "Nome do remetente atual: desconhecido."
+  const todayIso = getTodayIsoBusinessTz()
+  const tomorrowIso = addDaysToIsoDate(todayIso, 1)
+  const temporalReference = `Referencia temporal obrigatoria: hoje = ${todayIso}; amanha = ${tomorrowIso}. Se o cliente disser "hoje", use exatamente ${todayIso}. Se disser "amanha", use exatamente ${tomorrowIso}. Nunca invente ano/data fora dessa referencia.`
 
   const systemPrompt = `Voce interpreta um turno conversacional completo para um assistente virtual de negocios.
 Retorne APENAS JSON valido.
@@ -1085,6 +1106,7 @@ ${businessContext}
 - Diretriz de multiagendamento: ${agentRuntimeContext.multi_booking_context}
 - Diretriz de triagem: ${agentRuntimeContext.triage_context}
 - Servicos validos: ${servicesJson}
+- ${temporalReference}
 - Quando houver servico citado, normalize para o nome mais proximo da lista.
 - Quando a mensagem for vaga, use ask_clarification somente se nao houver continuidade suficiente no contexto.`
 
@@ -1114,17 +1136,17 @@ attendee_name, relationship_only, relationship, service, date, time, needs_avail
       response_format: { type: "json_object" },
     })
     if (!content) return null
-    return normalizeSemanticTurnInterpretation(JSON.parse(content), servicesList)
+    return normalizeSemanticTurnInterpretation(JSON.parse(content), servicesList, message)
   } catch {
     return null
   }
 }
 
-/** Parâmetros para a IA decidir a próxima ação de booking (sem ordem fixa). */
+/** ParÃ¢metros para a IA decidir a prÃ³xima aÃ§Ã£o de booking (sem ordem fixa). */
 export interface GetBookingNextActionParams {
   message: string
   history?: Array<{ role: string; content: string }>
-  /** Resumo dos slots atuais (estado + extração deste turno). */
+  /** Resumo dos slots atuais (estado + extraÃ§Ã£o deste turno). */
   slotsSummary: string
   hasAttendee: boolean
   hasService: boolean
@@ -1135,7 +1157,7 @@ export interface GetBookingNextActionParams {
   shouldOfferSequenceTemplate: boolean
   businessContext: string
   runtimeContext?: AgentRuntimeContext
-  /** Serviços do estabelecimento (nome de cada um) para a IA conhecer o negócio. */
+  /** ServiÃ§os do estabelecimento (nome de cada um) para a IA conhecer o negÃ³cio. */
   servicesList?: string[]
 }
 
@@ -1152,8 +1174,8 @@ const BOOKING_ACTIONS = [
 ] as const
 
 /**
- * IA decide a próxima ação de booking como atendente do estabelecimento.
- * Conhece o negócio (config do onboarding), preenche o que o cliente disse e pergunta o que ainda falta — sem ordem fixa.
+ * IA decide a prÃ³xima aÃ§Ã£o de booking como atendente do estabelecimento.
+ * Conhece o negÃ³cio (config do onboarding), preenche o que o cliente disse e pergunta o que ainda falta â€” sem ordem fixa.
  */
 export async function getBookingNextActionFromAI(
   params: GetBookingNextActionParams
@@ -1167,35 +1189,35 @@ export async function getBookingNextActionFromAI(
           .slice(-8)
           .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
           .join("\n")
-      : "(sem histórico)"
+      : "(sem histÃ³rico)"
 
   const servicesLine =
     Array.isArray(params.servicesList) && params.servicesList.length > 0
-      ? `Serviços oferecidos: ${params.servicesList.join(", ")}.`
+      ? `ServiÃ§os oferecidos: ${params.servicesList.join(", ")}.`
       : ""
 
-  const systemPrompt = `Você é o ATENDENTE do estabelecimento. Você conhece o negócio pelas configurações do onboarding e é responsável por agendar o cliente.
+  const systemPrompt = `VocÃª Ã© o ATENDENTE do estabelecimento. VocÃª conhece o negÃ³cio pelas configuraÃ§Ãµes do onboarding e Ã© responsÃ¡vel por agendar o cliente.
 
 Seu papel:
-- Saber o que preencher: nome da pessoa, serviço, data, horário, contato para confirmação.
-- Preencher com o que o cliente já disse (nesta mensagem ou no histórico). O estado dos slots abaixo já reflete o que foi extraído; use-o como verdade.
-- Perguntar apenas o que AINDA FALTA, na ordem que fizer sentido para a conversa — não há ordem fixa. Pense como um humano preenchendo o agendamento na frente do computador: você pergunta o próximo dado que falta, até ter tudo.
-- Se o público-alvo do estabelecimento exige confirmação (audience_requires_confirmation = true), primeiro confirme que o cliente se encaixa (ask_audience_confirmation).
-- Se há segundo agendamento e faz sentido oferecer mesmo dia/outro dia/próximo horário, use offer_sequence_template.
-- Quando todos os dados necessários estiverem preenchidos, retorne confirm_booking.
+- Saber o que preencher: nome da pessoa, serviÃ§o, data, horÃ¡rio, contato para confirmaÃ§Ã£o.
+- Preencher com o que o cliente jÃ¡ disse (nesta mensagem ou no histÃ³rico). O estado dos slots abaixo jÃ¡ reflete o que foi extraÃ­do; use-o como verdade.
+- Perguntar apenas o que AINDA FALTA, na ordem que fizer sentido para a conversa â€” nÃ£o hÃ¡ ordem fixa. Pense como um humano preenchendo o agendamento na frente do computador: vocÃª pergunta o prÃ³ximo dado que falta, atÃ© ter tudo.
+- Se o pÃºblico-alvo do estabelecimento exige confirmaÃ§Ã£o (audience_requires_confirmation = true), primeiro confirme que o cliente se encaixa (ask_audience_confirmation).
+- Se hÃ¡ segundo agendamento e faz sentido oferecer mesmo dia/outro dia/prÃ³ximo horÃ¡rio, use offer_sequence_template.
+- Quando todos os dados necessÃ¡rios estiverem preenchidos, retorne confirm_booking.
 
 REGRAS:
-- Decida UMA ação por vez: a que faz sentido AGORA dado o estado e a mensagem do cliente.
-- Não invente ordem rígida: a ação é a que um atendente humano faria neste momento (perguntar o que falta ou confirmar o agendamento).
-- Ações válidas (retorne exatamente uma): ${BOOKING_ACTIONS.join(", ")}
+- Decida UMA aÃ§Ã£o por vez: a que faz sentido AGORA dado o estado e a mensagem do cliente.
+- NÃ£o invente ordem rÃ­gida: a aÃ§Ã£o Ã© a que um atendente humano faria neste momento (perguntar o que falta ou confirmar o agendamento).
+- AÃ§Ãµes vÃ¡lidas (retorne exatamente uma): ${BOOKING_ACTIONS.join(", ")}
 
 ${servicesLine}
 
-Contexto do negócio (você conhece o estabelecimento):
+Contexto do negÃ³cio (vocÃª conhece o estabelecimento):
 ${params.businessContext}
 ${params.runtimeContext?.booking_context ? `\nDiretriz de booking: ${params.runtimeContext.booking_context}` : ""}`
 
-  const userPrompt = `Estado atual do agendamento (o que já está preenchido):
+  const userPrompt = `Estado atual do agendamento (o que jÃ¡ estÃ¡ preenchido):
 ${params.slotsSummary}
 - has_attendee: ${params.hasAttendee}
 - has_service: ${params.hasService}
@@ -1207,10 +1229,10 @@ ${params.slotsSummary}
 
 Mensagem atual do cliente: "${params.message}"
 
-Histórico recente:
+HistÃ³rico recente:
 ${historyText}
 
-Retorne APENAS um JSON: { "action": "<uma das ações válidas>" }`
+Retorne APENAS um JSON: { "action": "<uma das aÃ§Ãµes vÃ¡lidas>" }`
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -1281,7 +1303,7 @@ export async function interpretSlotsFromMessageWithAI(
           .slice(-6)
           .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
           .join("\n")
-      : "(sem histórico)"
+      : "(sem histÃ³rico)"
   const lastAssistant = context.last_assistant_message || ""
   const waitingFor = context.waiting_for || "attendee_name"
   const interactionStyle = resolveInteractionStyle({ config, businessBrain })
@@ -1291,32 +1313,35 @@ export async function interpretSlotsFromMessageWithAI(
   const continuationPrompt = buildSemanticContinuationPrompt(context.continuation, [
     'Se continuation_kind = "price_followup" e a mensagem atual selecionar um servico exibido nas opcoes anteriores, extraia esse servico mesmo que o texto seja curto ou apenas uma variacao do nome.',
   ])
+  const todayIso = getTodayIsoBusinessTz()
+  const tomorrowIso = addDaysToIsoDate(todayIso, 1)
 
   const senderNote =
     context.sender_display_name && context.sender_display_name.trim()
       ? `\nIDENTIDADE DO REMETENTE: A pessoa que ESCREVE pode ter o nome "${context.sender_display_name.trim()}".
-- Use "${context.sender_display_name.trim()}" como attendee_name QUANDO a mensagem indica que ELA MESMA quer o serviço: "quero agendar meu corte", "pra mim", "para mim", "agendar para mim".
+- Use "${context.sender_display_name.trim()}" como attendee_name QUANDO a mensagem indica que ELA MESMA quer o serviÃ§o: "quero agendar meu corte", "pra mim", "para mim", "agendar para mim".
 - NUNCA use "${context.sender_display_name.trim()}" como attendee_name QUANDO a mensagem indica agendamento PARA OUTRA PESSOA: "meu marido", "meu filho", "pro meu marido", "agenda para o meu filho", etc. Nestes casos, use relationship_only + relationship ou o nome da outra pessoa.`
       : ""
 
-  const systemPrompt = `Você extrai informações estruturadas de mensagens livres do cliente em um fluxo de agendamento.
+  const systemPrompt = `VocÃª extrai informaÃ§Ãµes estruturadas de mensagens livres do cliente em um fluxo de agendamento.
 ${senderNote}
 
 REGRAS para attendee_name:
-- attendee_name = a pessoa que VAI RECEBER o serviço (a persona do agendamento). Quem escreve pode estar agendando para si ou para outro (filho, marido, etc.).
-- Use compreensão de linguagem natural: leia a frase no contexto da última pergunta do assistente e identifique a persona (quem recebe o agendamento). Extraia o nome próprio dessa pessoa, independentemente de como o cliente se expressou — só o nome, nome na frase, parentesco + nome, referência a si + nome, etc.
-- Se a última pergunta foi "De quem será o primeiro/próximo agendamento?" ou "Qual o nome dele(a)?", a resposta do cliente pode ser imprevisível. Sua tarefa é interpretar o texto e extrair o nome da pessoa que receberá o agendamento. Não espere formato fixo.
-- relationship_only: true apenas quando o cliente menciona parentesco ou relação (filho, marido, etc.) e NÃO informa o nome próprio. Se houver nome próprio na mensagem, extraia em attendee_name e relationship_only: false.
-- Se o cliente indicar que é para ele mesmo mas não disser o nome, use sender_display_name se disponível no contexto; caso contrário deixe attendee_name null e relationship_only conforme o caso.
-- Nome = substantivo próprio da pessoa (não cargo, não profissão, não só "meu filho" sem nome). Se só há relação sem nome, relationship_only + relationship.
+- attendee_name = a pessoa que VAI RECEBER o serviÃ§o (a persona do agendamento). Quem escreve pode estar agendando para si ou para outro (filho, marido, etc.).
+- Use compreensÃ£o de linguagem natural: leia a frase no contexto da Ãºltima pergunta do assistente e identifique a persona (quem recebe o agendamento). Extraia o nome prÃ³prio dessa pessoa, independentemente de como o cliente se expressou â€” sÃ³ o nome, nome na frase, parentesco + nome, referÃªncia a si + nome, etc.
+- Se a Ãºltima pergunta foi "De quem serÃ¡ o primeiro/prÃ³ximo agendamento?" ou "Qual o nome dele(a)?", a resposta do cliente pode ser imprevisÃ­vel. Sua tarefa Ã© interpretar o texto e extrair o nome da pessoa que receberÃ¡ o agendamento. NÃ£o espere formato fixo.
+- relationship_only: true apenas quando o cliente menciona parentesco ou relaÃ§Ã£o (filho, marido, etc.) e NÃƒO informa o nome prÃ³prio. Se houver nome prÃ³prio na mensagem, extraia em attendee_name e relationship_only: false.
+- Se o cliente indicar que Ã© para ele mesmo mas nÃ£o disser o nome, use sender_display_name se disponÃ­vel no contexto; caso contrÃ¡rio deixe attendee_name null e relationship_only conforme o caso.
+- Nome = substantivo prÃ³prio da pessoa (nÃ£o cargo, nÃ£o profissÃ£o, nÃ£o sÃ³ "meu filho" sem nome). Se sÃ³ hÃ¡ relaÃ§Ã£o sem nome, relationship_only + relationship.
 
 REGRAS para service, date, time:
-- Extraia serviço apenas se corresponder à lista: ${servicesJson}
-- Datas: "hoje", "pra hoje", "para hoje" → date: YYYY-MM-DD de hoje. "amanhã", "pra amanhã", "para amanhã" → date: YYYY-MM-DD de amanhã. "segunda", "terça", etc. → a próxima ocorrência.
-- Horários: "às 14", "14h", "as 14" → time: "14:00"
-- "tem horário às 14?" ou "tem disponibilidade às 14?" → needs_availability_check: true, time: "14:00"
-- "quero agendar pra amanhã", "pra hoje ainda tem vaga?" → extraia a data (hoje/amanhã) em YYYY-MM-DD.
-${(interactionStyle === "conversational" || interactionStyle === "hybrid") ? " Estilo conversacional/híbrido: o cliente pode indicar serviço, data e horário de qualquer forma; use o histórico e a mensagem para extrair, mesmo que seja indireto ou coloquial." : ""}
+- Extraia serviÃ§o apenas se corresponder Ã  lista: ${servicesJson}
+- Datas: "hoje", "pra hoje", "para hoje" â†’ date: YYYY-MM-DD de hoje. "amanhÃ£", "pra amanhÃ£", "para amanhÃ£" â†’ date: YYYY-MM-DD de amanhÃ£. "segunda", "terÃ§a", etc. â†’ a prÃ³xima ocorrÃªncia.
+- Referencia temporal obrigatoria: hoje = ${todayIso}; amanha = ${tomorrowIso}. Use exatamente essas datas quando o cliente disser "hoje" ou "amanha".
+- HorÃ¡rios: "Ã s 14", "14h", "as 14" â†’ time: "14:00"
+- "tem horÃ¡rio Ã s 14?" ou "tem disponibilidade Ã s 14?" â†’ needs_availability_check: true, time: "14:00"
+- "quero agendar pra amanhÃ£", "pra hoje ainda tem vaga?" â†’ extraia a data (hoje/amanhÃ£) em YYYY-MM-DD.
+${(interactionStyle === "conversational" || interactionStyle === "hybrid") ? " Estilo conversacional/hÃ­brido: o cliente pode indicar serviÃ§o, data e horÃ¡rio de qualquer forma; use o histÃ³rico e a mensagem para extrair, mesmo que seja indireto ou coloquial." : ""}
 - Escopo de servicos e elegibilidade do negocio:
 ${agentRuntimeContext.service_context}
 ${agentRuntimeContext.audience_context}
@@ -1325,15 +1350,15 @@ ${continuationPrompt}
 
 Retorne APENAS JSON: attendee_name (string ou null), relationship_only (boolean), relationship (string ou null), service (string da lista ou null), date (YYYY-MM-DD ou null), time (HH:MM ou null), needs_availability_check (boolean).`
 
-  const userPrompt = `Última pergunta do assistente: "${lastAssistant}"
+  const userPrompt = `Ãšltima pergunta do assistente: "${lastAssistant}"
 
 ${slotsDesc}
 
 Mensagem atual do cliente: "${message}"
 
-${historyText ? `Histórico:\n${historyText}` : ""}
+${historyText ? `HistÃ³rico:\n${historyText}` : ""}
 
-Extraia as informações. Retorne JSON.`
+Extraia as informaÃ§Ãµes. Retorne JSON.`
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -1365,7 +1390,7 @@ Extraia as informações. Retorne JSON.`
     let relOnly = parsed.relationship_only === true
     let rel = parsed.relationship && typeof parsed.relationship === "string" ? parsed.relationship.trim() : null
 
-    // Só rejeitar attendee=remetente quando há evidência de que está agendando para OUTRA pessoa (marido, filho, etc.)
+    // SÃ³ rejeitar attendee=remetente quando hÃ¡ evidÃªncia de que estÃ¡ agendando para OUTRA pessoa (marido, filho, etc.)
     const sender = context.sender_display_name?.trim()
     const schedulingForOther = relOnly || (rel && !/^(eu|mesm[ao]|mim)$/i.test(rel))
     if (attendee && sender && normalizeText(attendee) === normalizeText(sender) && schedulingForOther) {
@@ -1400,8 +1425,8 @@ Extraia as informações. Retorne JSON.`
 }
 
 /**
- * Extrai o nome do atendido quando o contexto é "De quem será o primeiro/próximo agendamento?".
- * A IA interpreta o texto livre e identifica a persona que receberá o agendamento, sem depender de exemplos fixos.
+ * Extrai o nome do atendido quando o contexto Ã© "De quem serÃ¡ o primeiro/prÃ³ximo agendamento?".
+ * A IA interpreta o texto livre e identifica a persona que receberÃ¡ o agendamento, sem depender de exemplos fixos.
  */
 export async function extractAttendeeNameForMultiBooking(
   message: string,
@@ -1414,14 +1439,14 @@ export async function extractAttendeeNameForMultiBooking(
   if (trimmed.length < 2 || trimmed.length > 300) return null
 
   const lastMsg = (context.lastAssistantMessage || "").trim()
-  const prompt = `Contexto: o assistente perguntou quem será o primeiro ou o próximo agendamento.
+  const prompt = `Contexto: o assistente perguntou quem serÃ¡ o primeiro ou o prÃ³ximo agendamento.
 
 Resposta do cliente: "${trimmed}"
-${lastMsg ? `Última pergunta do assistente: "${lastMsg}"` : ""}
+${lastMsg ? `Ãšltima pergunta do assistente: "${lastMsg}"` : ""}
 
-Tarefa: a partir da resposta do cliente, identifique a pessoa que vai receber o agendamento (a persona do atendimento) e extraia apenas o nome próprio dessa pessoa. Use compreensão de linguagem natural: o cliente pode escrever só o nome, uma frase com parentesco e nome, referência a si mesmo e nome, ou qualquer outra forma. Interprete o contexto e extraia o nome.
+Tarefa: a partir da resposta do cliente, identifique a pessoa que vai receber o agendamento (a persona do atendimento) e extraia apenas o nome prÃ³prio dessa pessoa. Use compreensÃ£o de linguagem natural: o cliente pode escrever sÃ³ o nome, uma frase com parentesco e nome, referÃªncia a si mesmo e nome, ou qualquer outra forma. Interprete o contexto e extraia o nome.
 
-Se não for possível identificar um nome próprio (pessoa que recebe o serviço), retorne null.
+Se nÃ£o for possÃ­vel identificar um nome prÃ³prio (pessoa que recebe o serviÃ§o), retorne null.
 Retorne APENAS um JSON: { "attendee_name": "Nome" } ou { "attendee_name": null }.`
 
   try {
@@ -1434,7 +1459,7 @@ Retorne APENAS um JSON: { "attendee_name": "Nome" } ou { "attendee_name": null }
       body: JSON.stringify({
         model: "gpt-4o-mini",
         messages: [
-          { role: "system", content: "Você é um extrator de entidades. Dada a pergunta do assistente e a resposta do cliente, identifique a persona que receberá o agendamento e extraia apenas o nome próprio. Interprete o texto; não dependa de formato fixo. Retorne apenas JSON com attendee_name (string ou null)." },
+          { role: "system", content: "VocÃª Ã© um extrator de entidades. Dada a pergunta do assistente e a resposta do cliente, identifique a persona que receberÃ¡ o agendamento e extraia apenas o nome prÃ³prio. Interprete o texto; nÃ£o dependa de formato fixo. Retorne apenas JSON com attendee_name (string ou null)." },
           { role: "user", content: prompt },
         ],
         max_tokens: 60,
@@ -1459,7 +1484,7 @@ Retorne APENAS um JSON: { "attendee_name": "Nome" } ou { "attendee_name": null }
 
 /**
  * Gera resposta fluida quando o cliente pergunta sobre disponibilidade.
- * Ex: cliente pergunta se tem horário às 14 → consulta agenda → confirma e pergunta se pode confirmar.
+ * Ex: cliente pergunta se tem horÃ¡rio Ã s 14 â†’ consulta agenda â†’ confirma e pergunta se pode confirmar.
  */
 export async function generateAvailabilityResponseWithAI(
   config: SimulatorConfig,
@@ -1470,9 +1495,9 @@ export async function generateAvailabilityResponseWithAI(
     is_available: boolean
     available_slots?: string[]
     service?: string
-    /** Motivo real (ex.: pausa, fora do expediente). Quando informado, a IA DEVE usar esse motivo e não inventar "intervalo entre atendimentos". */
+    /** Motivo real (ex.: pausa, fora do expediente). Quando informado, a IA DEVE usar esse motivo e nÃ£o inventar "intervalo entre atendimentos". */
     unavailable_reason?: string
-    /** Quando o horário pedido está ocupado, sugira este próximo horário livre no estilo: "As X já está preenchido, mas posso agendar as Y, que tal?" */
+    /** Quando o horÃ¡rio pedido estÃ¡ ocupado, sugira este prÃ³ximo horÃ¡rio livre no estilo: "As X jÃ¡ estÃ¡ preenchido, mas posso agendar as Y, que tal?" */
     suggested_next_slot?: string
   },
   history: Array<{ role: string; content: string }> = []
@@ -1545,15 +1570,15 @@ Gere a resposta fluida:`
     const data = await response.json()
     const content = data.choices?.[0]?.message?.content?.trim()
     if (content) {
-      // Blindagem: evitar "já temos" (soa como preencheu antes).
-      // Queremos confirmação direta: "Temos horário às 14:00."
+      // Blindagem: evitar "jÃ¡ temos" (soa como preencheu antes).
+      // Queremos confirmaÃ§Ã£o direta: "Temos horÃ¡rio Ã s 14:00."
       if (context.is_available) {
         return content
-          .replace(/\bj[aá]\s+temos\b/gi, "Temos")
-          .replace(/\bj[aá]\s+temos\s+um\s+hor[aá]rio\s+dispon[ií]vel\b/gi, "Temos horário disponível")
-          .replace(/^\s*(o?timo|ótimo)!\s*/i, "")
-          .replace(/\btenho\s+um\s+hor[aá]rio\s+dispon[ií]vel\b/gi, "Temos horário disponível")
-          .replace(/\btenho\s+hor[aá]rio\s+dispon[ií]vel\b/gi, "Temos horário disponível")
+          .replace(/\bj[aÃ¡]\s+temos\b/gi, "Temos")
+          .replace(/\bj[aÃ¡]\s+temos\s+um\s+hor[aÃ¡]rio\s+dispon[iÃ­]vel\b/gi, "Temos horÃ¡rio disponÃ­vel")
+          .replace(/^\s*(o?timo|Ã³timo)!\s*/i, "")
+          .replace(/\btenho\s+um\s+hor[aÃ¡]rio\s+dispon[iÃ­]vel\b/gi, "Temos horÃ¡rio disponÃ­vel")
+          .replace(/\btenho\s+hor[aÃ¡]rio\s+dispon[iÃ­]vel\b/gi, "Temos horÃ¡rio disponÃ­vel")
       }
       return content
     }
@@ -1565,11 +1590,11 @@ Gere a resposta fluida:`
     : `Infelizmente as ${context.requested_time} nao esta disponivel. Temos: ${(context.available_slots || []).slice(0, 6).join(", ")}. Qual prefere?`
 }
 
-/** Retorno da análise de agendamentos: único vs múltiplos e para quem. */
+/** Retorno da anÃ¡lise de agendamentos: Ãºnico vs mÃºltiplos e para quem. */
 export type AdditionalBookingsInterpretation = {
   count?: number
   has_additional?: boolean
-  /** Quando é um ÚNICO agendamento para outra pessoa (ex: "quero agendar para meu marido"). */
+  /** Quando Ã© um ÃšNICO agendamento para outra pessoa (ex: "quero agendar para meu marido"). */
   for_whom?: string | null
 }
 
@@ -1589,8 +1614,8 @@ export async function interpretAdditionalBookingsWithAI(
   const normalized = normalizeText(text || "")
   if (normalized) {
     const explicitMultiplePeople =
-      /\b(pra|para|pro)\s+mim\s+e\s+(pro|pra|para)?\s*meu\s+(filho|irmao|irmão|marido|pai|primo|amigo)\b/.test(normalized) ||
-      /\b(eu)\s+e\s+(meu|minha)\s+(filho|filha|irmao|irmão|irma|irmã|marido|esposa|pai|mae|mãe|primo|prima|amigo|amiga)\b/.test(normalized) ||
+      /\b(pra|para|pro)\s+mim\s+e\s+(pro|pra|para)?\s*meu\s+(filho|irmao|irmÃ£o|marido|pai|primo|amigo)\b/.test(normalized) ||
+      /\b(eu)\s+e\s+(meu|minha)\s+(filho|filha|irmao|irmÃ£o|irma|irmÃ£|marido|esposa|pai|mae|mÃ£e|primo|prima|amigo|amiga)\b/.test(normalized) ||
       /\bum\s+pra\s+mim\s+e\s+outro\b/.test(normalized) ||
       /\bdois\s+agendamentos\b/.test(normalized)
     if (explicitMultiplePeople) {
@@ -1620,8 +1645,8 @@ export async function interpretAdditionalBookingsWithAI(
     `Contexto: ${context?.has_completed_booking ? "ja existe um agendamento finalizado" : "nao ha agendamento finalizado"}\n` +
     "REGRAS:\n" +
     "- VARIOS SERVICOS para a MESMA pessoa (ex: 'corte e barba', 'corte de cabelo e barba', 'quero os dois') = UM so agendamento. Retorne has_additional FALSE e count 0.\n" +
-    "- Um UNICO agendamento PARA outra pessoa (ex.: 'quero agendar para meu marido', 'agendar para minha esposa', 'para [nome]') = UM só agendamento. Retorne has_additional FALSE, count 0 e for_whom com a menção (parentesco ou nome).\n" +
-    "- Múltiplos agendamentos: só quando o cliente quer MAIS DE UMA PESSOA/horário (ex.: 'pra mim e pro meu filho', 'dois agendamentos', 'um pra mim e outro pra outra pessoa'). " +
+    "- Um UNICO agendamento PARA outra pessoa (ex.: 'quero agendar para meu marido', 'agendar para minha esposa', 'para [nome]') = UM sÃ³ agendamento. Retorne has_additional FALSE, count 0 e for_whom com a menÃ§Ã£o (parentesco ou nome).\n" +
+    "- MÃºltiplos agendamentos: sÃ³ quando o cliente quer MAIS DE UMA PESSOA/horÃ¡rio (ex.: 'pra mim e pro meu filho', 'dois agendamentos', 'um pra mim e outro pra outra pessoa'). " +
     "Retorne has_additional true e count com a quantidade de PESSOAS adicionais.\n" +
     "- Se nao houver mencao a outra pessoa nem multiplos, retorne count 0, has_additional false e for_whom null."
 
@@ -1807,7 +1832,7 @@ export async function interpretBookingRequestWithAI(
 }
 
 /**
- * Extrai preferência de contato (celular, email ou ambos) a partir de texto livre.
+ * Extrai preferÃªncia de contato (celular, email ou ambos) a partir de texto livre.
  * Usa IA para entender respostas como "pode ser pelo meu celular", "telefone", "por email", etc.
  * Retorna "phone" | "email" | "both" | null.
  */
@@ -1826,14 +1851,14 @@ export async function extractContactPreferenceFromText(
           .join("\n")
       : ""
 
-  const systemPrompt = `Você extrai a preferência de contato do cliente. O assistente perguntou como prefere ser contatado para confirmar o agendamento (opções: só celular/telefone, só email, ou os dois).
+  const systemPrompt = `VocÃª extrai a preferÃªncia de contato do cliente. O assistente perguntou como prefere ser contatado para confirmar o agendamento (opÃ§Ãµes: sÃ³ celular/telefone, sÃ³ email, ou os dois).
 O cliente respondeu em texto livre. Sua tarefa: identificar se ele quer ser contatado por CELULAR/TELEFONE, por EMAIL, ou pelos DOIS.
-Retorne APENAS uma das palavras: phone, email, both. Se não der para identificar, retorne: unknown.
+Retorne APENAS uma das palavras: phone, email, both. Se nÃ£o der para identificar, retorne: unknown.
 Exemplos: "pode ser pelo meu celular" -> phone. "celular" -> phone. "telefone" -> phone. "por email" -> email. "no meu email" -> email. "os dois" -> both. "tanto faz" -> unknown.`
 
   const userPrompt = historyText
-    ? `Histórico recente:\n${historyText}\n\nResposta atual do cliente: "${message}"\n\nPreferência (phone/email/both/unknown):`
-    : `Resposta do cliente: "${message}"\n\nPreferência (phone/email/both/unknown):`
+    ? `HistÃ³rico recente:\n${historyText}\n\nResposta atual do cliente: "${message}"\n\nPreferÃªncia (phone/email/both/unknown):`
+    : `Resposta do cliente: "${message}"\n\nPreferÃªncia (phone/email/both/unknown):`
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -1863,3 +1888,6 @@ Exemplos: "pode ser pelo meu celular" -> phone. "celular" -> phone. "telefone" -
     return null
   }
 }
+
+
+

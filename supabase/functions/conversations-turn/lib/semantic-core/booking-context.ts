@@ -73,6 +73,8 @@ function normalizeName(value?: string): string {
   if (v === "-" || v === "--") return ""
   if (v === "desconhecido" || v === "unknown" || v === "n/a" || v === "na") return ""
   if (v === "cliente" || v === "pessoa" || v === "proxima pessoa") return ""
+  if (v === "hoje" || v === "amanha" || v === "amanhã") return ""
+  if (["segunda", "terca", "terça", "quarta", "quinta", "sexta", "sabado", "sábado", "domingo"].includes(v)) return ""
   if (
     /\bconfirmar\b/.test(v) ||
     v === "pode confirmar" ||
@@ -431,3 +433,4 @@ export function deriveBookingContext(
     missing_step: missingStep,
   }
 }
+

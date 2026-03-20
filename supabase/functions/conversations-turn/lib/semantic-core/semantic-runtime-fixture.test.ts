@@ -118,7 +118,7 @@ Deno.test("semantic runtime fixture answers open business-context question witho
         sequence_request: false,
       },
       risks: { ambiguities: [] },
-      meta: { raw_user_message: "oi, bom dia tudo bem? Como tá o movimento aí hoje?" },
+      meta: { raw_user_message: "oi, bom dia tudo bem? Como tÃ¡ o movimento aÃ­ hoje?" },
     } as any,
   })
 
@@ -1070,7 +1070,7 @@ Deno.test("semantic runtime fixture answers concrete price when service pricing 
       ],
     } as any,
     state: createBaseState({
-      last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviÃ§o vocÃª quer consultar?",
+      last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviÃƒÂ§o vocÃƒÂª quer consultar?",
       last_action_options: ["Corte de cabelo", "Barba"],
     }),
     snapshot: {
@@ -1647,6 +1647,103 @@ Deno.test("semantic runtime fixture keeps booking continuity after audience conf
   }
 })
 
+
+Deno.test("semantic runtime fixture preserves first-turn date/time through audience, attendee and contact steps", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState(),
+    channel: "web_simulator",
+    sender_display_name: "Carlos",
+    turns: [
+      {
+        intents: { primary: "booking", secondary: ["availability_check"], booking: true, confidence: 0.92 },
+        entities: {
+          people: [{ includes_self: true, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+          attendee_names: [],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: { raw_text: "quero agendar um corte para hoje as duas, tem horario disponivel?", iso_date: "hoje" },
+          time: { raw_text: "quero agendar um corte para hoje as duas, tem horario disponivel?", hhmm: "14:00" },
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+          availability_check: true,
+        },
+        risks: {
+          audience: {
+            requires_confirmation: true,
+            blocked: false,
+            reason: "audience_needs_confirmation",
+            prompt: "SÃ³ para confirmar: aqui atendemos homens e crianÃ§as. VocÃªs se encaixam nesse perfil?",
+            inferred_fit: null,
+          },
+          ambiguities: [],
+        },
+        meta: { raw_user_message: "quero agendar um corte para hoje as duas, tem horario disponivel?" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: ["audience_confirmation"], booking: true, confidence: 0.9 },
+        entities: {
+          people: [],
+          attendee_names: [],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "Sim, nos encaixamos" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: [], booking: true, confidence: 0.9 },
+        entities: {
+          people: [{ name: "Carlos", confidence: 0.9 }],
+          attendee_names: ["Carlos"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+          next_question_hint: "ask_contact",
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "Carlos" },
+      } as any,
+      {
+        intents: { primary: "booking", secondary: [], booking: true, confidence: 0.94 },
+        entities: {
+          people: [{ name: "Carlos", confidence: 0.9 }],
+          attendee_names: ["Carlos"],
+          services: [{ name: "Corte", normalized_name: "corte" }],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+          next_question_hint: "ask_contact_preference",
+          contact_preference: "phone",
+          contact_phone: "11978788888",
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "11978788888" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].result.state.slots.date, "hoje")
+  assertEquals(outputs[0].result.state.slots.time, "14:00")
+  assertIncludes(outputs[3].result.message, "hoje")
+  assertIncludes(outputs[3].result.message, "14:00")
+  if (outputs[3].semantic.decision.action === "ask_date") {
+    throw new Error("Contact step dropped first-turn date and regressed to ask_date")
+  }
+})
 Deno.test("semantic runtime fixture blocks incompatible audience requests with natural triage", async () => {
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
@@ -2290,6 +2387,82 @@ Deno.test("semantic runtime fixture handles faq before chaotic multi-booking req
 })
 
 
+
+
+
+
+Deno.test("semantic runtime fixture greets before first-turn audience confirmation for self booking", async () => {
+  const { result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    channel: "web_simulator",
+    sender_display_name: "Carlos",
+    snapshot: {
+      intents: { primary: "booking", secondary: [], booking: true, confidence: 0.91 },
+      entities: {
+        people: [{ includes_self: true, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: true,
+        additional_count: 0,
+      },
+      risks: {
+        audience: {
+          requires_confirmation: true,
+          blocked: false,
+          reason: "audience_needs_confirmation",
+          inferred_fit: null,
+        },
+        ambiguities: [],
+      },
+      meta: { raw_user_message: "boa tarde, quero fazer um agendamento" },
+    } as any,
+  })
+
+  assertIncludes(result.message.toLowerCase(), "aqui é")
+  assertIncludes(result.message.toLowerCase(), "você se encaixa")
+})
+
+Deno.test("semantic runtime fixture uses singular audience option for self booking", async () => {
+  const { result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    channel: "web_simulator",
+    snapshot: {
+      intents: { primary: "booking", secondary: [], booking: true, confidence: 0.91 },
+      entities: {
+        people: [{ includes_self: true, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: true,
+        additional_count: 0,
+      },
+      risks: {
+        audience: {
+          requires_confirmation: true,
+          blocked: false,
+          reason: "audience_needs_confirmation",
+          inferred_fit: null,
+        },
+        ambiguities: [],
+      },
+      meta: { raw_user_message: "quero agendar" },
+    } as any,
+  })
+
+  assertEquals(result.action_options, ["Sim, me encaixo", "Quero agendar"])
+  if (result.message.toLowerCase().includes("vocês se encaixam")) {
+    throw new Error("Expected singular audience prompt for self booking")
+  }
+})
 
 
 

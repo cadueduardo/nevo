@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import type {
   BusinessBrain,
   SemanticCompletedBookingDraft,
@@ -42,8 +42,40 @@ export function buildOutOfScopeServiceRedirectMessage(businessName?: string): st
   return `Entendi. Esse pedido não faz parte do que oferecemos em ${businessName || "a empresa"}. Posso te mostrar os serviços com que trabalhamos por aqui.`
 }
 
-export function buildAudienceConfirmationMessage(brain: BusinessBrain): string {
-  return `Só para confirmar: aqui atendemos ${formatAudienceLabel(brain.audience?.modes)}. Vocês se encaixam nesse perfil?`
+export function shouldUsePluralAudienceCopy(params?: {
+  additional_count?: number
+  attendee_names?: string[]
+  people_count?: number
+}): boolean {
+  const additionalCount = Number(params?.additional_count || 0)
+  const attendeeCount = Array.isArray(params?.attendee_names) ? params.attendee_names.filter(Boolean).length : 0
+  const peopleCount = Number(params?.people_count || 0)
+  return additionalCount > 0 || attendeeCount > 1 || peopleCount > 1
+}
+
+export function buildAudienceConfirmationMessage(
+  brain: BusinessBrain,
+  params?: { plural?: boolean }
+): string {
+  const pronoun = params?.plural ? "Vocês se encaixam" : "Você se encaixa"
+  return `Só para confirmar: aqui atendemos ${formatAudienceLabel(brain.audience?.modes)}. ${pronoun} nesse perfil?`
+}
+
+export function adjustAudiencePromptPerson(prompt: string, params?: { plural?: boolean }): string {
+  const text = String(prompt || "").trim()
+  if (!text) return text
+  if (params?.plural) {
+    return text
+      .replace(/\bVocê\b/g, "Vocês")
+      .replace(/\bVoce\b/g, "Vocês")
+      .replace(/\bvoce\b/g, "vocês")
+      .replace(/\bse encaixa\b/gi, "se encaixam")
+  }
+  return text
+    .replace(/\bVocês\b/g, "Você")
+    .replace(/\bVoces\b/g, "Você")
+    .replace(/\bvoces\b/g, "você")
+    .replace(/\bse encaixam\b/gi, "se encaixa")
 }
 
 export function buildAudienceRestrictionMessage(brain: BusinessBrain): string {
@@ -82,7 +114,7 @@ export function buildTimeQuestion(): string {
 }
 
 export function buildContactQuestion(): string {
-  return "Qual contato voc\u00ea prefere usar para confirmar o agendamento?"
+  return "Qual contato você prefere usar para confirmar o agendamento?"
 }
 
 export function buildSecondaryContactQuestion(params: { attendeeName?: string }): string {
@@ -93,8 +125,7 @@ export function buildSecondaryContactQuestion(params: { attendeeName?: string })
 
 export function buildWhatsAppPrimaryPhoneConfirmQuestion(phoneDigits?: string): string {
   const digits = String(phoneDigits || "").replace(/\D+/g, "")
-  const masked =
-    digits.length >= 4 ? `****${digits.slice(-4)}` : "este número"
+  const masked = digits.length >= 4 ? `****${digits.slice(-4)}` : "este número"
   return `Perfeito! Posso usar esse mesmo número (${masked}) como contato? Se sim, responda “sim”. Se quiser outro, me envie o telefone.`
 }
 
@@ -106,13 +137,18 @@ export function resolveSemanticPromptText(params: {
   next_question?: string
   fallback: string
   brain?: BusinessBrain
+  audiencePlural?: boolean
 }): string {
   const nextQuestion = String(params.next_question || "").trim()
   if (!nextQuestion) return params.fallback
 
   const promptMap: Record<string, string> = {
-    confirm_audience_fit: params.brain ? buildAudienceConfirmationMessage(params.brain) : params.fallback,
-    confirm_audience_fit_before_booking: params.brain ? buildAudienceConfirmationMessage(params.brain) : params.fallback,
+    confirm_audience_fit: params.brain
+      ? buildAudienceConfirmationMessage(params.brain, { plural: params.audiencePlural })
+      : params.fallback,
+    confirm_audience_fit_before_booking: params.brain
+      ? buildAudienceConfirmationMessage(params.brain, { plural: params.audiencePlural })
+      : params.fallback,
     ask_attendee_name: "Para quem será o agendamento?",
     ask_first_attendee_name: "Para quem será o agendamento?",
     ask_next_attendee_name: "Qual é o nome da próxima pessoa?",
@@ -128,7 +164,7 @@ export function resolveSemanticPromptText(params: {
 
   if (promptMap[nextQuestion]) return promptMap[nextQuestion]
   if (/^[a-z0-9_]+$/i.test(nextQuestion)) return params.fallback
-  return nextQuestion
+  return adjustAudiencePromptPerson(nextQuestion, { plural: params.audiencePlural })
 }
 
 export function buildBookingConfirmationMessage(
