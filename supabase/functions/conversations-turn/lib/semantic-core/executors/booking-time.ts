@@ -30,12 +30,17 @@ export function executeBookingTime(
     executor: "booking-time",
     decision,
     slot_updates: {
+      ...(decision.slot_updates || {}),
       ...(queueState.attendee_name ? { attendee_name: queueState.attendee_name } : {}),
-      ...(decision.slot_updates?.service ? { service: decision.slot_updates.service } : {}),
-      ...(decision.slot_updates?.date ? { date: decision.slot_updates.date } : {}),
       ...(hhmm ? { time: hhmm } : {}),
     },
     state_patch: {
+      ...(snapshot.signals.contact_preference || decision.slot_updates?.customer_phone || decision.slot_updates?.customer_email
+        ? {
+            pending_contact_field: undefined,
+            contact_preference: snapshot.signals.contact_preference || context.state.contact_preference,
+          }
+        : {}),
       last_time_options: timeOptions,
       last_time_options_date: date,
       last_time_options_staff: staffName,

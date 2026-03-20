@@ -1,11 +1,24 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import dynamic from 'next/dynamic'
 import { ChatMessage } from './ChatMessage'
 import type { Message } from './ChatShell'
-import { SignupCard } from '@/components/onboarding/SignupCard'
-import { LoginCard } from '@/components/onboarding/LoginCard'
-import { AddressForm } from '@/components/onboarding/AddressForm'
+
+const SignupCard = dynamic(
+  () => import('@/components/onboarding/SignupCard').then((mod) => mod.SignupCard),
+  { ssr: false }
+)
+
+const LoginCard = dynamic(
+  () => import('@/components/onboarding/LoginCard').then((mod) => mod.LoginCard),
+  { ssr: false }
+)
+
+const AddressForm = dynamic(
+  () => import('@/components/onboarding/AddressForm').then((mod) => mod.AddressForm),
+  { ssr: false }
+)
 
 interface ChatThreadProps {
   messages: Message[]
@@ -105,6 +118,7 @@ export function ChatThread({
               actionOptions={message.actionOptions}
               editableItems={message.editableItems}
               selectableOptions={message.selectableOptions}
+              narrativeSegments={message.narrativeSegments}
               requiresAction={message.requiresAction}
               allowCustomInput={message.allowCustomInput}
               customInputPlaceholder={message.customInputPlaceholder}

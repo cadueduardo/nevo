@@ -2,12 +2,54 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { resolveActorByPhone } from '@/lib/actor'
 import { buildSimulatorContextFromBusinessConfig } from '@/lib/simulator/context'
+import {
+  buildEvolutionBaseCandidates,
+  isValidEvolutionWebhookToken,
+  resolveEvolutionApiKey,
+  sanitizeEvolutionBaseUrl,
+} from '@/lib/whatsapp/evolution'
+import { maskPhone, maskUrl, previewText, summarizeError } from '@/lib/security/log-sanitizer'
+
+const WEBHOOK_UPSTREAM_TIMEOUT_MS = 15000
+const MAX_OUTBOUND_NOTIFICATIONS = 3
 
 function computeTypingDelay(replyTexts: string[]): number {
   const joined = replyTexts.join('\n\n').trim()
   const chars = joined.length
   const estimated = Math.round(chars * 22)
   return Math.max(2200, Math.min(4200, estimated))
+}
+
+function isTypingSimulationEnabled(): boolean {
+  return process.env.EVOLUTION_ENABLE_TYPING_SIMULATION === 'true'
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs = WEBHOOK_UPSTREAM_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+function toLoggedWhatsappFrom(from: string): string {
+  return from.startsWith('whatsapp:') ? from : `whatsapp:${from}`
+}
+
+function normalizeEvolutionNumber(phone: string): string {
+  return phone
+    .replace(/^whatsapp:/, '')
+    .replace(/@s\.whatsapp\.net$/, '')
+    .replace(/\D+/g, '')
 }
 
 /**
@@ -42,7 +84,7 @@ export async function POST(
     return new NextResponse('Body JSON inválido', { status: 400 })
   }
 
-  const { from, text, pushName } = extractMessageFromEvolutionPayload(body)
+  const { from, text, pushName, messageId } = extractMessageFromEvolutionPayload(body)
   if (!from || !text || !text.trim()) {
     return new NextResponse(null, { status: 200 })
   }
@@ -60,10 +102,34 @@ export async function POST(
     return new NextResponse('Agente não encontrado', { status: 404 })
   }
 
+  if (messageId) {
+    const { error: receiptError } = await supabaseAdmin.from('whatsapp_webhook_receipt').insert({
+      tenant_id: agent.tenant_id,
+      agent_id: agentId,
+      provider: 'evolution',
+      external_message_id: messageId,
+      payload_preview: previewText(text, 120),
+    })
+    if (receiptError) {
+      const duplicateReceipt =
+        receiptError.code === '23505' ||
+        /duplicate key|unique constraint/i.test(receiptError.message || '')
+      if (duplicateReceipt) {
+        console.warn('[webhooks/evolution] duplicate inbound event ignored:', {
+          agentId,
+          messageId,
+          from: maskPhone(toLoggedWhatsappFrom(from)),
+        })
+        return new NextResponse(null, { status: 200 })
+      }
+      console.error('[webhooks/evolution] erro ao registrar receipt:', receiptError.message)
+      return new NextResponse('Erro ao registrar webhook', { status: 503 })
+    }
+  }
   const { data: channelRow, error: channelError } = await supabaseAdmin
     .from('agent_channel_whatsapp')
     .select(
-      'evolution_base_url, evolution_instance, evolution_api_key_encrypted'
+      'evolution_base_url, evolution_instance, evolution_api_key_encrypted, webhook_secret'
     )
     .eq('agent_id', agentId)
     .eq('provider', 'evolution')
@@ -73,10 +139,17 @@ export async function POST(
     channelError ||
     !channelRow?.evolution_base_url ||
     !channelRow?.evolution_instance ||
-    !channelRow?.evolution_api_key_encrypted
+    (!channelRow?.evolution_api_key_encrypted &&
+      !process.env.EVOLUTION_AUTO_API_KEY?.trim() &&
+      !process.env.EVOLUTION_API_KEY?.trim())
   ) {
     console.error('[webhooks/evolution] Canal Evolution não configurado para o agente:', agentId)
     return new NextResponse('Canal WhatsApp (Evolution) não configurado', { status: 500 })
+  }
+
+  const receivedToken = req.nextUrl.searchParams.get('token')
+  if (!isValidEvolutionWebhookToken(channelRow.webhook_secret as string | null, receivedToken)) {
+    return new NextResponse('Webhook token inválido', { status: 401 })
   }
 
   const { data: setting, error: settingError } = await supabaseAdmin
@@ -126,39 +199,59 @@ export async function POST(
     ...(actor_type != null && { actor_type }),
   }
 
-  const baseUrl = (channelRow.evolution_base_url as string).replace(/\/$/, '')
+  const baseUrl = sanitizeEvolutionBaseUrl(channelRow.evolution_base_url as string).value
   const instance = channelRow.evolution_instance as string
-  const apiKey = channelRow.evolution_api_key_encrypted as string
+  const apiKey = resolveEvolutionApiKey({
+    storedValue: channelRow.evolution_api_key_encrypted as string,
+    envValue:
+      process.env.EVOLUTION_AUTO_API_KEY?.trim() ||
+      process.env.EVOLUTION_API_KEY?.trim() ||
+      null,
+  })
+  if (!baseUrl || !apiKey) {
+    return new NextResponse('Configuração Evolution inválida', { status: 400 })
+  }
   const numberForEvolution = from.replace(/^whatsapp:/, '').replace(/@s\.whatsapp\.net$/, '')
-  const baseCandidates = baseUrl.endsWith('/api')
-    ? [baseUrl, baseUrl.replace(/\/api$/, '')]
-    : [baseUrl, `${baseUrl}/api`]
+  const baseCandidates = buildEvolutionBaseCandidates(baseUrl)
 
   // Indicador de digitação (3 pontinhos) enquanto processa
   // Evolution API: POST /chat/sendPresence/{instance} | doc: https://doc.evolution-api.com/v2/api-reference/chat-controller/send-presence
   const presenceNumber = numberForEvolution
   const typingStartedAt = Date.now()
-  const initialPresenceDelay = 4200
-  for (const presenceUrl of baseCandidates.map((b) => `${b}/chat/sendPresence/${instance}`)) {
-    try {
-      const presenceRes = await fetch(presenceUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: apiKey,
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          number: presenceNumber,
-          presence: 'composing',
-          delay: initialPresenceDelay,
-        }),
-      })
-      if (presenceRes.ok) break
-      const errText = await presenceRes.text()
-      console.warn('[webhooks/evolution] sendPresence falhou:', presenceRes.status, presenceUrl, errText)
-    } catch (e) {
-      console.warn('[webhooks/evolution] sendPresence erro:', presenceUrl, e)
+  if (isTypingSimulationEnabled()) {
+    const initialPresenceDelay = 4200
+    for (const presenceUrl of baseCandidates.map((b) => `${b}/chat/sendPresence/${instance}`)) {
+      try {
+        const presenceRes = await fetchWithTimeout(
+          presenceUrl,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: apiKey,
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              number: presenceNumber,
+              presence: 'composing',
+              delay: initialPresenceDelay,
+            }),
+          },
+          6000
+        )
+        if (presenceRes.ok) break
+        const errText = await presenceRes.text()
+        console.warn('[webhooks/evolution] sendPresence falhou:', {
+          status: presenceRes.status,
+          url: maskUrl(presenceUrl),
+          response: previewText(errText, 120),
+        })
+      } catch (e) {
+        console.warn('[webhooks/evolution] sendPresence erro:', {
+          url: maskUrl(presenceUrl),
+          error: summarizeError(e),
+        })
+      }
     }
   }
 
@@ -167,11 +260,11 @@ export async function POST(
   try {
     console.log('[webhooks/evolution] chamando conversations-turn:', {
       agentId,
-      from: fromNormalized,
-      session_id: fromNormalized,
-      functionsUrl,
+      from: maskPhone(fromNormalized),
+      session_id: maskPhone(fromNormalized),
+      functionsUrl: maskUrl(functionsUrl),
     })
-    turnResponse = await fetch(functionsUrl, {
+    turnResponse = await fetchWithTimeout(functionsUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -181,7 +274,7 @@ export async function POST(
       body: JSON.stringify(turnPayload),
     })
   } catch (e) {
-    console.error('[webhooks/evolution] Erro ao chamar conversations-turn:', e)
+    console.error('[webhooks/evolution] Erro ao chamar conversations-turn:', summarizeError(e))
     return new NextResponse('Erro ao processar mensagem', { status: 503 })
   }
 
@@ -233,13 +326,19 @@ export async function POST(
       console.warn('[webhooks/evolution] conversations-turn OK, mas JSON de resposta nao pode ser interpretado')
     }
   } else {
-    console.error('[webhooks/evolution] conversations-turn não OK:', turnResponse.status, await turnResponse.text())
+    const errorText = await turnResponse.text()
+    console.error('[webhooks/evolution] conversations-turn non-ok:', {
+      status: turnResponse.status,
+      response: previewText(errorText, 160),
+    })
   }
 
-  const desiredTypingDelay = computeTypingDelay(replyTexts)
-  const elapsedSinceTyping = Date.now() - typingStartedAt
-  if (elapsedSinceTyping < desiredTypingDelay) {
-    await new Promise((resolve) => setTimeout(resolve, desiredTypingDelay - elapsedSinceTyping))
+  if (isTypingSimulationEnabled()) {
+    const desiredTypingDelay = computeTypingDelay(replyTexts)
+    const elapsedSinceTyping = Date.now() - typingStartedAt
+    if (elapsedSinceTyping < desiredTypingDelay) {
+      await new Promise((resolve) => setTimeout(resolve, desiredTypingDelay - elapsedSinceTyping))
+    }
   }
 
   const evolutionSendUrls = baseCandidates.map((b) => `${b}/message/sendText/${instance}`)
@@ -248,22 +347,26 @@ export async function POST(
     let sendError = ''
     for (const evolutionSendUrl of evolutionSendUrls) {
       try {
-        const evoRes = await fetch(evolutionSendUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: apiKey,
-            Authorization: `Bearer ${apiKey}`,
+        const evoRes = await fetchWithTimeout(
+          evolutionSendUrl,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: apiKey,
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              number: numberForEvolution,
+              text: replyText,
+            }),
           },
-          body: JSON.stringify({
-            number: numberForEvolution,
-            text: replyText,
-          }),
-        })
+          10000
+        )
         if (evoRes.ok) {
           console.log('[webhooks/evolution] sendText OK:', {
-            evolutionSendUrl,
-            number: numberForEvolution,
+            evolutionSendUrl: maskUrl(evolutionSendUrl),
+            number: maskPhone(numberForEvolution),
             chars: replyText.length,
           })
           sent = true
@@ -276,58 +379,50 @@ export async function POST(
       }
     }
     if (!sent) {
-      console.error('[webhooks/evolution] Erro ao enviar via Evolution:', sendError)
+      console.error('[webhooks/evolution] Erro ao enviar via Evolution:', previewText(sendError, 160))
       return new NextResponse('Erro ao enviar resposta', { status: 502 })
     }
   }
 
-  const normalizeEvolutionNumber = (phone: string): string =>
-    phone
-      .replace(/^whatsapp:/, '')
-      .replace(/@s\.whatsapp\.net$/, '')
-      .replace(/\D+/g, '')
   const sentKeys = new Set<string>()
+  const queuedNotifications: Array<{ phone: string; content: string }> = []
+  let outboundSentCount = 0
   for (const notification of outboundNotifications) {
+    if (outboundSentCount >= MAX_OUTBOUND_NOTIFICATIONS) {
+      console.warn('[webhooks/evolution] outbound notifications limit reached', {
+        agentId,
+        limit: MAX_OUTBOUND_NOTIFICATIONS,
+      })
+      break
+    }
     const targetNumber = normalizeEvolutionNumber(notification.phone)
     const content = notification.content.trim()
     if (!targetNumber || !content) continue
+    if (targetNumber === normalizeEvolutionNumber(numberForEvolution)) continue
     const dedupeKey = `${targetNumber}::${content}`
     if (sentKeys.has(dedupeKey)) continue
     sentKeys.add(dedupeKey)
+    queuedNotifications.push({ phone: targetNumber, content })
+    outboundSentCount += 1
+  }
 
-    let sent = false
-    let sendError = ''
-    for (const evolutionSendUrl of evolutionSendUrls) {
-      try {
-        const evoRes = await fetch(evolutionSendUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: apiKey,
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            number: targetNumber,
-            text: content,
-          }),
-        })
-        if (evoRes.ok) {
-          console.log('[webhooks/evolution] outbound sendText OK:', {
-            evolutionSendUrl,
-            number: targetNumber,
-            chars: content.length,
-          })
-          sent = true
-          break
-        }
-        const errText = await evoRes.text()
-        sendError = `${evoRes.status} ${evolutionSendUrl} ${errText}`
-      } catch (e) {
-        sendError = `${evolutionSendUrl} ${e instanceof Error ? e.message : String(e)}`
-      }
-    }
-    if (!sent) {
-      console.error('[webhooks/evolution] Erro ao enviar notificacao outbound:', sendError)
+  if (queuedNotifications.length > 0) {
+    const { error: outboxError } = await supabaseAdmin.from('whatsapp_outbox').insert(
+      queuedNotifications.map((notification) => ({
+        tenant_id: agent.tenant_id,
+        agent_id: agentId,
+        provider: 'evolution',
+        target_phone: notification.phone,
+        content: notification.content,
+      }))
+    )
+    if (outboxError) {
+      console.error('[webhooks/evolution] erro ao enfileirar outbound:', outboxError.message)
+    } else {
+      console.log('[webhooks/evolution] outbound notifications queued:', {
+        agentId,
+        count: queuedNotifications.length,
+      })
     }
   }
 
@@ -342,8 +437,9 @@ function extractMessageFromEvolutionPayload(body: unknown): {
   from: string | null
   text: string | null
   pushName: string | null
+  messageId: string | null
 } {
-  if (!body || typeof body !== 'object') return { from: null, text: null, pushName: null }
+  if (!body || typeof body !== 'object') return { from: null, text: null, pushName: null, messageId: null }
 
   const obj = body as Record<string, unknown>
   const data = obj.data as Record<string, unknown> | undefined
@@ -361,21 +457,22 @@ function extractMessageFromEvolutionPayload(body: unknown): {
         from: extractRemoteJid(key),
         text: extractText(msg),
         pushName: extractPushName(obj),
+        messageId: extractMessageId(key),
       }
     }
-    return { from: null, text: null, pushName: null }
+    return { from: null, text: null, pushName: null, messageId: null }
   }
 
   const key = data.key as Record<string, unknown> | undefined
   const fromMe = key?.fromMe
-  if (fromMe === true) return { from: null, text: null, pushName: null }
+  if (fromMe === true) return { from: null, text: null, pushName: null, messageId: null }
 
   const message = data.message as Record<string, unknown> | undefined
   const messages = data.messages as Array<Record<string, unknown>> | undefined
   const firstMsg = Array.isArray(messages) && messages.length > 0
     ? messages[0]
     : message
-  if (!firstMsg && !message) return { from: null, text: null, pushName: null }
+  if (!firstMsg && !message) return { from: null, text: null, pushName: null, messageId: null }
   const firstKey = (firstMsg as Record<string, unknown>)?.key as Record<string, unknown> | undefined
   const keyToUse = firstKey ?? key
   const msgToUse = (firstMsg as Record<string, unknown>)?.message ?? firstMsg ?? message
@@ -384,12 +481,20 @@ function extractMessageFromEvolutionPayload(body: unknown): {
     from: extractRemoteJid(keyToUse ?? data),
     text: extractText((msgToUse as Record<string, unknown>) ?? message),
     pushName: extractPushName(data) ?? extractPushName(obj),
+    messageId: extractMessageId(keyToUse ?? data),
   }
+}
+
+function extractMessageId(key: Record<string, unknown>): string | null {
+  const id = key.id
+  return typeof id === 'string' && id.trim() ? id.trim() : null
 }
 
 function extractRemoteJid(key: Record<string, unknown>): string | null {
   const remoteJid = key.remoteJid
   if (typeof remoteJid !== 'string') return null
+  if (remoteJid === 'status@broadcast' || remoteJid.endsWith('@broadcast')) return null
+  if (remoteJid.endsWith('@g.us')) return null
   const num = remoteJid.replace(/@s\.whatsapp\.net$/, '').replace(/@g\.us$/, '')
   if (!num) return null
   return num.includes('@') ? remoteJid : `whatsapp:${num}`
@@ -401,3 +506,6 @@ function extractText(msg: Record<string, unknown>): string | null {
   if (extended && typeof extended.text === 'string') return extended.text
   return null
 }
+
+
+

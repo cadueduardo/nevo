@@ -7,13 +7,21 @@ import {
   getTodayIsoBusinessTz,
   getMockAvailability,
   isWithinSchedule,
+  isTimeTooSoonForDate,
+  MIN_BOOKING_LEAD_MINUTES,
+  getNextAvailableSlotAfter,
 } from "../utils.ts"
 import { getServicesTotalDuration, findServicesFromText } from "../services.ts"
+import { resolveConfiguredServicesFromConfig, resolveSequenceEligibleServicesFromConfig } from "../canonical-services.ts"
 import { generateAvailabilityResponseWithAI } from "../ai.ts"
 import type { BookingContext } from "./context.ts"
 
 export async function handleAiSlots(ctx: BookingContext): Promise<SimulatorResult | null> {
   const { config, nextState, text, toNumberedOptions } = ctx
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const eligibleForSequence = resolveSequenceEligibleServicesFromConfig(config)
+  const sequencePool =
+    eligibleForSequence.length > 0 ? eligibleForSequence : configuredServices.map((s) => s.name).filter(Boolean)
   const si = ctx.slotsInterpretation
   if (!si) return null
 
@@ -35,21 +43,13 @@ export async function handleAiSlots(ctx: BookingContext): Promise<SimulatorResul
       // serviço único prematuramente (ex.: "corte de cabelo") antes do parser
       // de múltiplos ("corte de cabelo e barba") no handler de service.
       if (config.allow_sequence_booking) {
-        const eligibleForSequence =
-          (config.sequence_eligible_services?.length ?? 0) > 0
-            ? config.sequence_eligible_services || []
-            : (config.services || []).map((s) => s.name).filter(Boolean)
-        const multipleFromText = findServicesFromText(text, config.services || [], eligibleForSequence)
+        const multipleFromText = findServicesFromText(text, configuredServices, sequencePool)
         if (multipleFromText.length >= 2) {
           nextState.slots.service = multipleFromText.join(", ")
         }
       }
     } else if (config.allow_sequence_booking) {
-      const eligibleForSequence =
-        (config.sequence_eligible_services?.length ?? 0) > 0
-          ? config.sequence_eligible_services || []
-          : (config.services || []).map((s) => s.name).filter(Boolean)
-      const multipleFromText = findServicesFromText(text, config.services || [], eligibleForSequence)
+      const multipleFromText = findServicesFromText(text, configuredServices, sequencePool)
       if (multipleFromText.length >= 2) {
         nextState.slots.service = multipleFromText.join(", ")
       } else if (si.service) {
@@ -136,8 +136,23 @@ export async function handleAiSlots(ctx: BookingContext): Promise<SimulatorResul
       : `${String(parseInt(si.time, 10)).padStart(2, "0")}:00`
     const isAvailable = availability.available.includes(requestedTime)
     const within = !isAvailable ? isWithinSchedule(requestedTime, schedule) : null
-    const unavailableReason = within && !within.ok ? within.reason : undefined
+    const occupied = availability.occupied.includes(requestedTime)
+    const minLead = schedule?.min_booking_lead_minutes ?? MIN_BOOKING_LEAD_MINUTES
+    const tooSoon = dateIso === getTodayIsoBusinessTz() && isTimeTooSoonForDate(dateIso, requestedTime, minLead)
+    const unavailableReason =
+      (within && !within.ok ? within.reason : undefined) ||
+      (tooSoon
+        ? `Este horário exige antecedência mínima de ${minLead} minutos.`
+        : occupied
+          ? `Esse horário já está ocupado.`
+          : !isAvailable
+            ? `Esse horário não está disponível.`
+            : undefined)
 
+    const suggestedNext =
+      !isAvailable && occupied && availability.available.length > 0
+        ? getNextAvailableSlotAfter(availability.available, requestedTime)
+        : undefined
     const fluidResponse = await generateAvailabilityResponseWithAI(config, {
       attendee_name: nextState.slots.attendee_name,
       requested_time: requestedTime,
@@ -146,6 +161,7 @@ export async function handleAiSlots(ctx: BookingContext): Promise<SimulatorResul
       available_slots: availability.available.slice(0, 12),
       service: nextState.slots.service,
       unavailable_reason: unavailableReason,
+      suggested_next_slot: suggestedNext,
     }, ctx.history)
 
     if (isAvailable) {

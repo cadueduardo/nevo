@@ -9,15 +9,90 @@ import { buildCompletedBookingDraft, buildPostConfirmationPlan } from "../bookin
 import { addBookedSlot, resetSlotsForNextBooking } from "../../state.ts"
 import { getScheduleForStaff } from "../../staff.ts"
 import { buildExecutorResult } from "./shared.ts"
+import { isNo, isYes } from "../../detection.ts"
 
 export function executeBookingFinalization(
   decision: SemanticDecisionResult,
   snapshot: TurnSemanticSnapshot,
   context: SemanticTurnContext
 ): SemanticExecutorResult {
+  const waitingFinalConfirmation = context.state.pending_final_confirmation === true
+  const rawMsg = snapshot.meta.raw_user_message || ""
+  const explicitConfirmation = isYes(rawMsg) || /\bconfirm(ar|o|ado)?\b/i.test(rawMsg)
+  const autoFinalizeFromContactReply = Boolean(
+    !waitingFinalConfirmation &&
+      context.state.pending_contact_field === "contact_preference" &&
+      (snapshot.signals.contact_preference ||
+        snapshot.signals.contact_phone ||
+        snapshot.signals.contact_email ||
+        context.state.contact_preference ||
+        context.state.slots?.customer_phone ||
+        context.state.slots?.customer_email)
+  )
+
+  // Etapa 1: quando chegamos no "confirm_booking", primeiro perguntamos se o cliente realmente
+  // quer confirmar. Só na próxima resposta "sim" é que o agendamento é finalizado.
+  if (!waitingFinalConfirmation && !explicitConfirmation && !autoFinalizeFromContactReply) {
+    return buildExecutorResult({
+      executor: "booking-finalization",
+      decision,
+      state_patch: {
+        pending_final_confirmation: true,
+        // Ainda não faz sentido oferecer calendário antes do agendamento ser confirmado.
+        pending_calendar_offer: false,
+        last_confirm_options: ["Confirmar agendamento"],
+      },
+      // A UI do simulador usa ação-option para o usuário responder facilmente.
+      action_options: ["Confirmar agendamento"],
+      metadata: {},
+    })
+  }
+
+  // Etapa 2: aguardando confirmação do cliente.
+  // Se o cliente negar, desfaz a pendência e volta a permitir escolher outro horário/continuidade.
+  if (isNo(rawMsg)) {
+    return buildExecutorResult({
+      executor: "booking-finalization",
+      decision,
+      state_patch: {
+        pending_final_confirmation: false,
+        pending_calendar_offer: false,
+      },
+      action_options: ["Quero agendar"],
+      metadata: {},
+    })
+  }
+
+  // Se o cliente não confirmou claramente, manter o estado pedindo a confirmação.
+  if (!explicitConfirmation && !autoFinalizeFromContactReply) {
+    return buildExecutorResult({
+      executor: "booking-finalization",
+      decision,
+      state_patch: {
+        pending_final_confirmation: true,
+      },
+      action_options: ["Confirmar agendamento"],
+      metadata: {},
+    })
+  }
+
   const completedBooking = buildCompletedBookingDraft(snapshot, decision, context)
   const postConfirmationPlan = buildPostConfirmationPlan(context, snapshot, completedBooking)
   const completedBookings = [...(context.state.completed_bookings || []), completedBooking]
+  const primaryPhone = String((completedBookings[0] as any)?.customer_phone || "").replace(/\D+/g, "")
+  const completedPhone = String((completedBooking as any)?.customer_phone || "").replace(/\D+/g, "")
+  const needsSecondaryContact =
+    !postConfirmationPlan.has_more_people &&
+    completedBookings.length >= 2 &&
+    // só faz sentido se o agendamento atual não tem telefone próprio e é para outra pessoa
+    !completedPhone &&
+    String(completedBooking?.attendee_name || "").trim() &&
+    String((completedBookings[0] as any)?.attendee_name || "").trim() &&
+    String(completedBooking.attendee_name).trim().toLowerCase() !== String((completedBookings[0] as any)?.attendee_name).trim().toLowerCase() &&
+    // se já houve notificação planejada, não pedir de novo
+    (postConfirmationPlan.outbound_notifications || []).length === 0 &&
+    // se o telefone do titular não existe, primeiro precisa coletar o contato principal
+    Boolean(primaryPhone)
   const schedule = getScheduleForStaff(context.business_brain.raw_config, completedBooking.staff_name)
   const intervalMinutes = schedule?.interval_minutes ?? 30
   const bookedSlots = addBookedSlot(
@@ -68,8 +143,8 @@ export function executeBookingFinalization(
         postConfirmationPlan.has_more_people && postConfirmationPlan.next_attendee_name
       ),
       pending_second_service_choice: false,
-      pending_final_confirmation: !postConfirmationPlan.has_more_people,
-      pending_calendar_offer: Boolean(postConfirmationPlan.should_offer_calendar),
+      pending_final_confirmation: false,
+      pending_calendar_offer: needsSecondaryContact ? false : Boolean(postConfirmationPlan.should_offer_calendar),
       last_confirm_options: postConfirmationPlan.has_more_people
         ? postConfirmationPlan.next_action_options
         : ["Confirmar agendamento"],
@@ -77,8 +152,16 @@ export function executeBookingFinalization(
         ? postConfirmationPlan.next_action_options
         : undefined,
       service_selection_multi: false,
-      contact_preference: undefined,
+      contact_preference: postConfirmationPlan.has_more_people ? context.state.contact_preference : undefined,
       outbound_notifications: postConfirmationPlan.outbound_notifications,
+      pending_secondary_contact: needsSecondaryContact
+        ? {
+            attendee_name: completedBooking.attendee_name,
+            service: completedBooking.service,
+            date: completedBooking.date,
+            time: completedBooking.time,
+          }
+        : undefined,
       slots: nextSlots,
     },
     metadata: {

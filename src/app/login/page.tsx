@@ -1,6 +1,11 @@
+import dynamic from 'next/dynamic'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { LoginForm } from './LoginForm'
+
+const LoginForm = dynamic(() => import('./LoginForm').then((mod) => mod.LoginForm), {
+  ssr: false,
+  loading: () => <div className="min-h-[260px] rounded-lg border bg-card" />,
+})
 
 /**
  * Página de login. Se o usuário já estiver autenticado, redireciona para /app.

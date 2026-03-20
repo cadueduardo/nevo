@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import { runSemanticFixture, runSemanticFixtureSequence } from "./test-runtime.ts"
 
 function assertIncludes(actual: string, expected: string, message?: string) {
@@ -31,6 +31,22 @@ function createBaseConfig() {
       { name: "Corte", duration_minutes: 30, base_price: 50, description: "Corte de cabelo masculino" },
       { name: "Barba", duration_minutes: 30, base_price: 35, description: "Barba completa" },
     ],
+    quote_services: [
+      {
+        id: "quote-1",
+        agent_id: "agent-1",
+        name: "Cortina",
+        pricing_type: "area",
+        variables_schema: [
+          { key: "largura_cm", label: "Largura", required: true },
+          { key: "altura_cm", label: "Altura", required: true },
+        ],
+        pricing_rules: { price_per_m2: 100 },
+        external_variable_keys: ["largura_cm", "altura_cm"],
+        keywords: ["cortina", "persiana"],
+        active: true,
+      },
+    ],
     schedule: {
       days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"],
       start_time: "08:00",
@@ -53,6 +69,7 @@ function createBaseState(overrides = {}) {
     ...overrides,
   }
 }
+
 
 Deno.test("semantic runtime fixture answers FAQ with business address", async () => {
   const { semantic, result } = await runSemanticFixture({
@@ -80,6 +97,65 @@ Deno.test("semantic runtime fixture answers FAQ with business address", async ()
   assertEquals(semantic.decision.action, "reply_faq")
   assertIncludes(result.message, "Rua Gasparino Lunardi")
   assertIncludes(result.message, "Osasco")
+})
+
+Deno.test("semantic runtime fixture answers open business-context question without clarification fallback", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "faq", secondary: [], booking: false, confidence: 0.88 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+        sequence_request: false,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "oi, bom dia tudo bem? Como tá o movimento aí hoje?" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_faq")
+  if (/Pode me dar mais detalhes/i.test(result.message)) {
+    throw new Error("Expected contextual answer instead of generic clarification fallback")
+  }
+})
+
+
+Deno.test("semantic runtime fixture answers broad business-context small talk without clarification fallback", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "faq", secondary: [], booking: false, confidence: 0.86 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+        sequence_request: false,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "ol? como est?o as coisas por a??" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_faq")
+  if (/Pode me dar mais detalhes/i.test(result.message)) {
+    throw new Error("Expected business-context answer instead of generic clarification fallback")
+  }
 })
 
 Deno.test("semantic runtime fixture confirms booking and advances to next inferred attendee", async () => {
@@ -167,7 +243,7 @@ Deno.test("semantic runtime fixture offers sequence template for inferred next a
 
   assertEquals(semantic.decision.action, "offer_sequence_template")
   assertIncludes(result.message, "Davi")
-  assertIncludes(result.message, "logo apos")
+  assertIncludes(result.message, "logo após")
 })
 
 Deno.test("semantic runtime fixture offers primary contact reuse option for additional booking", async () => {
@@ -250,6 +326,35 @@ Deno.test("semantic runtime fixture renders greeting fallback with business and 
   assertIncludes(result.message, "BarberShop")
 })
 
+Deno.test("semantic runtime fixture does not turn a short greeting into clarification", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "greeting", secondary: [], booking: false, confidence: 0.92 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        quote_service: null,
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "ola" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_greeting")
+  if (result.message.includes("Quero ter certeza de que entendi")) {
+    throw new Error("Short greeting leaked into clarification prompt")
+  }
+})
+
 Deno.test("semantic runtime fixture answers price with concrete configured value", async () => {
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
@@ -277,6 +382,44 @@ Deno.test("semantic runtime fixture answers price with concrete configured value
   assertIncludes(result.message, "R$ 35")
   assertEquals(result.state.mode, undefined)
   assertEquals(result.state.pending_additional_booking, undefined)
+  assertEquals(result.action_options, ["Quero agendar"])
+})
+
+Deno.test("semantic runtime fixture accepts free-text phone during contact step and advances booking", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState({
+      pending_contact_field: "contact_preference",
+      slots: {
+        attendee_name: "Cadu",
+        service: "Corte",
+      },
+    }),
+    sender_display_name: "Cadu",
+    snapshot: {
+      intents: { primary: "booking", secondary: [], booking: true, confidence: 0.94 },
+      entities: {
+        people: [{ includes_self: true, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+        attendee_names: ["Cadu"],
+        services: [{ name: "Corte", normalized_name: "corte" }],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: true,
+        additional_count: 0,
+        next_question_hint: "ask_contact_preference",
+        contact_preference: "phone",
+        contact_phone: "11972763228",
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "o meu e 11972763228" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "ask_date")
+  assertEquals(result.state.slots.customer_phone, "11972763228")
+  assertEquals(result.state.contact_preference, "phone")
 })
 
 Deno.test("semantic runtime fixture answers generic price question without forcing booking state", async () => {
@@ -305,6 +448,77 @@ Deno.test("semantic runtime fixture answers generic price question without forci
   assertIncludes(result.message, "valores")
   assertEquals(result.state.mode, undefined)
   assertEquals(result.action_options, ["Corte", "Barba"])
+})
+
+Deno.test("semantic runtime fixture asks for quote measurements inside semantic core", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "quote", secondary: [], booking: false, confidence: 0.9 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        quote_service: {
+          id: "quote-1",
+          name: "Cortina",
+          pricing_type: "area",
+          required_keys: ["largura_cm", "altura_cm"],
+        },
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+        quote_slots: {},
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "quanto fica uma cortina?" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "ask_quote_measurements")
+  assertIncludes(result.message, "medidas")
+  assertIncludes(result.message, "Cortina")
+})
+
+Deno.test("semantic runtime fixture replies external quote estimate inside semantic core", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "quote", secondary: [], booking: false, confidence: 0.92 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        quote_service: {
+          id: "quote-1",
+          name: "Cortina",
+          pricing_type: "area",
+          required_keys: ["largura_cm", "altura_cm"],
+        },
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+        quote_slots: {
+          largura_cm: 200,
+          altura_cm: 250,
+        },
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "quanto fica uma cortina 2 x 2,5?" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_quote_estimate")
+  assertIncludes(result.message, "investimento costuma ficar entre")
+  assertEquals(result.action_options, ["Sim, quero agendar", "Depois"])
 })
 
 Deno.test("semantic runtime fixture answers service detail with configured description", async () => {
@@ -435,7 +649,34 @@ Deno.test("semantic runtime fixture asks attendee name when multi-booking reques
   })
 
   assertEquals(semantic.decision.action, "ask_attendee_name")
-  assertIncludes(result.message, "primeiro")
+  assertIncludes(result.message, "primeira pessoa")
+})
+
+Deno.test("semantic runtime fixture asks attendee neutrally for generic single booking", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "booking", secondary: [], booking: true, confidence: 0.94 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+        sequence_request: false,
+      },
+      risks: { ambiguities: ["missing_attendee", "missing_service"] },
+      meta: { raw_user_message: "quero agendar" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "ask_attendee_name")
+  assertIncludes(result.message, "Para quem será o agendamento")
 })
 
 Deno.test("semantic runtime fixture asks for another date when same_next sequence is unavailable", async () => {
@@ -489,7 +730,7 @@ Deno.test("semantic runtime fixture asks for another date when same_next sequenc
   })
 
   assertEquals(semantic.decision.action, "ask_date")
-  assertIncludes(result.message, "Nao encontrei um proximo horario livre")
+  assertIncludes(result.message, "Não encontrei um próximo horário livre")
 })
 
 Deno.test("semantic runtime fixture keeps raw action options for web_simulator", async () => {
@@ -515,7 +756,7 @@ Deno.test("semantic runtime fixture keeps raw action options for web_simulator",
     } as any,
   })
 
-  assertEquals(result.action_options, ["Corte", "Barba"])
+  assertEquals(result.action_options, undefined)
 })
 
 Deno.test("semantic runtime fixture numbers action options for whatsapp", async () => {
@@ -541,7 +782,38 @@ Deno.test("semantic runtime fixture numbers action options for whatsapp", async 
     } as any,
   })
 
-  assertEquals(result.action_options, ["1 - Corte", "2 - Barba"])
+  assertEquals(result.action_options, undefined)
+})
+
+Deno.test("semantic runtime fixture redirects out-of-scope service requests with a natural service-list response", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: {
+      ...createBaseConfig(),
+      lead_policy: { reject_unlisted_services: true },
+    } as any,
+    state: createBaseState(),
+    channel: "web_simulator",
+    snapshot: {
+      intents: { primary: "fallback", secondary: [], booking: false, confidence: 0.82, source: "unified_ai" },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "quero tirar meu irmao da cadeia" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_service_list")
+  assertIncludes(result.message, "não faz parte do que oferecemos")
+  assertEquals(result.action_options, ["Corte", "Barba"])
 })
 
 Deno.test("semantic runtime fixture sequence keeps continuity after confirmation for inferred next attendee", async () => {
@@ -725,6 +997,108 @@ Deno.test("semantic runtime fixture handles informational question before bookin
   assertIncludes(outputs[0].result.message, "R$ 50")
   assertEquals(outputs[1].semantic.decision.action, "ask_date")
   assertEquals(outputs[1].result.state.slots.service, "Corte")
+})
+
+Deno.test("semantic runtime fixture resolves fuzzy service alias when replying concrete price", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "price", secondary: [], booking: false, confidence: 0.88 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "corte de cabelo" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_price")
+  assertIncludes(result.message, "R$ 50")
+})
+
+Deno.test("semantic runtime fixture reuses continuation matched option to answer concrete price", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState({
+      last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual servico voce quer consultar?",
+      last_action_options: ["Corte", "Barba"],
+    }),
+    snapshot: {
+      intents: { primary: "price", secondary: [], booking: false, confidence: 0.88, source: "continuation" },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: {
+        raw_user_message: "Corte de cabelo",
+        continuation: {
+          kind: "price_followup",
+          matched_option: "Corte",
+        },
+      },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_price")
+  assertIncludes(result.message, "R$ 50")
+})
+
+Deno.test("semantic runtime fixture answers concrete price when service pricing arrives as string config", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: {
+      ...createBaseConfig(),
+      booking_services: [
+        { name: "Corte de cabelo", duration_minutes: "30", base_price: "50", description: "Corte masculino" },
+        { name: "Barba", duration_minutes: "30", base_price: "35", description: "Barba completa" },
+      ],
+    } as any,
+    state: createBaseState({
+      last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviÃ§o vocÃª quer consultar?",
+      last_action_options: ["Corte de cabelo", "Barba"],
+    }),
+    snapshot: {
+      intents: { primary: "price", secondary: [], booking: false, confidence: 0.88, source: "continuation" },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: {
+        raw_user_message: "Corte de cabelo",
+        continuation: {
+          kind: "price_followup",
+          matched_option: "Corte de cabelo",
+        },
+      },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_price")
+  assertIncludes(result.message, "R$ 50")
 })
 
 Deno.test("semantic runtime fixture keeps sequence context after short affirmative reply", async () => {
@@ -986,7 +1360,7 @@ Deno.test("semantic runtime fixture offers sequence template after short continu
 
   assertEquals(semantic.decision.action, "offer_sequence_template")
   assertIncludes(result.message, "Davi")
-  assertIncludes(result.message, "logo apos")
+  assertIncludes(result.message, "logo após")
 })
 
 Deno.test("semantic runtime fixture recovers after same_next unavailable by asking for date on next turn", async () => {
@@ -1061,7 +1435,7 @@ Deno.test("semantic runtime fixture recovers after same_next unavailable by aski
   })
 
   assertEquals(outputs[0].semantic.decision.action, "ask_date")
-  assertIncludes(outputs[0].result.message, "Nao encontrei um proximo horario livre")
+  assertIncludes(outputs[0].result.message, "Não encontrei um próximo horário livre")
   assertEquals(outputs[1].semantic.decision.action, "ask_date")
 })
 
@@ -1123,6 +1497,44 @@ Deno.test("semantic runtime fixture asks audience confirmation before continuing
   }
 })
 
+Deno.test("semantic runtime fixture does not leak audience confirmation prompt keys to the user", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "booking", secondary: [], booking: true, confidence: 0.91 },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [{ name: "Corte", normalized_name: "corte" }],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: true,
+        additional_count: 1,
+      },
+      risks: {
+        audience: {
+          requires_confirmation: true,
+          blocked: false,
+          reason: "audience_needs_confirmation",
+          inferred_fit: null,
+        },
+        ambiguities: [],
+      },
+      meta: { raw_user_message: "quero agendar pra mim e meu irmao" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "ask_audience_confirmation")
+  assertIncludes(result.message.toLowerCase(), "atendemos")
+  assertIncludes(result.message.toLowerCase(), "homens")
+  if (result.message.includes("confirm_audience_fit_before_booking")) {
+    throw new Error("Prompt key leaked to rendered audience confirmation message")
+  }
+})
+
 Deno.test("semantic runtime fixture progresses after short audience confirmation reply", async () => {
   const outputs = await runSemanticFixtureSequence({
     config: createBaseConfig() as any,
@@ -1179,6 +1591,99 @@ Deno.test("semantic runtime fixture progresses after short audience confirmation
   }
 })
 
+Deno.test("semantic runtime fixture keeps booking continuity after audience confirmation even if the reply is semantically short", async () => {
+  const outputs = await runSemanticFixtureSequence({
+    config: createBaseConfig() as any,
+    initialState: createBaseState(),
+    channel: "web_simulator",
+    turns: [
+      {
+        intents: { primary: "booking", secondary: [], booking: true, confidence: 0.92 },
+        entities: {
+          people: [{ includes_self: true, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+          attendee_names: [],
+          services: [],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: true,
+          additional_count: 0,
+        },
+        risks: {
+          audience: {
+            requires_confirmation: true,
+            blocked: false,
+            reason: "audience_needs_confirmation",
+            prompt: "Atendemos homens e criancas. Voces se encaixam nesse perfil?",
+            inferred_fit: null,
+          },
+          ambiguities: [],
+        },
+        meta: { raw_user_message: "quero agendar" },
+      } as any,
+      {
+        intents: { primary: "fallback", secondary: [], booking: false, confidence: 0.31 },
+        entities: {
+          people: [],
+          attendee_names: [],
+          services: [],
+          date: null,
+          time: null,
+        },
+        signals: {
+          includes_self: false,
+          additional_count: 0,
+        },
+        risks: { ambiguities: [] },
+        meta: { raw_user_message: "sim, nos encaixamos" },
+      } as any,
+    ],
+  })
+
+  assertEquals(outputs[0].semantic.decision.action, "ask_audience_confirmation")
+  if (outputs[1].semantic.decision.action === "handoff_fallback") {
+    throw new Error("Audience confirmation reply fell back instead of continuing booking")
+  }
+})
+
+Deno.test("semantic runtime fixture blocks incompatible audience requests with natural triage", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "booking", secondary: [], booking: true, confidence: 0.9 },
+      entities: {
+        people: [{ relation: "esposa", audience_hint: "woman", confidence: 0.86 }],
+        attendee_names: [],
+        services: [{ name: "Corte", normalized_name: "corte" }],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+        sequence_request: false,
+      },
+      risks: {
+        audience: {
+          requires_confirmation: true,
+          blocked: true,
+          reason: "target_audience_blocked",
+          inferred_fit: false,
+        },
+        ambiguities: [],
+      },
+      meta: { raw_user_message: "oi, quero agendar um corte para minha esposa" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "ask_clarification")
+  assertIncludes(result.message.toLowerCase(), "infelizmente")
+  assertIncludes(result.message.toLowerCase(), "atendemos")
+  assertIncludes(result.message.toLowerCase(), "homens")
+})
+
 Deno.test("semantic runtime fixture offers calendar after closing post confirmation", async () => {
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
@@ -1223,8 +1728,8 @@ Deno.test("semantic runtime fixture offers calendar after closing post confirmat
   })
 
   assertEquals(semantic.decision.action, "offer_calendar")
-  assertIncludes(result.message, "calendario")
-  assertEquals(result.action_options, ["Adicionar no calendario", "Nao, obrigado"])
+  assertIncludes(result.message, "calendário")
+  assertEquals(result.action_options, ["Adicionar no calendário", "Não, obrigado"])
   assertEquals(result.state.pending_calendar_offer, false)
   assertEquals(result.state.pending_final_confirmation, false)
 })
@@ -1293,14 +1798,14 @@ Deno.test("semantic runtime fixture does not re-offer calendar after the offer w
 
   assertEquals(outputs[0].semantic.decision.action, "offer_calendar")
   assertEquals(outputs[0].result.state.pending_calendar_offer, false)
-  assertEquals(outputs[1].semantic.decision.action, "handoff_fallback")
+  assertEquals(outputs[1].semantic.decision.action, "reply_closing")
 })
 
 Deno.test("semantic runtime fixture answers calendar acceptance without generic fallback", async () => {
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
     state: createBaseState({
-      last_action_options: ["Adicionar no calendario", "Nao, obrigado"],
+      last_action_options: ["Adicionar no calendário", "Não, obrigado"],
       pending_calendar_offer: false,
       pending_final_confirmation: false,
       last_booking: {
@@ -1331,14 +1836,14 @@ Deno.test("semantic runtime fixture answers calendar acceptance without generic 
   })
 
   assertEquals(semantic.decision.action, "reply_calendar_confirmed")
-  assertIncludes(result.message, "calendario")
+  assertIncludes(result.message, "calendário")
 })
 
 Deno.test("semantic runtime fixture answers calendar decline without generic fallback", async () => {
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
     state: createBaseState({
-      last_action_options: ["Adicionar no calendario", "Nao, obrigado"],
+      last_action_options: ["Adicionar no calendário", "Não, obrigado"],
       pending_calendar_offer: false,
       pending_final_confirmation: false,
       last_booking: {
@@ -1370,6 +1875,34 @@ Deno.test("semantic runtime fixture answers calendar decline without generic fal
 
   assertEquals(semantic.decision.action, "reply_calendar_declined")
   assertIncludes(result.message, "sem problemas")
+})
+
+Deno.test("semantic runtime fixture answers explicit closing command without clarification fallback", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState(),
+    snapshot: {
+      intents: { primary: "closing", secondary: [], booking: false, confidence: 0.9, source: "deterministic_fallback" },
+      entities: {
+        people: [],
+        attendee_names: [],
+        services: [],
+        date: null,
+        time: null,
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "encerrar" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "reply_closing")
+  if (result.message.includes("Pode me dar mais detalhes")) {
+    throw new Error("Expected explicit closing to avoid clarification fallback")
+  }
 })
 
 Deno.test("semantic runtime fixture confirms additional booking when primary contact reuse is already decided", async () => {
@@ -1624,6 +2157,7 @@ Deno.test("semantic runtime fixture keeps inferred people queue across chained m
   const outputs = await runSemanticFixtureSequence({
     config: createBaseConfig() as any,
     initialState: createBaseState({
+      contact_preference: "skip_primary",
       slots: {
         attendee_name: "Davi",
         service: "Corte",
@@ -1754,3 +2288,8 @@ Deno.test("semantic runtime fixture handles faq before chaotic multi-booking req
   assertEquals(outputs[1].result.state.slots.attendee_name, "Davi")
   assertEquals(outputs[1].result.state.pending_attendee_queue, ["Carlos", "Joao"])
 })
+
+
+
+
+

@@ -14,6 +14,9 @@ export interface RestoredMessage {
     next_step?: string
     requires_action?: string | null
     action_options?: string[]
+    editable_items?: Array<{ id: string; label: string; value: string; type: string }>
+    selectable_options?: Array<{ id: string; label: string; value: string; selected?: boolean }>
+    narrative_segments?: Array<{ kind: 'text' | 'editable'; text: string; item_id?: string }>
   }
 }
 

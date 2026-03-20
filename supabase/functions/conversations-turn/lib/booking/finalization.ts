@@ -10,6 +10,7 @@ import {
   buildAdditionalBookingAfterCompletePrompt,
   buildSingleAdditionalPrompt,
 } from "../builders.ts"
+import { resolveConfiguredServicesFromConfig, resolveSequenceEligibleServicesFromConfig } from "../canonical-services.ts"
 import { getScheduleForStaff, getOtherStaffOptions } from "../staff.ts"
 import { buildStaffDayOptions } from "../staff.ts"
 import {
@@ -39,6 +40,10 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
     wasAdditionalPending,
     explicitService,
   } = ctx
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const eligibleForSequence = resolveSequenceEligibleServicesFromConfig(config)
+  const sequencePool =
+    eligibleForSequence.length > 0 ? eligibleForSequence : configuredServices.map((s) => s.name).filter(Boolean)
 
   // Captura apenas novos pedidos adicionais detectados neste turno.
   // Quando ja estamos no fluxo de adicionais (wasAdditionalPending), a logica principal
@@ -105,10 +110,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
       attendee_name: nextState.slots.attendee_name,
     })
     const canSequence = config.allow_sequence_booking
-    const sequenceList =
-      (config.sequence_eligible_services?.length ?? 0) > 0
-        ? config.sequence_eligible_services!
-        : (config.services || []).map((s) => s.name).filter(Boolean)
+    const sequenceList = sequencePool
     if (canSequence && sequenceList.length > 0) {
       nextState.service_selection_multi = true
       const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
@@ -116,7 +118,7 @@ export async function handleFinalization(ctx: BookingContext): Promise<Simulator
       return buildResult(prompt.message, nextState, toNumberedOptions(sequenceOpts))
     }
     nextState.service_selection_multi = false
-    nextState.last_service_options = buildServiceOptions(config.services || [])
+    nextState.last_service_options = buildServiceOptions(configuredServices)
     return buildResult(prompt.message, nextState, toNumberedOptions(prompt.action_options))
   }
 

@@ -1,9 +1,17 @@
 'use client'
 
 import { ReactNode } from 'react'
-import { ChatThread } from './ChatThread'
+import dynamic from 'next/dynamic'
 import { ChatComposer } from './ChatComposer'
 import { cn } from '@/lib/utils'
+
+const ChatThread = dynamic(
+  () => import('./ChatThread').then((mod) => mod.ChatThread),
+  {
+    ssr: false,
+    loading: () => <div className="flex-1" />,
+  }
+)
 
 export interface EditableItem {
   id: string
@@ -36,6 +44,12 @@ export interface SelectableOption {
   selected?: boolean
 }
 
+export interface NarrativeSegment {
+  kind: 'text' | 'editable'
+  text: string
+  item_id?: string
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -47,6 +61,7 @@ export interface Message {
   serviceMultiSelect?: boolean
   editableItems?: EditableItem[]
   selectableOptions?: SelectableOption[]
+  narrativeSegments?: NarrativeSegment[]
   requiresAction?: string | null
   /** Exibe input inline para adicionar outros itens (ex: serviços). */
   allowCustomInput?: boolean

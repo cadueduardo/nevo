@@ -1,21 +1,25 @@
 /**
  * GET /api/whatsapp/connect/status?agent_id=...
  * Consulta status da conexão Evolution (connecting | connected | error).
- * FASE 6.5 — Conectar WhatsApp.
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
+import {
+  buildEvolutionBaseCandidates,
+  resolveEvolutionApiKey,
+  sanitizeEvolutionBaseUrl,
+} from '@/lib/whatsapp/evolution'
 
 export const dynamic = 'force-dynamic'
 
-function buildEvolutionBaseCandidates(baseUrl: string): string[] {
-  const normalized = baseUrl.replace(/\/$/, '')
-  const candidates = [normalized]
-  if (normalized.endsWith('/api')) candidates.push(normalized.replace(/\/api$/, ''))
-  else candidates.push(`${normalized}/api`)
-  return Array.from(new Set(candidates))
+function getEvolutionEnvApiKey(): string | null {
+  return (
+    process.env.EVOLUTION_AUTO_API_KEY?.trim() ||
+    process.env.EVOLUTION_API_KEY?.trim() ||
+    null
+  )
 }
 
 export async function GET(req: NextRequest) {
@@ -62,16 +66,26 @@ export async function GET(req: NextRequest) {
       .eq('provider', 'evolution')
       .maybeSingle()
 
-    if (!channel?.evolution_base_url || !channel?.evolution_instance || !channel?.evolution_api_key_encrypted) {
+    if (
+      !channel?.evolution_base_url ||
+      !channel?.evolution_instance ||
+      (!channel?.evolution_api_key_encrypted && !getEvolutionEnvApiKey())
+    ) {
       return NextResponse.json({
         status: 'disconnected',
         message: 'Canal Evolution não configurado.',
       })
     }
 
-    const baseUrl = (channel.evolution_base_url as string).replace(/\/$/, '')
+    const baseUrl = sanitizeEvolutionBaseUrl(channel.evolution_base_url as string).value
     const instance = channel.evolution_instance as string
-    const apiKey = channel.evolution_api_key_encrypted as string
+    const apiKey = resolveEvolutionApiKey({
+      storedValue: channel.evolution_api_key_encrypted as string,
+      envValue: getEvolutionEnvApiKey(),
+    })
+    if (!baseUrl || !apiKey) {
+      return NextResponse.json({ error: 'Configuração Evolution inválida.' }, { status: 400 })
+    }
 
     const headers: Record<string, string> = {
       apikey: apiKey,
@@ -79,15 +93,14 @@ export async function GET(req: NextRequest) {
     }
 
     const baseCandidates = buildEvolutionBaseCandidates(baseUrl)
-    // Evolution: GET /instance/connectionState/{instance} ou /instance/fetchInstances
-    const fetchUrls = baseCandidates.flatMap((b) => ([
+    const fetchUrls = baseCandidates.flatMap((b) => [
       { type: 'state' as const, url: `${b}/instance/connectionState/${encodeURIComponent(instance)}` },
       { type: 'state' as const, url: `${b}/v1/instance/connectionState/${encodeURIComponent(instance)}` },
       { type: 'state' as const, url: `${b}/v2/instance/connectionState/${encodeURIComponent(instance)}` },
       { type: 'list' as const, url: `${b}/instance/fetchInstances` },
       { type: 'list' as const, url: `${b}/v1/instance/fetchInstances` },
       { type: 'list' as const, url: `${b}/v2/instance/fetchInstances` },
-    ]))
+    ])
     let evolutionStatus: string | null = null
     let instanceExists: boolean | null = null
 
@@ -124,7 +137,7 @@ export async function GET(req: NextRequest) {
           instanceExists = false
         }
       } catch {
-        /* continua */
+        // continua
       }
     }
 

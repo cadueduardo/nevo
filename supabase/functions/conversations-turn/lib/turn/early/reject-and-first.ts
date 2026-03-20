@@ -1,13 +1,14 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 /** Early steps: rejeição de serviço não listado, primeira interação (saudação), primeira mensagem com IA. */
 import type { SimulatorResult } from "../../types.ts"
 import type { TurnPipelineContext } from "../../turn-context.ts"
 import { buildResult } from "../../state.ts"
 import { normalizeText, parseTime, parseDateOrWeekday, addDaysToIsoDate, getTodayIsoBusinessTz } from "../../utils.ts"
-import { getMockAvailability, isWithinSchedule } from "../../utils.ts"
+import { getMockAvailability, isWithinSchedule, isTimeTooSoonForDate, MIN_BOOKING_LEAD_MINUTES, getNextAvailableSlotAfter } from "../../utils.ts"
 import { getGreetingMessage, buildClarificationMessage } from "../../builders.ts"
 import { isGreeting, isExplicitBookingIntent } from "../../detection.ts"
 import { findServiceFromText, getServicesTotalDuration } from "../../services.ts"
+import { resolveConfiguredServicesFromConfig } from "../../canonical-services.ts"
 import { getStaffList, getScheduleForStaff } from "../../staff.ts"
 import {
   answerWithContextualAI,
@@ -27,10 +28,11 @@ import { enterBookingFromIntent } from "../../qualification.ts"
 /** Retorna resultado se rejeição unlisted, primeira saudação ou primeira mensagem (IA); senão null. */
 export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<SimulatorResult | null> {
   const { text, config, nextState, history, senderDisplayName, isFirst, textNorm, minOrchestratorConfidence, getOrchestrator } = ctx
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
 
   if (
     config.lead_policy?.reject_unlisted_services &&
-    (config.services || []).length > 0 &&
+    configuredServices.length > 0 &&
     !nextState.slots.service &&
     !isGreeting(text)
   ) {
@@ -86,12 +88,13 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
       if (handled) return handled
     }
     const timeFromFirstMsg = parseTime(text)
-    const dateFromFirstMsg = parseDateOrWeekday(text) || addDaysToIsoDate(getTodayIsoBusinessTz(), 1)
+    // Se o cliente não mencionou data na 1ª mensagem, preferir HOJE (não amanhã).
+    const dateFromFirstMsg = parseDateOrWeekday(text) || getTodayIsoBusinessTz()
     if (timeFromFirstMsg && dateFromFirstMsg) {
       const staffList = getStaffList(config)
       const staffNameFirst = staffList[0]?.name
       const scheduleFirst = getScheduleForStaff(config, staffNameFirst)
-      const serviceFirst = findServiceFromText(text, config.services || []) || (config.services || [])[0]?.name
+      const serviceFirst = findServiceFromText(text, configuredServices) || configuredServices[0]?.name
       const durationFirst = getServicesTotalDuration(config, serviceFirst) ?? 30
       const availabilityFirst = getMockAvailability(
         dateFromFirstMsg,
@@ -104,7 +107,20 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
       const isAvailableFirst = availabilityFirst.available.includes(normalizedFirstTime)
       if (!isAvailableFirst) {
         const withinFirst = isWithinSchedule(normalizedFirstTime, scheduleFirst)
-        const unavailableReasonFirst = withinFirst.ok ? undefined : withinFirst.reason
+        const occupiedFirst = availabilityFirst.occupied.includes(normalizedFirstTime)
+        const minLead = scheduleFirst?.min_booking_lead_minutes ?? MIN_BOOKING_LEAD_MINUTES
+        const tooSoon = dateFromFirstMsg === getTodayIsoBusinessTz() && isTimeTooSoonForDate(dateFromFirstMsg, normalizedFirstTime, minLead)
+        const unavailableReasonFirst =
+          (!withinFirst.ok ? withinFirst.reason : undefined) ||
+          (tooSoon
+            ? `Este horário exige antecedência mínima de ${minLead} minutos.`
+            : occupiedFirst
+              ? `Esse horário já está ocupado.`
+              : `Esse horário não está disponível.`)
+        const suggestedNextFirst =
+          availabilityFirst.available.length > 0
+            ? getNextAvailableSlotAfter(availabilityFirst.available, normalizedFirstTime)
+            : undefined
         const fluidFirst = await generateAvailabilityResponseWithAI(
           config,
           {
@@ -114,6 +130,7 @@ export async function runRejectAndFirstSteps(ctx: TurnPipelineContext): Promise<
             available_slots: availabilityFirst.available.slice(0, 12),
             service: serviceFirst || undefined,
             unavailable_reason: unavailableReasonFirst,
+            suggested_next_slot: suggestedNextFirst,
           },
           history
         )

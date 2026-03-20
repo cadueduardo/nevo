@@ -161,6 +161,28 @@ export function formatTimePeriod(period: "morning" | "afternoon" | "evening"): s
   return "a noite"
 }
 
+/** Filtra slots (ex.: "09:00", "14:30") pelo período: manhã < 12:00, tarde 12:00–<18:00, noite >= 18:00. */
+export function filterSlotsByPeriod(
+  slots: string[],
+  period: "morning" | "afternoon" | "evening"
+): string[] {
+  const M = toMinutes
+  if (period === "morning") return slots.filter((s) => M(s) < 12 * 60)
+  if (period === "afternoon") return slots.filter((s) => {
+    const m = M(s)
+    return m >= 12 * 60 && m < 18 * 60
+  })
+  return slots.filter((s) => M(s) >= 18 * 60)
+}
+
+/** Primeiro horário disponível >= requestedTime, ou o primeiro da lista. Para sugerir "as X já está preenchido, mas posso agendar as Y". */
+export function getNextAvailableSlotAfter(available: string[], requestedTime: string): string | undefined {
+  if (available.length === 0) return undefined
+  const reqM = toMinutes(requestedTime)
+  const next = available.find((s) => toMinutes(s) >= reqM)
+  return next ?? available[0]
+}
+
 export function parseDateOrWeekday(text: string, now = new Date()): string | null {
   return parseDate(text, now) || parseWeekdayDate(text, now)
 }
@@ -275,7 +297,7 @@ const BUSINESS_TZ = "America/Sao_Paulo"
 /** Antecedência mínima para agendamento hoje (em minutos). Ex.: 20 = não mostrar 14:30 se agora é 14:25. */
 export const MIN_BOOKING_LEAD_MINUTES = 20
 
-function getNowInBusinessTz(now: Date = new Date()): { dateIso: string; time: string } {
+export function getNowInBusinessTz(now: Date = new Date()): { dateIso: string; time: string } {
   const dateIso = now.toLocaleDateString("en-CA", { timeZone: BUSINESS_TZ }) // YYYY-MM-DD
   const time = now.toLocaleTimeString("pt-BR", { timeZone: BUSINESS_TZ, hour: "2-digit", minute: "2-digit", hour12: false })
   return { dateIso, time }

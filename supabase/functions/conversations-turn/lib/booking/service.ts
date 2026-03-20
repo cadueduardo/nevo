@@ -18,6 +18,7 @@ import {
 } from "../utils.ts"
 import { getNextAvailableSlot, buildStaffDayOptions } from "../staff.ts"
 import { getServicesTotalDuration, getServicesTotalDurationOrFallback, findServiceFromText } from "../services.ts"
+import { resolveConfiguredServicesFromConfig, resolveSequenceEligibleServicesFromConfig } from "../canonical-services.ts"
 import { getSequenceServicesFromText } from "../anytime-handlers.ts"
 import { isVisitRequest, looksLikeAttendeeName, isExplicitBookingIntent } from "../detection.ts"
 import { extractAttendeeNameForMultiBooking } from "../ai.ts"
@@ -39,6 +40,10 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     slotsInterpretation,
     waitingFor,
   } = ctx
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const eligibleForSequence = resolveSequenceEligibleServicesFromConfig(config)
+  const sequencePool =
+    eligibleForSequence.length > 0 ? eligibleForSequence : configuredServices.map((s) => s.name).filter(Boolean)
 
   const isDigitOnlyEarly = /^[1-9]\d*$/.test(text.trim())
   const lastCompletedFromNextState =
@@ -91,9 +96,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       nextState.pending_second_service_choice = true
       const canSequenceSecond = config.allow_sequence_booking
       const sequenceList =
-        (config.sequence_eligible_services?.length ?? 0) > 0
-          ? config.sequence_eligible_services!
-          : (config.services || []).map((s) => s.name).filter(Boolean)
+        sequencePool
       if (canSequenceSecond && sequenceList.length > 0) {
         nextState.service_selection_multi = true
         const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
@@ -105,7 +108,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
         )
       }
       nextState.service_selection_multi = false
-      const serviceList = buildServiceOptions(config.services || [])
+      const serviceList = buildServiceOptions(configuredServices)
       const numberedServiceOpts = serviceList.map((o, i) => `${i + 1} - ${o}`)
       return buildResult(
         `Certo! Qual servico voce gostaria de agendar para ${nextState.slots.attendee_name || "essa pessoa"}?`,
@@ -165,7 +168,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     }
   }
 
-  const serviceOpts = buildServiceOptions(config.services || [])
+  const serviceOpts = buildServiceOptions(configuredServices)
   const canResolveService = serviceOpts.length > 0 && resolveOptionByNumber(text, serviceOpts)
 
   if (
@@ -215,7 +218,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     const serviceOptions =
       state.service_selection_multi && Array.isArray(state.last_service_options) && state.last_service_options.length > 0
         ? state.last_service_options
-        : buildServiceOptions(config.services || [])
+        : buildServiceOptions(configuredServices)
     const canSequence = config.allow_sequence_booking
     const multiSelectedByNumber =
       canSequence &&
@@ -231,8 +234,8 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
         : multiSelectedByText.length > 0
           ? multiSelectedByText
           : []
-    const resolvedSingle = resolveOptionByNumber(text, serviceOptions) || findServiceFromText(text, config.services || [])
-    const serviceNames = (config.services || []).map((s) => s.name).filter(Boolean)
+    const resolvedSingle = resolveOptionByNumber(text, serviceOptions) || findServiceFromText(text, configuredServices)
+    const serviceNames = configuredServices.map((s) => s.name).filter(Boolean)
     const resolvedServiceValue =
       resolvedMulti.length > 0
         ? resolvedMulti.filter((s) => s !== "Quero agendar uma visita").join(", ") || "visita"
@@ -301,9 +304,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
     } else {
       const canSequenceSecond = config.allow_sequence_booking
       const sequenceList =
-        (config.sequence_eligible_services?.length ?? 0) > 0
-          ? config.sequence_eligible_services!
-          : (config.services || []).map((s) => s.name).filter(Boolean)
+        sequencePool
       if (canSequenceSecond && sequenceList.length > 0) {
         nextState.service_selection_multi = true
         const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
@@ -315,7 +316,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
         )
       }
       nextState.service_selection_multi = false
-      const opts = buildServiceOptions(config.services || []).map((o, i) => `${i + 1} - ${o}`)
+      const opts = buildServiceOptions(configuredServices).map((o, i) => `${i + 1} - ${o}`)
       return buildResult("Qual servico voce prefere? (responda com o numero ou nome)", nextState, opts)
     }
   }
@@ -564,10 +565,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       ])
     }
     const canSequence = config.allow_sequence_booking
-    const sequenceList =
-      (config.sequence_eligible_services?.length ?? 0) > 0
-        ? config.sequence_eligible_services!
-        : (config.services || []).map((s) => s.name).filter(Boolean)
+    const sequenceList = sequencePool
     if (canSequence && sequenceList.length > 0) {
       nextState.service_selection_multi = true
       const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
@@ -576,7 +574,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
       return buildResult(msg, nextState, toNumberedOptions(sequenceOpts))
     }
     nextState.service_selection_multi = false
-    const serviceOptsList = buildServiceOptions(config.services || [])
+    const serviceOptsList = buildServiceOptions(configuredServices)
     const numberedOpts = serviceOptsList.map((o, i) => `${i + 1} - ${o}`)
     nextState.last_service_options = serviceOptsList
     const msg = `Otimo! Vamos agendar primeiro para o ${name}. Qual servico seria? (responda com o numero ou nome)`
@@ -602,10 +600,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
         if (!defaultService) {
           nextState.pending_second_service_choice = true
           const canSequenceSecond = config.allow_sequence_booking
-          const sequenceList =
-            (config.sequence_eligible_services?.length ?? 0) > 0
-              ? config.sequence_eligible_services!
-              : (config.services || []).map((s) => s.name).filter(Boolean)
+          const sequenceList = sequencePool
           if (canSequenceSecond && sequenceList.length > 0) {
             nextState.service_selection_multi = true
             const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
@@ -617,7 +612,7 @@ export async function handleService(ctx: BookingContext): Promise<SimulatorResul
             )
           }
           nextState.service_selection_multi = false
-          const serviceList = buildServiceOptions(config.services || [])
+          const serviceList = buildServiceOptions(configuredServices)
           const numberedServiceOpts = serviceList.map((o, i) => `${i + 1} - ${o}`)
           return buildResult(
             `Perfeito! Qual servico voce gostaria de agendar para ${secondName}?`,

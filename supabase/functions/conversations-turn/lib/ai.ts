@@ -1,7 +1,49 @@
 // @ts-nocheck
-import { normalizeText, getTodayIsoBusinessTz, addDaysToIsoDate, getWeekdayKey } from "./utils.ts"
+import {
+  normalizeText,
+  getTodayIsoBusinessTz,
+  addDaysToIsoDate,
+  getWeekdayKey,
+  getNowInBusinessTz,
+  isBusinessClosedForToday,
+  formatDatePt,
+} from "./utils.ts"
+import { fetchNationalHolidays } from "./holidays.ts"
 import type { SimulatorState, SimulatorConfig, FlowOrchestratorOutput } from "./types.ts"
 import { findServicesFromText } from "./services.ts"
+import { resolveConfiguredServicesFromConfig } from "./canonical-services.ts"
+import { buildBusinessBrain } from "./semantic-core/business-brain.ts"
+import { buildAgentRuntimeContext } from "./semantic-core/agent-runtime-context.ts"
+import type { AgentNarrative, AgentRuntimeContext, BusinessBrain } from "./semantic-core/types.ts"
+
+type SemanticContinuationContext = {
+  kind?: "audience_confirmation" | "price_followup" | "calendar_response" | "contact_preference"
+  matched_option?: string
+  last_prompt?: string
+  last_action_options?: string[]
+}
+
+function buildSemanticContinuationPrompt(
+  semanticContext?: SemanticContinuationContext,
+  extraRules?: string[]
+): string {
+  if (!semanticContext?.kind) return ""
+
+  const rules = [
+    'Se continuation_kind = "price_followup", trate a mensagem atual como continuidade da pergunta anterior sobre preco/servico.',
+    'Se continuation_kind = "audience_confirmation", trate a mensagem atual como continuidade de um agendamento ja iniciado.',
+    ...(extraRules || []).filter(Boolean),
+  ]
+
+  return `\nCONTEXTO DE CONTINUIDADE:
+- continuation_kind: ${semanticContext.kind}
+- last_prompt: "${semanticContext.last_prompt || ""}"
+- matched_option: "${semanticContext.matched_option || ""}"
+- last_action_options: ${JSON.stringify(semanticContext.last_action_options || [])}
+
+Regras de continuidade:
+${rules.map((rule) => `- ${rule}`).join("\n")}`
+}
 
 const DAY_NAMES: Record<string, string> = {
   monday: "segunda",
@@ -32,7 +74,7 @@ function buildConfigSummary(config: SimulatorConfig): string {
       parts.push(`Pausa no expediente (nao atendemos nesses horarios): ${breaksStr}`)
     }
   }
-  const services = config.services || []
+  const services = resolveConfiguredServicesFromConfig(config)
   if (services.length > 0) {
     const withPrice = services.filter((s) => s.base_price != null)
     const svcLines = services.map((s) => {
@@ -78,7 +120,200 @@ ${faqLines}`)
     style === "conversational" ? "conversa natural" : style === "hybrid" ? "hibrido (natural + opcoes)" : "opcoes numeradas"
   parts.push(`Estilo de interacao: ${styleLabel}`)
 
+  const holidaysAttend = Array.isArray(config.holidays_attend) ? config.holidays_attend : []
+  if (holidaysAttend.length === 0) {
+    parts.push("Feriados: nao atendemos em feriados nacionais.")
+  } else {
+    parts.push(`Feriados: atendemos apenas nos feriados que foram marcados no cadastro (${holidaysAttend.length} data(s)). Em feriados nao marcados, nao atendemos.`)
+  }
+
   return parts.join("\n")
+}
+
+/** Retorna contexto de feriados para hoje e amanhã: se são feriados e se o negócio atende nesses dias. Usa Brasil API (mesma do onboarding). */
+async function getHolidaysContextForPrompt(
+  config: SimulatorConfig,
+  todayIso: string,
+  tomorrowIso: string
+): Promise<string> {
+  const holidaysAttend = new Set(Array.isArray(config.holidays_attend) ? config.holidays_attend : [])
+  const yearToday = parseInt(todayIso.slice(0, 4), 10)
+  const yearTomorrow = parseInt(tomorrowIso.slice(0, 4), 10)
+  const years = yearToday === yearTomorrow ? [yearToday] : [yearToday, yearTomorrow]
+  const allHolidays: Array<{ date: string; name: string }> = []
+  for (const y of years) {
+    const list = await fetchNationalHolidays(y)
+    allHolidays.push(...list)
+  }
+  const lines: string[] = []
+  for (const { dateIso, label } of [
+    { dateIso: todayIso, label: "Hoje" },
+    { dateIso: tomorrowIso, label: "Amanha" },
+  ]) {
+    const holiday = allHolidays.find((h) => h.date === dateIso)
+    const ddMm = formatDatePt(dateIso)
+    if (holiday) {
+      const attends = holidaysAttend.has(dateIso)
+      lines.push(
+        `${label} (${ddMm}) e feriado de ${holiday.name}. ${attends ? "Atendemos nesse dia." : "NAO atendemos nesse dia; nao sugira essa data para agendamento."}`
+      )
+    } else {
+      lines.push(`${label} (${ddMm}) nao e feriado.`)
+    }
+  }
+  return `Feriados (Brasil): ${lines.join(" ")} Ao sugerir data, so sugira dias em que atendemos (dias de expediente e, se for feriado, so se estiver na lista de feriados em que atende).`
+}
+
+/** Contexto de hora atual, data (hoje/amanhã em DD/MM), dia da semana e se hoje/amanhã têm expediente. A IA usa para não dizer "tem vaga hoje" quando já encerrou e para só sugerir dias em que há atendimento. */
+function getNowAndTodayAvailabilityContext(
+  config: SimulatorConfig,
+  now: Date = new Date()
+): string {
+  const sched = config.schedule
+  const { time: nowTime, dateIso: todayIso } = getNowInBusinessTz(now)
+  const tomorrowIso = addDaysToIsoDate(todayIso, 1)
+  const todayDdMm = formatDatePt(todayIso)
+  const tomorrowDdMm = formatDatePt(tomorrowIso)
+  const end = sched?.end_time || "18:00"
+  const closed = isBusinessClosedForToday(sched, now)
+  const todayWeekdayKey = getWeekdayKey(todayIso)
+  const tomorrowWeekdayKey = getWeekdayKey(tomorrowIso)
+  const daysOfWeek = Array.isArray(sched?.days_of_week) ? sched.days_of_week : []
+  const todayLabel = DAY_NAMES[todayWeekdayKey] || todayWeekdayKey
+  const tomorrowLabel = DAY_NAMES[tomorrowWeekdayKey] || tomorrowWeekdayKey
+  const tomorrowHasExpediente = daysOfWeek.length > 0 && daysOfWeek.includes(tomorrowWeekdayKey)
+  const workingDaysLabel =
+    daysOfWeek.length > 0
+      ? daysOfWeek.map((d) => DAY_NAMES[d] || d).join(", ")
+      : "não definido"
+
+  const dateLine = `DATA: Hoje é ${todayDdMm} (${todayLabel}-feira). Amanhã é ${tomorrowDdMm} (${tomorrowLabel}-feira). Use APENAS estas datas; nunca invente dia ou mês.`
+  const dayContext = `Atendemos apenas em: ${workingDaysLabel}. Amanhã ${tomorrowHasExpediente ? "temos" : "NÃO temos"} expediente. Ao sugerir "outro dia" ou "amanhã", só sugira dias em que há atendimento; se amanhã não for dia de expediente, sugira o próximo dia útil. Se o cliente JÁ disse que quer amanhã, NÃO repita que o expediente de hoje encerrou.`
+
+  if (closed) {
+    const suggestLine = tomorrowHasExpediente
+      ? "Diga que já encerrou e sugira amanhã ou outro dia em que haja expediente."
+      : "Diga que já encerrou. NÃO sugira amanhã se amanhã não for dia de atendimento; sugira o próximo dia em que há expediente ou pergunte qual dia prefere."
+    return `AGORA (horário do negócio): ${nowTime}. Expediente de hoje encerra às ${end}. O expediente de hoje JÁ ENCERROU. NÃO diga que há horários disponíveis para hoje. ${suggestLine}\n\n${dateLine}\n${dayContext}`
+  }
+  return `AGORA (horário do negócio): ${nowTime}. Expediente de hoje encerra às ${end}. Se o cliente perguntar "tem horário para hoje?", só diga que sim se ainda estiver dentro do expediente.\n\n${dateLine}\n${dayContext}`
+}
+
+function resolveNarrativeArtifacts(params: {
+  config: SimulatorConfig
+  businessBrain?: BusinessBrain
+  agentNarrative?: AgentNarrative
+  agentRuntimeContext?: AgentRuntimeContext
+}): {
+  businessBrain: BusinessBrain
+  agentNarrative: AgentNarrative
+  agentRuntimeContext: AgentRuntimeContext
+  businessContext: string
+} {
+  const businessBrain = params.businessBrain || buildBusinessBrain(params.config)
+  const agentNarrative = params.agentNarrative || businessBrain.agent_narrative
+  const agentRuntimeContext =
+    params.agentRuntimeContext ||
+    businessBrain.agent_runtime_context ||
+    buildAgentRuntimeContext({
+      business_brain: {
+        ...businessBrain,
+        agent_narrative: agentNarrative,
+      },
+      agent_narrative: agentNarrative,
+    })
+  return {
+    businessBrain,
+    agentNarrative,
+    agentRuntimeContext,
+    businessContext:
+      agentRuntimeContext.prompt_context ||
+      agentNarrative?.prompt_context ||
+      buildConfigSummary(params.config),
+  }
+}
+
+function resolveServiceNames(params: {
+  config: SimulatorConfig
+  businessBrain?: BusinessBrain
+  overrideServices?: Array<{ name?: string }>
+}): string[] {
+  const override = Array.isArray(params.overrideServices)
+    ? params.overrideServices.map((item) => String(item?.name || "").trim()).filter(Boolean)
+    : []
+  if (override.length > 0) return override
+
+  const brainServices = Array.isArray(params.businessBrain?.services)
+    ? params.businessBrain.services.map((service) => String(service?.name || "").trim()).filter(Boolean)
+    : []
+  if (brainServices.length > 0) return brainServices
+
+  const configServices = [
+    ...resolveConfiguredServicesFromConfig(params.config),
+  ]
+    .map((item) => String(item?.name || "").trim())
+    .filter(Boolean)
+
+  return Array.from(new Set(configServices))
+}
+
+function resolveInteractionStyle(params: {
+  config: SimulatorConfig
+  businessBrain?: BusinessBrain
+}): "numbered_options" | "conversational" | "hybrid" {
+  return params.businessBrain?.policies?.interaction_style || params.config.interaction_style || "numbered_options"
+}
+
+function resolveBusinessType(params: {
+  config: SimulatorConfig
+  businessBrain?: BusinessBrain
+}): string {
+  return params.businessBrain?.business_type || params.config.business_type || "empresa"
+}
+
+const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+const OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+const OPENAI_TIMEOUT_MS = 15000
+
+function getOpenAIApiKey(): string | null {
+  return Deno.env.get("OPENAI_API_KEY") || null
+}
+
+async function requestOpenAIChat(params: {
+  apiKey: string
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>
+  max_tokens: number
+  temperature: number
+  response_format?: { type: "json_object" }
+}): Promise<string | null> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_DEFAULT_MODEL,
+        messages: params.messages,
+        max_tokens: params.max_tokens,
+        temperature: params.temperature,
+        ...(params.response_format ? { response_format: params.response_format } : {}),
+      }),
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+    return typeof content === "string" ? content.trim() || null : null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 /**
@@ -91,12 +326,22 @@ export async function answerWithContextualAI(
   config: SimulatorConfig,
   message: string,
   history: Array<{ role: string; content: string }> = [],
-  finalizedContext = false
+  finalizedContext = false,
+  runtimeContext?: {
+    business_brain?: BusinessBrain
+    agent_narrative?: AgentNarrative
+    agent_runtime_context?: AgentRuntimeContext
+  }
 ): Promise<string | null> {
-  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  const apiKey = getOpenAIApiKey()
   if (!apiKey) return null
 
-  const configSummary = buildConfigSummary(config)
+  const { agentRuntimeContext, businessContext } = resolveNarrativeArtifacts({
+    config,
+    businessBrain: runtimeContext?.business_brain,
+    agentNarrative: runtimeContext?.agent_narrative,
+    agentRuntimeContext: runtimeContext?.agent_runtime_context,
+  })
   const historyText =
     history.length > 0
       ? history
@@ -117,27 +362,41 @@ export async function answerWithContextualAI(
         ? `\nESTILO DE INTERAÇÃO: O dono escolheu MISTO (natural + opções quando fizer sentido). Equilibre conversa natural com clareza; pode sugerir opções em alguns momentos.\n\n`
         : `\nESTILO DE INTERAÇÃO: O dono escolheu OPÇÕES NUMERADAS. As respostas podem ser exibidas como botões numerados para o cliente responder de forma ágil.\n\n`
 
-  const todayIso = getTodayIsoBusinessTz()
+  const now = new Date()
+  const todayIso = getTodayIsoBusinessTz(now)
   const tomorrowIso = addDaysToIsoDate(todayIso, 1)
-  const dateContext = `Contexto de data (para responder "hoje", "amanhã", etc.): hoje é ${todayIso} (${DAY_NAMES[getWeekdayKey(todayIso)] || "?"}). Amanhã é ${tomorrowIso} (${DAY_NAMES[getWeekdayKey(tomorrowIso)] || "?"}).`
+  const todayDdMm = formatDatePt(todayIso)
+  const tomorrowDdMm = formatDatePt(tomorrowIso)
+  const dateContext = `DATA E HORA (use APENAS estas; NUNCA invente dia, mês ou ano): Hoje é ${todayDdMm} (${todayIso}, ${DAY_NAMES[getWeekdayKey(todayIso)] || "?"}). Amanhã é ${tomorrowDdMm} (${tomorrowIso}, ${DAY_NAMES[getWeekdayKey(tomorrowIso)] || "?"}). Ao dizer "amanhã" use sempre a data ${tomorrowDdMm}.`
+  const nowAvailabilityContext = getNowAndTodayAvailabilityContext(config)
+  const holidaysContext = await getHolidaysContextForPrompt(config, todayIso, tomorrowIso)
 
   const systemPrompt = `Você é a assistente virtual do negócio. O cliente está falando com você pelo chat.
 ${finalizedHint}${styleHint}${dateContext}
 
-DADOS DO NEGÓCIO (use quando relevante para responder):
-${configSummary}
+${nowAvailabilityContext}
+
+${holidaysContext}
+
+DOSSIE DO AGENTE E DO NEGOCIO (use quando relevante para responder):
+${businessContext}
 
 REGRAS:
 - Ao cumprimentar (oi, ola, bom dia), apresente-se como assistente da empresa e cite o nome do negocio quando disponivel.
 - Se o cliente perguntar identidade (ex: "quem estou falando?" ou "quem e voce?"), responda claramente que voce e a assistente virtual da empresa.
 - Responda de forma natural e humana, como se estivesse numa conversa real.
-- CONSULTE OS DADOS ACIMA: use apenas as informações que estão no config. Nunca invente serviços, áreas ou ofertas.
-- CRÍTICO: O negócio atende SOMENTE as áreas/serviços listados. Se o cliente pedir algo FORA dessas áreas, responda com empatia mas diga claramente que não atuamos, explique quais áreas atendemos e pergunte se precisa de ajuda em alguma delas. NUNCA ofereça agendar para área que não está na lista.
+- CONSULTE O DOSSIE ACIMA: use apenas as informacoes consolidadas. Nunca invente servicos, areas, publicos ou ofertas.
+- ENDEREÇO/LOCALIZAÇÃO: Se o cliente perguntar onde ficam, endereço ou localização, use APENAS o endereço do DOSSIE. NUNCA invente rua, número ou endereço; se não houver no dossiê, diga que não tem o endereço cadastrado.
+- TRIAGEM NATURAL: se o pedido estiver fora do escopo, fora do publico atendido ou bater em restricao operacional, reconheca a necessidade, explique o limite com naturalidade e redirecione para o que o negocio realmente faz.
 - PREÇOS: Se um serviço tem valor em "R$ X" nos dados, o cliente está perguntando o preço e você DEVE informar esse valor. NUNCA diga "não tenho os valores" se o preço está nos dados. Use o nome exato do serviço do config ao informar.
-- HORÁRIO PARA UM DIA ESPECÍFICO: Se o cliente perguntar se tem horário/disponibilidade para um dia (ex.: "tem horário para amanhã?", "atendem amanhã?", "tem vaga hoje?"), use os dados de "Horário" e dias de atendimento acima. Responda no contexto: se esse dia está entre os dias que atendemos, diga que sim e repita o horário (ex.: "Sim, amanhã atendemos das 08:00 às 18:00. Quer agendar?"); se esse dia NÃO está (ex.: amanhã é sábado e só atendemos segunda a sexta), diga claramente e sugira outro dia. NUNCA responda só com o horário genérico sem considerar o dia que o cliente perguntou.
+- HORÁRIO PARA UM DIA ESPECÍFICO: Se o cliente perguntar se tem horário/disponibilidade para um dia (ex.: "tem horário para amanhã?", "atendem amanhã?", "tem vaga hoje?"), use os dados de "Horário" e dias de atendimento acima E o bloco "AGORA / Expediente de hoje" acima. Se o expediente de hoje JÁ ENCERROU, NÃO diga que há horários para hoje; diga que já encerrou e sugira amanhã ou outro dia. Se esse dia está entre os dias que atendemos e (para hoje) ainda estamos em expediente, diga que sim e repita o horário; se esse dia NÃO está (ex.: amanhã é sábado e só atendemos segunda a sexta), diga claramente e sugira outro dia.
+- Se o cliente JÁ disse que quer agendar para AMANHÃ (ou para outro dia), NÃO repita que "o expediente de hoje encerrou"; vá direto ao ponto (confirmar horário, serviço, etc.). Repetir que hoje encerrou só quando ele ainda estiver falando de hoje.
+- NUNCA invente data, dia ou mês. Use somente as datas do bloco "DATA E HORA" acima (hoje e amanhã com dia/mês/ano corretos).
 - Seja objetiva e prestativa.
 - Se não tiver a informação que ele pediu, diga com naturalidade.
 - Mantenha o tom profissional mas cordial.
+- Diretriz de atendimento e booking: ${agentRuntimeContext.booking_context}
+- Diretriz de triagem: ${agentRuntimeContext.triage_context}
 - IMPORTANTE: Tenha atitude e conduza o cliente. Após responder qualquer pergunta informativa (endereço, serviços, horários etc.), SEMPRE adicione uma pergunta ou convite para engajar: ex. "Quer agendar um horário conosco?", "Precisa de ajuda em alguma dessas áreas?", "Posso te ajudar a marcar uma consulta?". O objetivo é converter o lead — seja simpático e proativo, puxando o assunto para o agendamento.`
 
   const userPrompt = `Histórico da conversa:
@@ -147,43 +406,39 @@ Cliente disse: "${message}"
 
 Responda diretamente ao cliente (apenas o texto da resposta, sem prefixos):`
 
-  try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 300,
-        temperature: 0.5,
-      }),
-    })
-    if (!response.ok) return null
-    const data = await response.json()
-    const content = data.choices?.[0]?.message?.content?.trim()
-    return content || null
-  } catch {
-    return null
-  }
+  return await requestOpenAIChat({
+    apiKey,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    max_tokens: 300,
+    temperature: 0.5,
+  })
 }
 
 export async function generateAdaptiveGreetingWithAI(
   config: SimulatorConfig,
   message: string,
   history: Array<{ role: string; content: string }> = [],
-  senderDisplayName?: string
+  senderDisplayName?: string,
+  runtimeContext?: {
+    business_brain?: BusinessBrain
+    agent_narrative?: AgentNarrative
+    agent_runtime_context?: AgentRuntimeContext
+  }
 ): Promise<string | null> {
   const apiKey = Deno.env.get("OPENAI_API_KEY")
   if (!apiKey) return null
 
-  const businessName = config.business_name || "a empresa"
-  const primaryStaff = Array.isArray(config.staff) && config.staff.length > 0 ? config.staff[0]?.name : undefined
+  const { businessBrain, agentRuntimeContext } = resolveNarrativeArtifacts({
+    config,
+    businessBrain: runtimeContext?.business_brain,
+    agentNarrative: runtimeContext?.agent_narrative,
+    agentRuntimeContext: runtimeContext?.agent_runtime_context,
+  })
+  const businessName = businessBrain.business_name || "a empresa"
+  const primaryStaff = businessBrain.staff?.[0]?.name
   const assistantLabel = primaryStaff?.trim() || "assistente virtual"
   const contactName = senderDisplayName?.trim() || null
   const historyText =
@@ -198,6 +453,9 @@ export async function generateAdaptiveGreetingWithAI(
 Negocio: ${businessName}
 Quem atende: ${assistantLabel}
 Contato do WhatsApp: ${contactName || "desconhecido"}
+Contexto do agente:
+${agentRuntimeContext.identity_context}
+${agentRuntimeContext.booking_context}
 
 Regras:
 - Responda em portugues do Brasil.
@@ -267,17 +525,296 @@ Gere a resposta inicial do WhatsApp:`
   }
 }
 
+export async function generateInformationalReplyWithAI(params: {
+  config: SimulatorConfig
+  message: string
+  history?: Array<{ role: string; content: string }>
+  action:
+    | "reply_identity"
+    | "reply_faq"
+    | "reply_price"
+    | "reply_service_detail"
+    | "reply_service_list"
+    | "reply_closing"
+    | "reply_open_context"
+  businessName?: string
+  serviceNames?: string[]
+  selectedServiceName?: string
+  selectedServicePrice?: number
+  selectedServiceDescription?: string
+  faqAnswer?: string
+  runtimeContext?: {
+    business_brain?: BusinessBrain
+    agent_narrative?: AgentNarrative
+    agent_runtime_context?: AgentRuntimeContext
+  }
+}): Promise<string | null> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!apiKey) return null
+
+  const { businessBrain, agentRuntimeContext, businessContext } = resolveNarrativeArtifacts({
+    config: params.config,
+    businessBrain: params.runtimeContext?.business_brain,
+    agentNarrative: params.runtimeContext?.agent_narrative,
+    agentRuntimeContext: params.runtimeContext?.agent_runtime_context,
+  })
+
+  const nowAvailabilityContext = getNowAndTodayAvailabilityContext(params.config)
+  const now = new Date()
+  const todayIso = getTodayIsoBusinessTz(now)
+  const tomorrowIso = addDaysToIsoDate(todayIso, 1)
+  const holidaysContext = await getHolidaysContextForPrompt(params.config, todayIso, tomorrowIso)
+
+  const historyText =
+    (params.history || []).length > 0
+      ? (params.history || [])
+          .slice(-8)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : "(sem histórico)"
+
+  const businessName = params.businessName || businessBrain.business_name || "o negócio"
+  const serviceNames = Array.isArray(params.serviceNames) ? params.serviceNames.filter(Boolean) : []
+  const serviceListText = serviceNames.length > 0 ? serviceNames.join(", ") : "(nenhum serviço configurado)"
+  const actionGuidance: Record<string, string> = {
+    reply_identity:
+      "Explique quem está falando de forma cordial, situada no negócio, e ofereça ajuda de forma natural. Não soe como mensagem institucional dura.",
+    reply_faq:
+      "Responda diretamente a dúvida do cliente com base na resposta disponível. Depois ofereça continuidade com naturalidade, sem parecer script.",
+    reply_price:
+      "Responda primeiro e claramente o preço do serviço perguntado. Se houver nome e preço, diga isso de forma cordial e natural. Depois ofereça ajuda para agendar, sem repetir pergunta desnecessária.",
+    reply_service_detail:
+      "Explique o serviço citado com linguagem humana e natural. Depois ofereça continuidade para agendamento, sem soar robótico.",
+    reply_service_list:
+      "Apresente os serviços do negócio de forma conversacional, como recepção real. Não use tom burocrático nem uma enumeração fria se não for necessário.",
+    reply_closing:
+      "Encerre a conversa com educação, naturalidade e abertura cordial para retorno futuro.",
+  }
+
+  const systemPrompt = `Você é a assistente virtual de ${businessName}.
+
+${nowAvailabilityContext}
+
+${holidaysContext}
+
+DOSSIE DO NEGÓCIO:
+${businessContext}
+
+REGRAS:
+- Responda em português do Brasil.
+- Soe como alguém do negócio atendendo o cliente de verdade.
+- Seja cordial, contextual e natural. Não escreva como fluxo técnico.
+- Use o contexto do negócio já conhecido; não peça de novo algo que o cliente acabou de dizer.
+- Não transforme uma pergunta objetiva em triagem desnecessária.
+- Se o cliente já citou um serviço específico, use essa informação.
+- Se houver preço configurado para o serviço citado, informe o valor diretamente.
+- ENDEREÇO/LOCALIZAÇÃO: Se perguntarem onde ficam, endereço ou localização, use APENAS o endereço do DOSSIE. NUNCA invente rua, número ou endereço; se não houver no dossiê, diga que não tem o endereço cadastrado.
+- Depois da resposta principal, você pode conduzir com suavidade para o próximo passo, mas sem soar insistente nem genérico.
+- Diretriz de atendimento: ${agentRuntimeContext.booking_context}
+- Diretriz de triagem: ${agentRuntimeContext.triage_context}
+
+OBJETIVO DESTA RESPOSTA:
+${actionGuidance[params.action]}`
+
+  const userPrompt = `Histórico recente:
+${historyText}
+
+Mensagem atual do cliente:
+"${params.message}"
+
+Contexto estrutural do turno:
+- action: ${params.action}
+- business_name: ${businessName}
+- selected_service_name: ${params.selectedServiceName || ""}
+- selected_service_price: ${typeof params.selectedServicePrice === "number" ? `R$ ${params.selectedServicePrice}` : ""}
+- selected_service_description: ${params.selectedServiceDescription || ""}
+- faq_answer: ${params.faqAnswer || ""}
+- service_list: ${serviceListText}
+
+Responda apenas com a mensagem final ao cliente.`
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 180,
+        temperature: 0.7,
+      }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    return content || null
+  } catch {
+    return null
+  }
+}
+
+export async function generateBookingReplyWithAI(params: {
+  config: SimulatorConfig
+  message: string
+  history?: Array<{ role: string; content: string }>
+  action:
+    | "ask_audience_confirmation"
+    | "ask_attendee_name"
+    | "ask_service"
+    | "offer_sequence_template"
+    | "ask_date"
+    | "ask_time"
+    | "ask_contact"
+    | "confirm_booking"
+    | "offer_calendar"
+  attendeeName?: string
+  serviceNames?: string[]
+  dateIso?: string
+  time?: string
+  runtimeContext?: {
+    business_brain?: BusinessBrain
+    agent_narrative?: AgentNarrative
+    agent_runtime_context?: AgentRuntimeContext
+  }
+}): Promise<string | null> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!apiKey) return null
+
+  const { businessBrain, agentRuntimeContext, businessContext } = resolveNarrativeArtifacts({
+    config: params.config,
+    businessBrain: params.runtimeContext?.business_brain,
+    agentNarrative: params.runtimeContext?.agent_narrative,
+    agentRuntimeContext: params.runtimeContext?.agent_runtime_context,
+  })
+
+  const nowAvailabilityContext = getNowAndTodayAvailabilityContext(params.config)
+
+  const historyText =
+    (params.history || []).length > 0
+      ? (params.history || [])
+          .slice(-10)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : "(sem histórico)"
+
+  const businessName = businessBrain.business_name || "o negócio"
+  const now = new Date()
+  const todayIso = getTodayIsoBusinessTz(now)
+  const tomorrowIso = addDaysToIsoDate(todayIso, 1)
+  const todayDdMm = formatDatePt(todayIso)
+  const tomorrowDdMm = formatDatePt(tomorrowIso)
+  const bookingDateContext = `DATA: Hoje é ${todayDdMm}. Amanhã é ${tomorrowDdMm}. Use APENAS estas datas; nunca invente dia ou mês. Se o cliente disse amanhã, amanhã é ${tomorrowDdMm}.`
+  const holidaysContext = await getHolidaysContextForPrompt(params.config, todayIso, tomorrowIso)
+
+  const actionGuidance: Record<string, string> = {
+    ask_audience_confirmation:
+      "Confirme o encaixe no público de forma natural (ex.: 'Só para confirmar: atendemos [público]. Vocês se encaixam?'). NUNCA pergunte idade (ex.: 'tem mais de 6 anos?') nem peça que o cliente se classifique por idade.",
+    ask_attendee_name:
+      "Peça o nome da pessoa de forma humana e situada no atendimento. Se parecer single booking, não sugira múltiplos atendidos à toa.",
+    ask_service:
+      "Conduza a escolha do serviço de forma natural, sem soar formulário. Se já houver contexto suficiente, reconheça isso.",
+    offer_sequence_template:
+      "Ofereça a continuação do próximo atendimento de forma natural e acolhedora.",
+    ask_date:
+      "Peça data ou preferência de dia/turno de forma fluida, como recepção real. Consulte o bloco AGORA/Expediente: se hoje já encerrou, não ofereça hoje; sugira amanhã ou outro dia.",
+    ask_time:
+      "Peça o horário ou preferência de horário de forma natural. Consulte o bloco AGORA/Expediente: se o cliente pediu horário para hoje e o expediente de hoje já encerrou, NÃO diga que tem horários; diga que já encerramos e sugira amanhã ou outro dia.",
+    ask_contact:
+      "Peça o contato necessário de forma leve e contextual, explicando isso com naturalidade quando fizer sentido.",
+    confirm_booking:
+      "Confirme o que foi entendido do agendamento de forma clara, cordial e humana, preparando a confirmação final.",
+    offer_calendar:
+      "Ofereça adicionar ao calendário de forma simples e natural, sem linguagem técnica.",
+  }
+
+  const systemPrompt = `Você é a assistente virtual de ${businessName}.
+
+${bookingDateContext}
+
+${nowAvailabilityContext}
+
+${holidaysContext}
+
+DOSSIE DO NEGÓCIO:
+${businessContext}
+
+REGRAS:
+- Responda em português do Brasil.
+- Soe como recepção real do estabelecimento.
+- Seja cordial, natural e contextual.
+- Não escreva como um fluxo técnico ou formulário.
+- Use o que já foi dito na conversa; não repita pergunta desnecessária.
+- Se existir nome, serviço, data ou horário no contexto, use isso naturalmente.
+- Se o cliente JÁ disse que quer amanhã (ou outro dia), NÃO repita que "o expediente de hoje encerrou"; vá direto ao ponto.
+- NUNCA invente data ou mês; use só as datas do bloco DATA acima.
+- Se a data que o cliente quer for feriado e nós não atendemos nesse feriado, diga com naturalidade e sugira outro dia (use o bloco Feriados acima).
+- INTERRUPÇÃO NO MEIO DO AGENDAMENTO: Se a mensagem atual do cliente for uma pergunta informativa (ex.: "Onde vocês ficam?", "Qual o horário?", "Quanto custa o X?", "Tem estacionamento?"), responda à pergunta usando o dossiê e, na MESMA mensagem, retome o fluxo: recapitule em uma frase o que já temos (nome, serviço, data, horário, etc.) e peça o próximo dado que falta (ex.: contato). Uma única mensagem: resposta à dúvida + recap + pergunta do próximo slot.
+- Diretriz de atendimento: ${agentRuntimeContext.booking_context}
+- Diretriz de triagem: ${agentRuntimeContext.triage_context}
+
+OBJETIVO DESTA RESPOSTA:
+${actionGuidance[params.action]}`
+
+  const userPrompt = `Histórico recente:
+${historyText}
+
+Mensagem atual do cliente:
+"${params.message}"
+
+Contexto estrutural do turno:
+- action: ${params.action}
+- attendee_name: ${params.attendeeName || ""}
+- service_names: ${(params.serviceNames || []).join(", ")}
+- date: ${params.dateIso || ""}
+- time: ${params.time || ""}
+
+Responda apenas com a mensagem final ao cliente.`
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 180,
+        temperature: 0.7,
+      }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    return content || null
+  } catch {
+    return null
+  }
+}
+
 export async function interpretFlowWithAI(
   message: string,
   history: Array<{ role: string; content: string }>,
   state: SimulatorState,
-  config: SimulatorConfig
+  config: SimulatorConfig,
+  semanticContext?: SemanticContinuationContext
 ): Promise<FlowOrchestratorOutput | null> {
-  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  const apiKey = getOpenAIApiKey()
   if (!apiKey) return null
 
-  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
-  const businessType = config.business_type || "empresa"
+  const { businessBrain, agentRuntimeContext } = resolveNarrativeArtifacts({ config })
+  const servicesList = resolveServiceNames({ config, businessBrain })
+  const businessType = resolveBusinessType({ config, businessBrain })
   const servicesJson = servicesList.length ? JSON.stringify(servicesList) : "[]"
 
   const historyText =
@@ -310,15 +847,21 @@ REGRAS:
 - Se o histórico indica que o cliente perguntou sobre X antes e agora pede Y para outra(s) pessoa(s), considere inferred_attendees: "other_person" ou "multiple".
 - Se não conseguir mapear, retorne suggested_action: "no_match_fallback".
 - MENSAGENS VAGAS OU INCOMPLETAS: Se a mensagem for muito curta, incompleta ou não transmitir intenção clara (ex: letra solta, "a", "o", "kk", fragmento), retorne suggested_action: "ask_clarification" com clarification_question amigável como "Não entendi, pode repetir? Como posso ajudar?" — NUNCA assuma serviço ou intenção em mensagens ambíguas.
+- Contexto de triagem do negocio: ${agentRuntimeContext.triage_context}
 - Retorne APENAS JSON válido.`
 
-  const style = config.interaction_style || "numbered_options"
+  const style = resolveInteractionStyle({ config, businessBrain })
   const styleNote =
     style === "conversational"
       ? " Estilo: CONVERSA NATURAL — priorize interpretar intenção em texto livre; retorne start_booking quando o cliente manifestar vontade de agendar/marcar em QUALQUER redação (não exija palavras como 'agendar' ou 'marcar')."
       : style === "hybrid"
         ? " Estilo: MISTO — interpre contexto; em dúvida, aceite formas naturais de pedir agendamento como start_booking."
         : " Estilo: OPÇÕES NUMERADAS — cliente pode responder por número em alguns momentos."
+
+  const continuationPrompt = buildSemanticContinuationPrompt(semanticContext, [
+    'Se continuation_kind = "price_followup", priorize "answer_price" em vez de "start_booking".',
+    'Se continuation_kind = "audience_confirmation", nao volte para um fluxo generico.',
+  ])
 
   const userPrompt = `Mensagem atual do cliente: "${message}"
 
@@ -328,31 +871,24 @@ ${historyText}
 Config do negócio:
 - Tipo: ${businessType}
 - Serviços oferecidos: ${servicesJson}
+- Radar do negocio: ${agentRuntimeContext.service_context}
+- Publico e elegibilidade: ${agentRuntimeContext.audience_context}
 -${styleNote}
+${continuationPrompt}
 
 Retorne JSON com: intent, inferred_service (o que o cliente pediu ou nome exato da lista se houver match), inferred_attendees (single|multiple|other_person ou null), suggested_action, clarification_question (string ou null), confidence (0-1).`
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 200,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      }),
+    const content = await requestOpenAIChat({
+      apiKey,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_tokens: 200,
+      temperature: 0.2,
+      response_format: { type: "json_object" },
     })
-    if (!response.ok) return null
-    const data = await response.json()
-    const content = data.choices?.[0]?.message?.content?.trim()
     if (!content) return null
     const parsed = JSON.parse(content)
     const action = parsed.suggested_action
@@ -393,6 +929,320 @@ export type SlotsInterpretation = {
   needs_availability_check?: boolean
 }
 
+export type SemanticTurnAIInterpretation = {
+  flow: FlowOrchestratorOutput | null
+  booking_request: BookingRequestInterpretation | null
+  slots: SlotsInterpretation | null
+}
+
+function normalizeSemanticTurnInterpretation(
+  parsed: Record<string, unknown>,
+  servicesList: string[]
+): SemanticTurnAIInterpretation {
+  const validActions = ["answer_price", "start_booking", "list_services", "ask_clarification", "no_match_fallback", "service_detail"]
+  const action =
+    typeof parsed.suggested_action === "string" && validActions.includes(parsed.suggested_action)
+      ? parsed.suggested_action
+      : "no_match_fallback"
+  const inferredService =
+    typeof parsed.inferred_service === "string" && parsed.inferred_service.trim()
+      ? servicesList.find((s) => normalizeText(s) === normalizeText(parsed.inferred_service as string)) || String(parsed.inferred_service).trim()
+      : undefined
+  const flow: FlowOrchestratorOutput = {
+    intent: typeof parsed.intent === "string" ? parsed.intent as any : "no_match",
+    inferred_service: inferredService,
+    inferred_attendees:
+      typeof parsed.inferred_attendees === "string" &&
+      ["single", "multiple", "other_person"].includes(parsed.inferred_attendees)
+        ? parsed.inferred_attendees as "single" | "multiple" | "other_person"
+        : undefined,
+    suggested_action: action as FlowOrchestratorOutput["suggested_action"],
+    clarification_question:
+      typeof parsed.clarification_question === "string" ? parsed.clarification_question : undefined,
+    confidence:
+      typeof parsed.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5,
+  }
+
+  const attendeeNames = Array.isArray(parsed.attendee_names)
+    ? parsed.attendee_names
+        .filter((value) => typeof value === "string" && value.trim())
+        .map((value) => String(value).trim())
+    : []
+  const matchedServices = Array.isArray(parsed.service_names)
+    ? parsed.service_names
+        .filter((value) => typeof value === "string" && value.trim())
+        .map((value) => servicesList.find((svc) => normalizeText(svc) === normalizeText(String(value))) || String(value).trim())
+    : inferredService ? [inferredService] : []
+  const booking_request: BookingRequestInterpretation = {
+    booking_intent: parsed.booking_intent === true,
+    includes_self: parsed.includes_self === true,
+    attendee_names: Array.from(new Set(attendeeNames)),
+    additional_count:
+      typeof parsed.additional_count === "number" && parsed.additional_count >= 0
+        ? parsed.additional_count
+        : attendeeNames.length > 1
+          ? attendeeNames.length - 1
+          : 0,
+    for_whom:
+      typeof parsed.for_whom === "string" && parsed.for_whom.trim()
+        ? parsed.for_whom.trim()
+        : null,
+    service_names: Array.from(new Set(matchedServices.filter(Boolean))),
+  }
+
+  const slots: SlotsInterpretation = {
+    attendee_name:
+      typeof parsed.attendee_name === "string" && parsed.attendee_name.trim()
+        ? parsed.attendee_name.trim()
+        : null,
+    relationship_only: parsed.relationship_only === true,
+    relationship:
+      typeof parsed.relationship === "string" && parsed.relationship.trim()
+        ? parsed.relationship.trim()
+        : null,
+    service:
+      typeof parsed.service === "string" && parsed.service.trim()
+        ? servicesList.find((s) => normalizeText(s) === normalizeText(parsed.service as string)) || String(parsed.service).trim()
+        : null,
+    date: typeof parsed.date === "string" ? parsed.date : null,
+    time:
+      typeof parsed.time === "string" && parsed.time.trim()
+        ? (String(parsed.time).includes(":")
+          ? String(parsed.time)
+          : `${String(parseInt(String(parsed.time), 10)).padStart(2, "0")}:00`)
+        : null,
+    needs_availability_check: parsed.needs_availability_check === true,
+  }
+
+  return {
+    flow,
+    booking_request,
+    slots,
+  }
+}
+
+export async function interpretSemanticTurnWithAI(
+  message: string,
+  context: {
+    history?: Array<{ role: string; content: string }>
+    state?: SimulatorState
+    sender_display_name?: string
+    waiting_for?: "attendee_name" | "service" | "date" | "time" | "contact"
+    current_slots?: { attendee_name?: string; service?: string; date?: string; time?: string }
+    services?: Array<{ name: string }>
+    last_assistant_message?: string
+    continuation?: SemanticContinuationContext
+    business_brain?: BusinessBrain
+    agent_narrative?: AgentNarrative
+    agent_runtime_context?: AgentRuntimeContext
+  },
+  config: SimulatorConfig
+): Promise<SemanticTurnAIInterpretation | null> {
+  const apiKey = getOpenAIApiKey()
+  if (!apiKey) return null
+
+  const servicesList = (context.services || resolveConfiguredServicesFromConfig(config)).map((s) => s.name).filter(Boolean)
+  const { agentRuntimeContext, businessContext } = resolveNarrativeArtifacts({
+    config,
+    businessBrain: context.business_brain,
+    agentNarrative: context.agent_narrative,
+    agentRuntimeContext: context.agent_runtime_context,
+  })
+  const servicesJson = servicesList.length ? JSON.stringify(servicesList) : "[]"
+  const historyText =
+    context.history && context.history.length > 0
+      ? context.history
+          .slice(-8)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : "(sem historico)"
+  const continuationPrompt = buildSemanticContinuationPrompt(context.continuation, [
+    'Se continuation_kind = "price_followup", isso sozinho nao significa booking_intent.',
+  ])
+  const slotsDesc = context.current_slots
+    ? `Slots atuais: attendee=${context.current_slots.attendee_name || "-"}, service=${context.current_slots.service || "-"}, date=${context.current_slots.date || "-"}, time=${context.current_slots.time || "-"}`
+    : "Slots atuais: attendee=-, service=-, date=-, time=-"
+  const senderLine = context.sender_display_name?.trim()
+    ? `Nome do remetente atual: "${context.sender_display_name.trim()}".`
+    : "Nome do remetente atual: desconhecido."
+
+  const systemPrompt = `Voce interpreta um turno conversacional completo para um assistente virtual de negocios.
+Retorne APENAS JSON valido.
+
+Voce deve produzir uma leitura semantica unica do turno atual, cobrindo ao mesmo tempo:
+- fluxo principal (price, booking, list_services, service_detail, clarification, fallback)
+- pedido de booking (booking_intent, includes_self, attendee_names, additional_count, for_whom, service_names)
+- slots estruturados (attendee_name, relationship_only, relationship, service, date, time, needs_availability_check)
+
+Regras criticas:
+- Se o cliente perguntou preco, priorize suggested_action = "answer_price".
+- Se continuation_kind = "price_followup", trate a mensagem como continuidade da selecao do servico para responder preco. Isso sozinho nao significa booking_intent.
+- Se continuation_kind = "audience_confirmation", trate a mensagem como continuidade de booking ja iniciado.
+- Nao dependa de frases fixas; use historico, pergunta anterior e estado atual.
+- Contexto identitario e operacional do negocio:
+${businessContext}
+- Diretriz de atendimento e booking: ${agentRuntimeContext.booking_context}
+- Diretriz de multiagendamento: ${agentRuntimeContext.multi_booking_context}
+- Diretriz de triagem: ${agentRuntimeContext.triage_context}
+- Servicos validos: ${servicesJson}
+- Quando houver servico citado, normalize para o nome mais proximo da lista.
+- Quando a mensagem for vaga, use ask_clarification somente se nao houver continuidade suficiente no contexto.`
+
+  const userPrompt = `Mensagem atual: "${message}"
+Historico recente:
+${historyText}
+
+${senderLine}
+${slotsDesc}
+waiting_for: ${context.waiting_for || "attendee_name"}
+${continuationPrompt}
+
+Retorne JSON com os campos:
+intent, inferred_service, inferred_attendees, suggested_action, clarification_question, confidence,
+booking_intent, includes_self, attendee_names, additional_count, for_whom, service_names,
+attendee_name, relationship_only, relationship, service, date, time, needs_availability_check.`
+
+  try {
+    const content = await requestOpenAIChat({
+      apiKey,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_tokens: 300,
+      temperature: 0.1,
+      response_format: { type: "json_object" },
+    })
+    if (!content) return null
+    return normalizeSemanticTurnInterpretation(JSON.parse(content), servicesList)
+  } catch {
+    return null
+  }
+}
+
+/** Parâmetros para a IA decidir a próxima ação de booking (sem ordem fixa). */
+export interface GetBookingNextActionParams {
+  message: string
+  history?: Array<{ role: string; content: string }>
+  /** Resumo dos slots atuais (estado + extração deste turno). */
+  slotsSummary: string
+  hasAttendee: boolean
+  hasService: boolean
+  hasDate: boolean
+  hasTime: boolean
+  hasContact: boolean
+  audienceRequiresConfirmation: boolean
+  shouldOfferSequenceTemplate: boolean
+  businessContext: string
+  runtimeContext?: AgentRuntimeContext
+  /** Serviços do estabelecimento (nome de cada um) para a IA conhecer o negócio. */
+  servicesList?: string[]
+}
+
+const BOOKING_ACTIONS = [
+  "ask_audience_confirmation",
+  "ask_attendee_name",
+  "ask_service",
+  "offer_sequence_template",
+  "ask_date",
+  "ask_time",
+  "ask_contact",
+  "confirm_booking",
+  "offer_calendar",
+] as const
+
+/**
+ * IA decide a próxima ação de booking como atendente do estabelecimento.
+ * Conhece o negócio (config do onboarding), preenche o que o cliente disse e pergunta o que ainda falta — sem ordem fixa.
+ */
+export async function getBookingNextActionFromAI(
+  params: GetBookingNextActionParams
+): Promise<string | null> {
+  const apiKey = Deno.env.get("OPENAI_API_KEY")
+  if (!apiKey) return null
+
+  const historyText =
+    (params.history || []).length > 0
+      ? (params.history || [])
+          .slice(-8)
+          .map((m) => `${m.role === "user" ? "Cliente" : "Assistente"}: ${m.content}`)
+          .join("\n")
+      : "(sem histórico)"
+
+  const servicesLine =
+    Array.isArray(params.servicesList) && params.servicesList.length > 0
+      ? `Serviços oferecidos: ${params.servicesList.join(", ")}.`
+      : ""
+
+  const systemPrompt = `Você é o ATENDENTE do estabelecimento. Você conhece o negócio pelas configurações do onboarding e é responsável por agendar o cliente.
+
+Seu papel:
+- Saber o que preencher: nome da pessoa, serviço, data, horário, contato para confirmação.
+- Preencher com o que o cliente já disse (nesta mensagem ou no histórico). O estado dos slots abaixo já reflete o que foi extraído; use-o como verdade.
+- Perguntar apenas o que AINDA FALTA, na ordem que fizer sentido para a conversa — não há ordem fixa. Pense como um humano preenchendo o agendamento na frente do computador: você pergunta o próximo dado que falta, até ter tudo.
+- Se o público-alvo do estabelecimento exige confirmação (audience_requires_confirmation = true), primeiro confirme que o cliente se encaixa (ask_audience_confirmation).
+- Se há segundo agendamento e faz sentido oferecer mesmo dia/outro dia/próximo horário, use offer_sequence_template.
+- Quando todos os dados necessários estiverem preenchidos, retorne confirm_booking.
+
+REGRAS:
+- Decida UMA ação por vez: a que faz sentido AGORA dado o estado e a mensagem do cliente.
+- Não invente ordem rígida: a ação é a que um atendente humano faria neste momento (perguntar o que falta ou confirmar o agendamento).
+- Ações válidas (retorne exatamente uma): ${BOOKING_ACTIONS.join(", ")}
+
+${servicesLine}
+
+Contexto do negócio (você conhece o estabelecimento):
+${params.businessContext}
+${params.runtimeContext?.booking_context ? `\nDiretriz de booking: ${params.runtimeContext.booking_context}` : ""}`
+
+  const userPrompt = `Estado atual do agendamento (o que já está preenchido):
+${params.slotsSummary}
+- has_attendee: ${params.hasAttendee}
+- has_service: ${params.hasService}
+- has_date: ${params.hasDate}
+- has_time: ${params.hasTime}
+- has_contact: ${params.hasContact}
+- audience_requires_confirmation: ${params.audienceRequiresConfirmation}
+- should_offer_sequence_template: ${params.shouldOfferSequenceTemplate}
+
+Mensagem atual do cliente: "${params.message}"
+
+Histórico recente:
+${historyText}
+
+Retorne APENAS um JSON: { "action": "<uma das ações válidas>" }`
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 80,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      }),
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    if (!content) return null
+    const parsed = JSON.parse(content)
+    const action = typeof parsed?.action === "string" ? parsed.action.trim() : null
+    if (!action || !BOOKING_ACTIONS.includes(action as (typeof BOOKING_ACTIONS)[number])) return null
+    return action
+  } catch {
+    return null
+  }
+}
+
 export async function interpretSlotsFromMessageWithAI(
   message: string,
   context: {
@@ -403,13 +1253,27 @@ export async function interpretSlotsFromMessageWithAI(
     last_assistant_message?: string
     /** Nome do remetente (ex: pushName WhatsApp). Nunca usar como attendee_name. */
     sender_display_name?: string
+    continuation?: SemanticContinuationContext
+    business_brain?: BusinessBrain
+    agent_narrative?: AgentNarrative
+    agent_runtime_context?: AgentRuntimeContext
   },
   config: SimulatorConfig
 ): Promise<SlotsInterpretation | null> {
   const apiKey = Deno.env.get("OPENAI_API_KEY")
   if (!apiKey) return null
 
-  const servicesList = (context.services || config.services || []).map((s) => s.name).filter(Boolean)
+  const { businessBrain, agentRuntimeContext } = resolveNarrativeArtifacts({
+    config,
+    businessBrain: context.business_brain,
+    agentNarrative: context.agent_narrative,
+    agentRuntimeContext: context.agent_runtime_context,
+  })
+  const servicesList = resolveServiceNames({
+    config,
+    businessBrain,
+    overrideServices: context.services,
+  })
   const servicesJson = servicesList.length ? JSON.stringify(servicesList) : "[]"
   const historyText =
     context.history && context.history.length > 0
@@ -420,9 +1284,13 @@ export async function interpretSlotsFromMessageWithAI(
       : "(sem histórico)"
   const lastAssistant = context.last_assistant_message || ""
   const waitingFor = context.waiting_for || "attendee_name"
+  const interactionStyle = resolveInteractionStyle({ config, businessBrain })
   const slotsDesc = context.current_slots
     ? `Slots atuais: attendee=${context.current_slots.attendee_name || "-"}, service=${context.current_slots.service || "-"}, date=${context.current_slots.date || "-"}, time=${context.current_slots.time || "-"}`
     : ""
+  const continuationPrompt = buildSemanticContinuationPrompt(context.continuation, [
+    'Se continuation_kind = "price_followup" e a mensagem atual selecionar um servico exibido nas opcoes anteriores, extraia esse servico mesmo que o texto seja curto ou apenas uma variacao do nome.',
+  ])
 
   const senderNote =
     context.sender_display_name && context.sender_display_name.trim()
@@ -448,7 +1316,12 @@ REGRAS para service, date, time:
 - Horários: "às 14", "14h", "as 14" → time: "14:00"
 - "tem horário às 14?" ou "tem disponibilidade às 14?" → needs_availability_check: true, time: "14:00"
 - "quero agendar pra amanhã", "pra hoje ainda tem vaga?" → extraia a data (hoje/amanhã) em YYYY-MM-DD.
-${(config.interaction_style === "conversational" || config.interaction_style === "hybrid") ? " Estilo conversacional/híbrido: o cliente pode indicar serviço, data e horário de qualquer forma; use o histórico e a mensagem para extrair, mesmo que seja indireto ou coloquial." : ""}
+${(interactionStyle === "conversational" || interactionStyle === "hybrid") ? " Estilo conversacional/híbrido: o cliente pode indicar serviço, data e horário de qualquer forma; use o histórico e a mensagem para extrair, mesmo que seja indireto ou coloquial." : ""}
+- Escopo de servicos e elegibilidade do negocio:
+${agentRuntimeContext.service_context}
+${agentRuntimeContext.audience_context}
+
+${continuationPrompt}
 
 Retorne APENAS JSON: attendee_name (string ou null), relationship_only (boolean), relationship (string ou null), service (string da lista ou null), date (YYYY-MM-DD ou null), time (HH:MM ou null), needs_availability_check (boolean).`
 
@@ -503,7 +1376,9 @@ Extraia as informações. Retorne JSON.`
     const svc =
       parsed.service && typeof parsed.service === "string"
         ? servicesList.find((s) => normalizeText(s) === normalizeText(parsed.service)) || parsed.service
-        : undefined
+        : context.continuation?.kind === "price_followup" && context.continuation?.matched_option
+          ? servicesList.find((s) => normalizeText(s) === normalizeText(context.continuation?.matched_option || ""))
+          : undefined
     const time =
       parsed.time && typeof parsed.time === "string"
         ? parsed.time.includes(":")
@@ -597,6 +1472,8 @@ export async function generateAvailabilityResponseWithAI(
     service?: string
     /** Motivo real (ex.: pausa, fora do expediente). Quando informado, a IA DEVE usar esse motivo e não inventar "intervalo entre atendimentos". */
     unavailable_reason?: string
+    /** Quando o horário pedido está ocupado, sugira este próximo horário livre no estilo: "As X já está preenchido, mas posso agendar as Y, que tal?" */
+    suggested_next_slot?: string
   },
   history: Array<{ role: string; content: string }> = []
 ): Promise<string> {
@@ -618,9 +1495,13 @@ export async function generateAvailabilityResponseWithAI(
   const attendeePart = context.attendee_name ? ` para ${context.attendee_name}` : ""
   const servicePart = context.service ? ` (${context.service})` : ""
 
+  const suggestNextPhrase =
+    context.suggested_next_slot
+      ? ` Se houver suggested_next_slot, use exatamente: "As [horario solicitado] ja esta preenchido, mas posso agendar as ${context.suggested_next_slot}, que tal?"`
+      : ""
   const reasonInstruction =
     context.unavailable_reason?.trim()
-      ? `MOTIVO REAL (use exatamente isso, nao invente "intervalo entre atendimentos"): ${context.unavailable_reason}. Sugira apenas horarios da lista Horarios livres.`
+      ? `MOTIVO REAL (use exatamente isso, nao invente "intervalo entre atendimentos"): ${context.unavailable_reason}. Sugira apenas horarios da lista Horarios livres.${suggestNextPhrase}`
       : "Informe que aquele horario nao esta livre e sugira alternativas da lista available_slots."
 
   const systemPrompt = `Voce gera mensagens curtas e naturais para atendimento via chat.
@@ -638,6 +1519,7 @@ Mantenha 1-2 frases. Retorne apenas o texto, sem markdown.`
 - Disponivel: ${context.is_available ? "sim" : "nao"}
 ${!context.is_available && context.available_slots?.length ? `- Horarios livres (sugira apenas estes): ${context.available_slots.slice(0, 10).join(", ")}` : ""}
 ${!context.is_available && context.unavailable_reason ? `- Motivo: ${context.unavailable_reason}` : ""}
+${!context.is_available && context.suggested_next_slot ? `- Sugira este proximo horario: ${context.suggested_next_slot} (frase: "As [horario pedido] ja esta preenchido, mas posso agendar as ${context.suggested_next_slot}, que tal?")` : ""}
 ${historyText ? `\nHistorico:\n${historyText}` : ""}
 
 Gere a resposta fluida:`
@@ -662,7 +1544,19 @@ Gere a resposta fluida:`
     if (!response.ok) throw new Error()
     const data = await response.json()
     const content = data.choices?.[0]?.message?.content?.trim()
-    if (content) return content
+    if (content) {
+      // Blindagem: evitar "já temos" (soa como preencheu antes).
+      // Queremos confirmação direta: "Temos horário às 14:00."
+      if (context.is_available) {
+        return content
+          .replace(/\bj[aá]\s+temos\b/gi, "Temos")
+          .replace(/\bj[aá]\s+temos\s+um\s+hor[aá]rio\s+dispon[ií]vel\b/gi, "Temos horário disponível")
+          .replace(/^\s*(o?timo|ótimo)!\s*/i, "")
+          .replace(/\btenho\s+um\s+hor[aá]rio\s+dispon[ií]vel\b/gi, "Temos horário disponível")
+          .replace(/\btenho\s+hor[aá]rio\s+dispon[ií]vel\b/gi, "Temos horário disponível")
+      }
+      return content
+    }
   } catch {
     // fallback
   }
@@ -779,12 +1673,22 @@ export async function interpretBookingRequestWithAI(
   context: {
     history?: Array<{ role: string; content: string }>
     sender_display_name?: string
+    continuation?: SemanticContinuationContext
+    business_brain?: BusinessBrain
+    agent_narrative?: AgentNarrative
+    agent_runtime_context?: AgentRuntimeContext
   },
   config: SimulatorConfig
 ): Promise<BookingRequestInterpretation | null> {
   const normalized = normalizeText(text || "")
-  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
-  const heuristicServices = findServicesFromText(text, config.services || [])
+  const { businessBrain, agentRuntimeContext } = resolveNarrativeArtifacts({
+    config,
+    businessBrain: context.business_brain,
+    agentNarrative: context.agent_narrative,
+    agentRuntimeContext: context.agent_runtime_context,
+  })
+  const servicesList = resolveServiceNames({ config, businessBrain })
+  const heuristicServices = findServicesFromText(text, businessBrain.services || [])
   const explicitCountMatch =
     normalized.match(/\bnos?\s+(\d+)\b/) ||
     normalized.match(/\b(\d+)\s+(pessoas|agendamentos|cortes?)\b/)
@@ -800,7 +1704,7 @@ export async function interpretBookingRequestWithAI(
     }
   }
 
-  const openaiKey = Deno.env.get("OPENAI_API_KEY")
+  const openaiKey = getOpenAIApiKey()
   if (!openaiKey) {
     return heuristicServices.length > 0
       ? {
@@ -825,6 +1729,9 @@ export async function interpretBookingRequestWithAI(
   const senderLine = context.sender_display_name?.trim()
     ? `Nome do remetente atual: "${context.sender_display_name.trim()}".`
     : "Nome do remetente atual: desconhecido."
+  const continuationPrompt = buildSemanticContinuationPrompt(context.continuation, [
+    'Se continuation_kind = "price_followup", a mensagem atual pode ser apenas selecao do servico para responder preco, e isso sozinho NAO significa novo booking_intent.',
+  ])
 
   const systemPrompt =
     "Voce extrai um pedido de agendamento em estrutura semantica. " +
@@ -835,7 +1742,10 @@ export async function interpretBookingRequestWithAI(
     `Mensagem atual: "${text}"\n` +
     `Historico recente:\n${historyText}\n` +
     `${senderLine}\n` +
-    `Servicos do negocio: ${servicesJson}\n\n` +
+    `${continuationPrompt}\n` +
+    `Servicos do negocio: ${servicesJson}\n` +
+    `Conducao de multiagendamento: ${agentRuntimeContext.multi_booking_context}\n` +
+    `Triagem e escopo: ${agentRuntimeContext.triage_context}\n\n` +
     "Retorne JSON com:\n" +
     '- booking_intent (boolean): true quando a mensagem quer marcar/agendar atendimento.\n' +
     '- includes_self (boolean): true quando a pessoa inclui a si mesma no pedido ("pra mim", "eu", "nos").\n' +
@@ -852,26 +1762,16 @@ export async function interpretBookingRequestWithAI(
     '- Se houver duvida entre uma ou varias pessoas, prefira refletir a mensagem literal do cliente.\n'
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${openaiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 220,
-        temperature: 0,
-        response_format: { type: "json_object" },
-      }),
+    const content = await requestOpenAIChat({
+      apiKey: openaiKey,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_tokens: 220,
+      temperature: 0,
+      response_format: { type: "json_object" },
     })
-    if (!response.ok) return null
-    const data = await response.json()
-    const content = data.choices?.[0]?.message?.content?.trim()
     if (!content) return null
     const parsed = JSON.parse(content)
     const attendeeNames = Array.isArray(parsed.attendee_names)

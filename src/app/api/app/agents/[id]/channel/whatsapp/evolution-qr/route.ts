@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import {
+  resolveEvolutionApiKey,
+  sanitizeEvolutionBaseUrl,
+} from '@/lib/whatsapp/evolution'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
+
+function getEvolutionEnvApiKey(): string | null {
+  return (
+    process.env.EVOLUTION_AUTO_API_KEY?.trim() ||
+    process.env.EVOLUTION_API_KEY?.trim() ||
+    null
+  )
+}
 
 /**
  * GET /api/app/agents/[id]/channel/whatsapp/evolution-qr
@@ -45,7 +57,7 @@ export async function GET(
   if (
     !channel?.evolution_base_url ||
     !channel?.evolution_instance ||
-    !channel?.evolution_api_key_encrypted
+    (!channel?.evolution_api_key_encrypted && !getEvolutionEnvApiKey())
   ) {
     return NextResponse.json(
       { error: 'Canal Evolution não configurado. Salve URL, instância e API Key primeiro.' },
@@ -53,9 +65,15 @@ export async function GET(
     )
   }
 
-  const baseUrl = (channel.evolution_base_url as string).replace(/\/$/, '')
+  const baseUrl = sanitizeEvolutionBaseUrl(channel.evolution_base_url as string).value
   const instance = channel.evolution_instance as string
-  const apiKey = channel.evolution_api_key_encrypted as string
+  const apiKey = resolveEvolutionApiKey({
+    storedValue: channel.evolution_api_key_encrypted as string,
+    envValue: getEvolutionEnvApiKey(),
+  })
+  if (!baseUrl || !apiKey) {
+    return NextResponse.json({ error: 'Configuração Evolution inválida.' }, { status: 400 })
+  }
 
   // Evolution API: GET /instance/connect/{instance}
   // v1/v2 usam o mesmo path. Fallback para /v1/ e /v2/ se a raiz falhar.

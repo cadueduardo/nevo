@@ -2,6 +2,7 @@
 import { pickVariant, formatDatePt, formatTimePeriod } from "./utils.ts"
 import { buildStaffDayOptions } from "./staff.ts"
 import type { SimulatorConfig } from "./types.ts"
+import { resolveConfiguredServicesFromConfig, resolveSequenceEligibleServicesFromConfig } from "./canonical-services.ts"
 
 function formatDaysListForMessage(days: string[]): string {
   const labels = buildStaffDayOptions(days)
@@ -96,6 +97,13 @@ export function buildAvailabilityForDateMessage(
   return `Sim! Tenho estes horários livres ${dateLabel}: ${list}. Vamos agendar?`
 }
 
+/** Quando o cliente pergunta por período (tarde/manhã): "Tenho ainda alguns horários, qual você deseja?" */
+export function buildAvailabilityForPeriodMessage(slots: string[]): string {
+  if (slots.length === 0) return "Nao tenho horarios livres nesse periodo. Quer outro dia ou outro horario?"
+  const list = slots.slice(0, 8).join(", ")
+  return `Tenho ainda alguns horarios, qual voce deseja? Eu vejo aqui a disponibilidade: ${list}.`
+}
+
 export function getCordialPrefix(config: SimulatorConfig, isFirst: boolean): string {
   if (!isFirst) return ""
   const name = config.business_name ? ` da ${config.business_name}` : ""
@@ -177,7 +185,7 @@ export function buildPriceNotAvailableMessage(
 }
 
 export function buildServicesListWithPrices(config: SimulatorConfig): string {
-  const services = config.services || []
+  const services = resolveConfiguredServicesFromConfig(config)
   if (services.length === 0) return "No momento não temos a lista de serviços cadastrada. Posso te ajudar com algo mais?"
   const lines = services.map((s, idx) => {
     const price = s.base_price != null ? ` — R$ ${Number(s.base_price).toFixed(2).replace(".", ",")}` : ""
@@ -203,7 +211,7 @@ export function buildListServicesMessage(
 }
 
 export function buildGenericFallback(config: SimulatorConfig): string {
-  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
+  const servicesList = resolveConfiguredServicesFromConfig(config).map((s) => s.name).filter(Boolean)
   if (servicesList.length > 0) {
     const list = servicesList.join(", ")
     return `Não entendi exatamente o que deseja. Nós trabalhamos com: ${list}. Podemos te ajudar com algum dos nossos serviços?`
@@ -242,13 +250,14 @@ export function buildServicePrompt(
   if (context?.attendee_name) {
     parts.push(`Certo, qual servico voce quer agendar para ${context.attendee_name}?`)
   } else {
-    const canSequence = config.allow_sequence_booking && (config.sequence_eligible_services?.length ?? 0) > 0
+    const sequenceEligibleServices = resolveSequenceEligibleServicesFromConfig(config)
+    const canSequence = config.allow_sequence_booking && sequenceEligibleServices.length > 0
     if (canSequence) {
-      const sequenceExamples = (config.sequence_eligible_services || [])
+      const sequenceExamples = sequenceEligibleServices
         .map((s) => s?.trim())
         .filter(Boolean)
         .slice(0, 2)
-      const fallbackExamples = (config.services || [])
+      const fallbackExamples = resolveConfiguredServicesFromConfig(config)
         .map((s) => s.name?.trim())
         .filter(Boolean)
         .slice(0, 2)
@@ -261,7 +270,7 @@ export function buildServicePrompt(
   }
   return {
     message: parts.join(" "),
-    action_options: buildServiceOptions(config.services || []),
+    action_options: buildServiceOptions(resolveConfiguredServicesFromConfig(config)),
   }
 }
 
@@ -309,7 +318,7 @@ export function buildRejectionMessage(
   isFirst: boolean,
   hasContext: boolean = true
 ): string {
-  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
+  const servicesList = resolveConfiguredServicesFromConfig(config).map((s) => s.name).filter(Boolean)
   const hasServices = servicesList.length > 0
 
   if (inferredArea && inferredArea !== "indefinido") {
@@ -359,7 +368,7 @@ export async function generateRejectionMessageWithAI(
   const openaiKey = Deno.env.get("OPENAI_API_KEY")
   if (!openaiKey) return buildRejectionMessage(inferredArea, config, isFirst, hasContext)
 
-  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
+  const servicesList = resolveConfiguredServicesFromConfig(config).map((s) => s.name).filter(Boolean)
   const businessType = config.business_type || "empresa"
 
   const systemPrompt =

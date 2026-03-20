@@ -1,5 +1,7 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import type { SimulatorConfig } from "../types.ts"
+import { buildAgentNarrative } from "./agent-narrative.ts"
+import { buildAgentRuntimeContext } from "./agent-runtime-context.ts"
 import type {
   AudienceMode,
   BusinessBrain,
@@ -10,9 +12,21 @@ import type {
   BusinessBrainStaffSchedule,
 } from "./types.ts"
 import { normalizeText } from "../utils.ts"
+import { resolveConfiguredServicesFromConfig, resolveSequenceEligibleServicesFromConfig } from "../canonical-services.ts"
 
 function normalizeString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined
+}
+
+function normalizeNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string") {
+    const normalized = value.replace(",", ".").replace(/[^\d.-]/g, "").trim()
+    if (!normalized) return undefined
+    const parsed = Number(normalized)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
 }
 
 function normalizeInteractionStyle(
@@ -68,42 +82,36 @@ function normalizeSchedule(value: unknown): BusinessBrainStaffSchedule | undefin
           .filter(Boolean) as Array<{ start: string; end: string }>
       : undefined,
     interval_minutes:
-      typeof schedule.interval_minutes === "number" ? schedule.interval_minutes : undefined,
+      normalizeNumber(schedule.interval_minutes),
     min_booking_lead_minutes:
-      typeof schedule.min_booking_lead_minutes === "number"
-        ? schedule.min_booking_lead_minutes
-        : undefined,
+      normalizeNumber(schedule.min_booking_lead_minutes),
   }
 }
 
 function normalizeServices(config: SimulatorConfig): BusinessBrainService[] {
-  const raw =
-    Array.isArray(config.booking_services) && config.booking_services.length > 0
-      ? config.booking_services
-      : Array.isArray(config.services)
-        ? config.services
-        : []
+  const mergedServices = resolveConfiguredServicesFromConfig(config)
 
   const sequenceEligible = new Set(
-    (Array.isArray(config.sequence_eligible_services) ? config.sequence_eligible_services : [])
+    resolveSequenceEligibleServicesFromConfig(config)
       .map((item) => normalizeText(String(item || "")))
       .filter(Boolean)
   )
 
-  return raw
+  return mergedServices
     .map((service) => {
-      const name = normalizeString(service?.name)
+      const name = normalizeString(service.name)
       if (!name) return null
       return {
         name,
         normalized_name: normalizeText(name),
-        description: normalizeString(service?.description),
-        duration_minutes:
-          typeof service?.duration_minutes === "number" ? service.duration_minutes : undefined,
-        base_price: typeof service?.base_price === "number" ? service.base_price : undefined,
+        description: normalizeString(service.description),
+        duration_minutes: normalizeNumber(service.duration_minutes),
+        base_price: normalizeNumber(service.base_price),
         sequence_eligible:
           config.allow_sequence_booking === true &&
-          (sequenceEligible.size === 0 || sequenceEligible.has(normalizeText(name))),
+          (typeof service.sequence_eligible === "boolean"
+            ? service.sequence_eligible
+            : sequenceEligible.size === 0 || sequenceEligible.has(normalizeText(name))),
       } as BusinessBrainService
     })
     .filter(Boolean) as BusinessBrainService[]
@@ -157,7 +165,7 @@ function buildPolicies(config: SimulatorConfig): BusinessBrainPolicies {
 }
 
 export function buildBusinessBrain(config: SimulatorConfig): BusinessBrain {
-  return {
+  const brainBase = {
     business_name: normalizeString(config.business_name),
     business_type: normalizeString(config.business_type),
     tone: config.tone,
@@ -187,4 +195,20 @@ export function buildBusinessBrain(config: SimulatorConfig): BusinessBrain {
       : undefined,
     raw_config: config,
   }
+
+  const agentNarrative = buildAgentNarrative(brainBase as BusinessBrain)
+  const agentRuntimeContext = buildAgentRuntimeContext({
+    business_brain: {
+      ...(brainBase as BusinessBrain),
+      agent_narrative: agentNarrative,
+    },
+    agent_narrative: agentNarrative,
+  })
+
+  return {
+    ...brainBase,
+    agent_narrative: agentNarrative,
+    agent_runtime_context: agentRuntimeContext,
+  } as BusinessBrain
 }
+

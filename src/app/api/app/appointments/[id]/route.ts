@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
+import { z } from 'zod'
+
+const appointmentStatusPatchSchema = z.object({
+  status: z.enum(['cancelled', 'rescheduled', 'confirmed']),
+})
 
 /**
  * PATCH /api/app/appointments/[id]
@@ -24,11 +29,12 @@ export async function PATCH(
       return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
     }
 
-    const body = await req.json().catch(() => ({}))
-    const { status } = body as { status?: string }
-    if (status !== 'cancelled' && status !== 'rescheduled' && status !== 'confirmed') {
-      return NextResponse.json({ error: 'status inválido' }, { status: 400 })
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = appointmentStatusPatchSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: 'status invalido' }, { status: 400 })
     }
+    const { status } = parsedBody.data
 
     const { data, error } = await supabase
       .from('appointment')
@@ -49,3 +55,4 @@ export async function PATCH(
     )
   }
 }
+

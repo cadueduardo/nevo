@@ -20,15 +20,47 @@ export interface LeadPolicyConfig {
   min_confidence?: number
 }
 
+export interface SimulatorQuoteService {
+  id: string
+  agent_id?: string
+  name: string
+  pricing_type: string
+  variables_schema: unknown[]
+  pricing_rules: Record<string, unknown>
+  external_variable_keys?: string[]
+  keywords?: string[]
+  active?: boolean
+}
+
+export interface SimulatorBusinessProfileService {
+  name: string
+  description?: string
+  duration_minutes?: number
+  base_price?: number
+  bookable?: boolean
+  catalog_visible?: boolean
+  sequence_eligible?: boolean
+}
+
+export interface SimulatorBusinessProfile {
+  business_name?: string
+  business_type?: string
+  services?: SimulatorBusinessProfileService[]
+}
+
 export interface SimulatorConfig {
   business_name?: string
   business_type?: string
+  business_profile?: SimulatorBusinessProfile
   context_mode?: SimulatorContextMode
   establishment_address?: EstablishmentAddress
   faq?: Array<{ question?: string; answer?: string }>
   tone?: "formal" | "amigavel" | "profissional" | "engracado"
+  /** @deprecated Compat temporária durante migração para business_profile.services. */
   catalog_services?: Array<{ name: string; description?: string }>
+  /** @deprecated Compat temporária durante migração para business_profile.services. */
   booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
+  /** @deprecated Compat temporária durante migração para business_profile.services. */
   services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
   when_client_asks_price_no_value?: "handoff" | "offer_handoff_or_booking"
   schedule?: {
@@ -78,6 +110,7 @@ export interface SimulatorConfig {
     company_phone?: string
     company_email?: string
   }
+  quote_services?: SimulatorQuoteService[]
 }
 
 export interface SimulatorState {
@@ -122,6 +155,21 @@ export interface SimulatorState {
   expected_additional_count?: number
   pending_final_confirmation?: boolean
   pending_calendar_offer?: boolean
+  /** True quando a última mensagem foi pedindo confirmação de público (para reconhecer "sim" na volta). */
+  pending_audience_confirmation?: boolean
+  /** True após o usuário confirmar que se encaixa no público-alvo; evita re-perguntar em loop. */
+  audience_confirmed?: boolean
+  /** Quando existe 2º agendamento, pergunta se deve avisar a 2ª pessoa e coleta o telefone. */
+  pending_secondary_contact?: {
+    attendee_name?: string
+    service?: string
+    date?: string
+    time?: string
+  }
+  /** WhatsApp: aguardando confirmar se pode usar o número do remetente como contato principal. */
+  pending_primary_phone_confirmation?: boolean
+  /** WhatsApp: número candidato (dígitos) do remetente. */
+  primary_phone_candidate?: string
   final_thanks_sent?: boolean
   completed_bookings?: Array<{
     attendee_name?: string
@@ -214,13 +262,11 @@ export interface ConversationTurnRequest {
   context?: {
     business_name?: string
     business_type?: string
+    business_profile?: SimulatorBusinessProfile
     context_mode?: "booking" | "quote" | "both"
     establishment_address?: EstablishmentAddress
     faq?: Array<{ question?: string; answer?: string }>
     tone?: "formal" | "amigavel" | "profissional" | "engracado"
-    catalog_services?: Array<{ name: string; description?: string }>
-    booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
-    services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
     when_client_asks_price_no_value?: "handoff" | "offer_handoff_or_booking"
     schedule?: {
       days_of_week?: string[]
@@ -256,6 +302,7 @@ export interface ConversationTurnRequest {
       note?: string
     }
     interaction_style?: "numbered_options" | "conversational" | "hybrid"
+    quote_services?: SimulatorQuoteService[]
   }
 }
 

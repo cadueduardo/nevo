@@ -4,6 +4,7 @@
 import type { SimulatorConfig, SimulatorState, SimulatorResult } from "./types.ts"
 import { buildResult } from "./state.ts"
 import { detectModeFromText } from "./detection.ts"
+import { resolveConfiguredServicesFromConfig } from "./canonical-services.ts"
 
 export function ensureConversationMode(
   text: string,
@@ -15,7 +16,7 @@ export function ensureConversationMode(
   const canSetMode =
     nextState.slots.service ||
     !config.lead_policy?.reject_unlisted_services ||
-    (config.services || []).length === 0
+    resolveConfiguredServicesFromConfig(config).length === 0
 
   if (!canSetMode) {
     if (!nextState.step) {

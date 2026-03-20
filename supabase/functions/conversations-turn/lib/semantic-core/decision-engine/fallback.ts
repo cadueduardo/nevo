@@ -1,5 +1,6 @@
 // @ts-nocheck
 import type { SemanticDecisionResult, SemanticTurnContext, TurnSemanticSnapshot } from "../types.ts"
+import { shouldRedirectOutOfScopeServiceRequest } from "../service-scope-triage.ts"
 
 function shouldOfferCalendarOnClosing(snapshot: TurnSemanticSnapshot, context: SemanticTurnContext): boolean {
   return snapshot.intents.primary === "closing" && Boolean(context.state.pending_calendar_offer)
@@ -34,9 +35,32 @@ export function decideFallback(
       action: "offer_calendar",
       reason: "customer_is_closing_after_booking",
       confidence: snapshot.intents.confidence,
-      action_options: ["Adicionar no calendario", "Nao, obrigado"],
+      action_options: ["Adicionar no calendário", "Não, obrigado"],
       next_question: "offer_calendar_link",
       channel_hints: { prefer_numbered_options: true, prefer_multi_select: false },
+    }
+  }
+
+  if (snapshot.intents.primary === "closing") {
+    return {
+      action: "reply_closing",
+      reason: "customer_is_closing_conversation",
+      confidence: snapshot.intents.confidence,
+      next_question: "reply_polite_closing",
+      channel_hints: { prefer_numbered_options: false, prefer_multi_select: false },
+    }
+  }
+
+  if (shouldRedirectOutOfScopeServiceRequest(snapshot, context)) {
+    return {
+      action: "reply_service_list",
+      reason: "service_out_of_scope_redirect",
+      confidence: snapshot.intents.confidence,
+      next_question: "service_out_of_scope_redirect",
+      channel_hints: {
+        prefer_numbered_options: context.business_brain.policies.interaction_style !== "conversational",
+        prefer_multi_select: Boolean(context.business_brain.policies.sequence_enabled),
+      },
     }
   }
 

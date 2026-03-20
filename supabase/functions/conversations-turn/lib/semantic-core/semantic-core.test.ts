@@ -1,19 +1,28 @@
 // @ts-nocheck
 import { buildBusinessBrain } from "./business-brain.ts"
+import { buildAgentRuntimeContext } from "./agent-runtime-context.ts"
 import { buildDynamicPeopleQueue, deriveBookingContext } from "./booking-context.ts"
 import { buildPostConfirmationPlan } from "./booking-lifecycle.ts"
 import { decideNextSemanticAction } from "./decision-engine/index.ts"
 import { planSequentialBooking } from "./sequence-planner.ts"
 import { applySemanticPolicies } from "./policy-layer.ts"
 import { renderBooking } from "./renderers/booking.ts"
+import { resolveSemanticPromptText } from "./renderers/prompt-library.ts"
 import { buildSemanticResult, formatSemanticActionOptions } from "./renderers/shared.ts"
-import { shouldDefaultExternalToSemanticCore, shouldUseSemanticCore } from "./runtime.ts"
 import {
   buildSemanticClarificationDecision,
   buildSemanticTurnContext,
   resolveSemanticDecisionPipeline,
 } from "./runtime-helpers.ts"
-import { inferCalendarResponseSignal, inferContactPreferenceSignal } from "./turn-semantics.ts"
+import {
+  buildTurnSemanticSnapshot,
+  inferCalendarResponseSignal,
+  inferContactPreferenceSignal,
+  resolveNextQuestionHint,
+  resolvePrimaryIntent,
+} from "./turn-semantics.ts"
+import { detectSemanticContinuation } from "./context-continuation.ts"
+import { interpretSemanticTurnWithAI } from "../ai.ts"
 
 function assertEquals(actual: unknown, expected: unknown, message?: string) {
   const actualJson = JSON.stringify(actual)
@@ -31,6 +40,21 @@ function createBaseConfig() {
     booking_services: [
       { name: "Corte", duration_minutes: 30, base_price: 50, description: "Corte de cabelo" },
       { name: "Barba", duration_minutes: 30, base_price: 35, description: "Barba completa" },
+    ],
+    quote_services: [
+      {
+        id: "quote-1",
+        name: "Cortina",
+        pricing_type: "area",
+        variables_schema: [
+          { key: "largura_cm", label: "Largura", required: true },
+          { key: "altura_cm", label: "Altura", required: true },
+        ],
+        pricing_rules: { price_per_m2: 100 },
+        external_variable_keys: ["largura_cm", "altura_cm"],
+        keywords: ["cortina"],
+        active: true,
+      },
     ],
     schedule: {
       days_of_week: ["monday", "tuesday", "wednesday", "thursday", "friday"],
@@ -61,22 +85,81 @@ function createBaseState(overrides = {}) {
   }
 }
 
-function withEnv(vars: Record<string, string | undefined>, fn: () => void) {
-  const previous = new Map<string, string | undefined>()
-  for (const [key, value] of Object.entries(vars)) {
-    previous.set(key, Deno.env.get(key))
-    if (value == null || value === "") Deno.env.delete(key)
-    else Deno.env.set(key, value)
+Deno.test("buildBusinessBrain derives a canonical agent narrative from the same source of truth", () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+
+  if (!brain.agent_narrative?.summary) {
+    throw new Error("Expected canonical agent narrative summary")
   }
-  try {
-    fn()
-  } finally {
-    for (const [key, value] of previous.entries()) {
-      if (value == null || value === "") Deno.env.delete(key)
-      else Deno.env.set(key, value)
-    }
+  if (!brain.agent_narrative?.prompt_context?.includes("BarberShop")) {
+    throw new Error("Expected prompt context to mention the configured business")
   }
-}
+  if (!brain.agent_narrative?.triage_guidance?.includes("escopo")) {
+    throw new Error("Expected triage guidance in canonical narrative")
+  }
+})
+
+Deno.test("buildBusinessBrain normalizes numeric service fields even when config arrives as strings", () => {
+  const brain = buildBusinessBrain({
+    ...createBaseConfig(),
+    booking_services: [
+      { name: "Corte", duration_minutes: "30", base_price: "50", description: "Corte de cabelo" },
+      { name: "Barba", duration_minutes: "20", base_price: "35", description: "Barba completa" },
+    ],
+    schedule: {
+      ...createBaseConfig().schedule,
+      interval_minutes: "30",
+      min_booking_lead_minutes: "15",
+    },
+  } as any)
+
+  assertEquals(brain.services[0]?.duration_minutes, 30)
+  assertEquals(brain.services[0]?.base_price, 50)
+  assertEquals(brain.schedule?.interval_minutes, 30)
+  assertEquals(brain.schedule?.min_booking_lead_minutes, 15)
+})
+
+
+Deno.test("buildBusinessBrain enriches booking_services with missing price and duration from legacy services", () => {
+  const brain = buildBusinessBrain({
+    ...createBaseConfig(),
+    booking_services: [
+      { name: "Corte de cabelo" },
+      { name: "Barba" },
+    ],
+    services: [
+      { name: "Corte de cabelo", duration_minutes: 30, base_price: 50, description: "Corte masculino" },
+      { name: "Barba", duration_minutes: 20, base_price: 35, description: "Barba completa" },
+    ],
+  } as any)
+
+  assertEquals(brain.services[0]?.base_price, 50)
+  assertEquals(brain.services[0]?.duration_minutes, 30)
+  assertEquals(brain.services[1]?.base_price, 35)
+})
+Deno.test("buildAgentRuntimeContext derives a structured runtime dossier from the canonical narrative", () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+  const runtimeContext = buildAgentRuntimeContext({
+    business_brain: brain,
+    agent_narrative: brain.agent_narrative,
+  })
+
+  if (!runtimeContext.identity_context.includes("BarberShop")) {
+    throw new Error("Expected runtime identity context to mention the configured business")
+  }
+  if (!runtimeContext.service_context.includes("Corte")) {
+    throw new Error("Expected runtime service context to mention configured services")
+  }
+  if (!runtimeContext.multi_booking_context.trim()) {
+    throw new Error("Expected runtime multi-booking context to be populated")
+  }
+  if (!runtimeContext.prompt_context.includes("MULTIAGENDAMENTO")) {
+    throw new Error("Expected prompt context to expose labeled runtime sections")
+  }
+  if (!runtimeContext.triage_context.includes("escopo")) {
+    throw new Error("Expected runtime triage context to preserve business triage guidance")
+  }
+})
 
 Deno.test("buildDynamicPeopleQueue preserves inferred names and removes completed attendees", () => {
   const context = {
@@ -107,12 +190,58 @@ Deno.test("buildDynamicPeopleQueue preserves inferred names and removes complete
       additional_count: 2,
       sequence_request: true,
     },
-    risks: { ambiguities: [] },
+    risks: {
+      audience: {
+        requires_confirmation: true,
+        blocked: false,
+        reason: "audience_ambiguous",
+        inferred_fit: null,
+      },
+      ambiguities: [],
+    },
     meta: { raw_user_message: "quero agendar pro Carlos, Davi e Joao" },
   }
 
   const queue = buildDynamicPeopleQueue(snapshot as any, context as any)
   assertEquals(queue, ["Davi", "Joao"])
+})
+
+Deno.test("resolveSemanticDecisionPipeline routes external quote inside semantic core", () => {
+  const context = buildSemanticTurnContext({
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState(),
+  })
+
+  const snapshot = {
+    intents: { primary: "quote", secondary: [], booking: false, confidence: 0.9 },
+    entities: {
+      people: [],
+      attendee_names: [],
+      services: [],
+      quote_service: {
+        id: "quote-1",
+        name: "Cortina",
+        pricing_type: "area",
+        required_keys: ["largura_cm", "altura_cm"],
+      },
+      date: null,
+      time: null,
+    },
+    signals: {
+      includes_self: false,
+      additional_count: 0,
+      quote_slots: {},
+    },
+    risks: { ambiguities: [] },
+    meta: { raw_user_message: "quanto fica uma cortina?" },
+  }
+
+  const pipeline = resolveSemanticDecisionPipeline(snapshot as any, context as any)
+  assertEquals(pipeline.decision.action, "ask_quote_measurements")
+  assertEquals(pipeline.execution, null)
 })
 
 Deno.test("deriveBookingContext promotes current attendee from inferred queue", () => {
@@ -370,6 +499,217 @@ Deno.test("deriveBookingContext marks contact as the missing step when booking d
   assertEquals(booking.has_contact, false)
 })
 
+Deno.test("deriveBookingContext não trata includes_self como tendo attendee_name", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({
+      slots: {
+        // Já tem serviço/data/hora, mas não tem nome do cliente.
+        service: "Corte",
+        date: "2026-03-09",
+        time: "09:00",
+      },
+    }),
+  }
+
+  const snapshot = {
+    intents: { primary: "booking", secondary: [], booking: true, confidence: 0.94 },
+    entities: {
+      // inclui_self significa "é para mim", mas não fornece nome.
+      people: [{ includes_self: true, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+      attendee_names: [],
+      services: [{ name: "Corte", normalized_name: "corte" }],
+      date: { iso_date: "2026-03-09" },
+      time: { hhmm: "09:00" },
+    },
+    signals: {
+      includes_self: true,
+      additional_count: 0,
+      sequence_request: false,
+    },
+    risks: { ambiguities: [] },
+    meta: { raw_user_message: "confirmar" },
+  }
+
+  const booking = deriveBookingContext(snapshot as any, context as any)
+  assertEquals(booking.missing_step, "attendee")
+})
+
+Deno.test("deriveBookingContext não usa attendee placeholder como nome", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({
+      slots: {
+        // Estado já tem service/date/time; o modelo pode ter sugerido um placeholder no attendee.
+        service: "Corte",
+        date: "2026-03-09",
+        time: "09:00",
+      },
+      pending_contact_field: "contact_preference",
+    }),
+  }
+
+  const snapshot = {
+    intents: { primary: "booking", secondary: [], booking: true, confidence: 0.94 },
+    entities: {
+      people: [{ includes_self: true, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+      attendee_names: ["desconhecido"],
+      services: [{ name: "Corte", normalized_name: "corte" }],
+      date: { iso_date: "2026-03-09" },
+      time: { hhmm: "09:00" },
+    },
+    signals: {
+      includes_self: true,
+      additional_count: 0,
+      sequence_request: false,
+    },
+    risks: { ambiguities: [] },
+    meta: { raw_user_message: "o meu mesmo 11999999999" },
+  }
+
+  const booking = deriveBookingContext(snapshot as any, context as any)
+  // Se o attendee veio como placeholder, não deve contaminar attendee_name do estado.
+  assertEquals(booking.slot_updates?.attendee_name, undefined)
+})
+
+Deno.test("deriveBookingContext não usa tokens afirmativos como attendee_name (ex.: sim)", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({
+      // O estado já tem o nome correto (Carlos).
+      slots: {
+        attendee_name: "Carlos",
+        service: "Corte",
+        date: "2026-03-09",
+        time: "09:00",
+      },
+    }),
+  }
+
+  const snapshot = {
+    intents: { primary: "booking", secondary: [], booking: true, confidence: 0.94 },
+    entities: {
+      people: [{ includes_self: false, relation: "self", audience_hint: "unknown", confidence: 0.9 }],
+      // O modelo/extração veio com "sim" como se fosse um nome (bug atual nos logs).
+      attendee_names: ["sim"],
+      services: [{ name: "Corte", normalized_name: "corte" }],
+      date: { iso_date: "2026-03-09" },
+      time: { hhmm: "09:00" },
+    },
+    signals: {
+      includes_self: false,
+      additional_count: 0,
+      sequence_request: false,
+    },
+    risks: { ambiguities: [], audience: { requires_confirmation: false, inferred_fit: true } },
+    meta: { raw_user_message: "sim" },
+  }
+
+  const booking = deriveBookingContext(snapshot as any, context as any)
+  assertEquals(booking.current_attendee_name, "Carlos")
+  assertEquals(booking.people_queue.includes("sim"), false)
+})
+
+Deno.test("deriveBookingContext: hint ask_contact não sobrescreve audience pendente", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({}),
+  }
+  const snapshot = {
+    intents: { primary: "booking", booking: true, confidence: 0.5, source: "continuation" },
+    entities: {
+      people: [],
+      attendee_names: ["Carlos"],
+      services: [{ name: "-", normalized_name: "-" }],
+      date: { raw_text: "Carlos", iso_date: "-" },
+      time: { raw_text: "Carlos", hhmm: "NaN:00" },
+    },
+    signals: {
+      includes_self: false,
+      next_question_hint: "ask_contact",
+    },
+    risks: {
+      audience: { requires_confirmation: true, reason: "audience_ambiguous", inferred_fit: null },
+      ambiguities: ["audience_ambiguous"],
+    },
+    meta: { raw_user_message: "Carlos" },
+  }
+  const booking = deriveBookingContext(snapshot as any, context as any)
+  assertEquals(booking.missing_step, "audience")
+})
+
+Deno.test("deriveBookingContext: hint ask_contact não pula time ainda faltando", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({
+      audience_confirmed: true,
+      slots: { attendee_name: "Carlos", service: "Corte", date: "hoje" },
+    }),
+  }
+  const snapshot = {
+    intents: { primary: "booking", booking: true, confidence: 0.5, source: "continuation" },
+    entities: {
+      attendee_names: ["Carlos"],
+      services: [{ name: "Corte" }],
+      date: { iso_date: "hoje", raw_text: "Sim" },
+      time: null,
+    },
+    signals: {
+      next_question_hint: "ask_contact",
+      includes_self: false,
+    },
+    risks: { audience: { requires_confirmation: false, inferred_fit: true }, ambiguities: [] },
+    meta: { continuation: { kind: "audience_confirmation" }, raw_user_message: "Sim" },
+  }
+  const booking = deriveBookingContext(snapshot as any, context as any)
+  assertEquals(booking.missing_step, "time")
+})
+
+Deno.test("deriveBookingContext: texto com hoje força data hoje (não iso errado da IA)", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({
+      slots: { attendee_name: "Carlos", service: "Corte" },
+    }),
+  }
+  const snapshot = {
+    intents: { primary: "booking", booking: true, confidence: 0.9 },
+    entities: {
+      people: [],
+      attendee_names: ["Carlos"],
+      services: [{ name: "Corte", normalized_name: "corte" }],
+      date: { raw_text: "tem ainda pra hoje? As 16:20?", iso_date: "2026-03-19" },
+      time: { raw_text: "tem ainda pra hoje? As 16:20?", hhmm: "16:20" },
+    },
+    signals: { includes_self: true, availability_check: false },
+    risks: { audience: { requires_confirmation: false, inferred_fit: true }, ambiguities: [] },
+    meta: { raw_user_message: "tem ainda pra hoje? As 16:20?" },
+  }
+  const booking = deriveBookingContext(snapshot as any, context as any)
+  assertEquals(booking.slot_updates?.date, "hoje")
+  assertEquals(booking.slot_updates?.time, "16:20")
+  assertEquals(booking.has_date, true)
+  assertEquals(booking.has_time, true)
+})
+
 Deno.test("inferContactPreferenceSignal detects primary contact reuse during contact step", () => {
   const signal = inferContactPreferenceSignal(
     "usa o mesmo contato",
@@ -439,6 +779,42 @@ Deno.test("deriveBookingContext treats snapshot contact preference as completed 
   const booking = deriveBookingContext(snapshot as any, context as any)
   assertEquals(booking.has_contact, true)
   assertEquals(booking.missing_step, "confirm")
+})
+
+Deno.test("deriveBookingContext preserves hinted active step when the slot is still unresolved", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({
+      slots: {
+        attendee_name: "Carlos",
+        service: "Corte",
+      },
+    }),
+  }
+  const snapshot = {
+    intents: { primary: "booking", secondary: [], booking: true, confidence: 0.83, source: "continuation" },
+    entities: {
+      people: [{ name: "Carlos", confidence: 0.85 }],
+      attendee_names: ["Carlos"],
+      services: [{ name: "Corte", normalized_name: "corte" }],
+      date: null,
+      time: null,
+    },
+    signals: {
+      includes_self: false,
+      additional_count: 0,
+      sequence_request: false,
+      next_question_hint: "ask_date_preference",
+    },
+    risks: { ambiguities: [] },
+    meta: { raw_user_message: "pode ser" },
+  }
+
+  const booking = deriveBookingContext(snapshot as any, context as any)
+  assertEquals(booking.missing_step, "date")
 })
 
 Deno.test("buildPostConfirmationPlan emits outbound notification for secondary attendee with own contact", () => {
@@ -540,7 +916,7 @@ Deno.test("buildSemanticResult keeps render hints while merging formatted action
       execution: null,
     } as any,
     {
-      message: "Qual servico voce gostaria?",
+      message: "Qual serviÃ§o vocÃª gostaria?",
       action_options: ["Corte", "Barba"],
       render_hints: { service_multi_select: true },
     }
@@ -550,7 +926,7 @@ Deno.test("buildSemanticResult keeps render hints while merging formatted action
   assertEquals(result.render_hints, { service_multi_select: true })
 })
 
-Deno.test("renderBooking reports outbound notifications after final confirmation", () => {
+Deno.test("renderBooking reports outbound notifications after final confirmation", async () => {
   const brain = buildBusinessBrain(createBaseConfig() as any)
   const semantic = {
     business_brain: brain,
@@ -586,7 +962,15 @@ Deno.test("renderBooking reports outbound notifications after final confirmation
         additional_count: 0,
         sequence_request: false,
       },
-      risks: { ambiguities: [] },
+      risks: {
+        audience: {
+          requires_confirmation: true,
+          blocked: false,
+          reason: "audience_needs_confirmation",
+          inferred_fit: null,
+        },
+        ambiguities: [],
+      },
       meta: { raw_user_message: "confirmar" },
     },
     decision: {
@@ -617,10 +1001,10 @@ Deno.test("renderBooking reports outbound notifications after final confirmation
     },
   }
 
-  const rendered = renderBooking(semantic as any)
-  assertEquals(rendered.action_options, ["Adicionar no calendario", "Nao, obrigado"])
+  const rendered = await renderBooking(semantic as any)
+  assertEquals(rendered.action_options, ["Adicionar no calendário", "Não, obrigado"])
   assertEquals(
-    /Enviei a confirmacao/.test(rendered.message),
+    /Enviei a confirmação/.test(rendered.message),
     true
   )
 })
@@ -672,13 +1056,27 @@ Deno.test("applySemanticPolicies blocks incompatible audience requests", () => {
       additional_count: 0,
       sequence_request: false,
     },
-    risks: { ambiguities: [] },
+    risks: {
+      audience: {
+        requires_confirmation: true,
+        blocked: true,
+        reason: "person_outside_audience",
+        inferred_fit: false,
+      },
+      ambiguities: [],
+    },
     meta: { raw_user_message: "quero agendar um corte feminino para minha esposa" },
   }
 
   const policy = applySemanticPolicies(snapshot as any, context as any)
   assertEquals(policy.should_clarify, true)
   assertEquals(policy.adjusted_snapshot.risks.audience.blocked, true)
+  if (!policy.clarification_prompt?.includes("atendemos")) {
+    throw new Error("Expected natural audience restriction prompt")
+  }
+  if (!policy.clarification_prompt?.includes("homens e crianças")) {
+    throw new Error("Expected restriction prompt to mention configured audience")
+  }
 })
 
 Deno.test("applySemanticPolicies asks clarification for ambiguous audience fit", () => {
@@ -703,13 +1101,84 @@ Deno.test("applySemanticPolicies asks clarification for ambiguous audience fit",
       additional_count: 1,
       sequence_request: false,
     },
-    risks: { ambiguities: [] },
+    risks: {
+      audience: {
+        requires_confirmation: true,
+        blocked: false,
+        reason: "audience_ambiguous",
+        inferred_fit: null,
+      },
+      ambiguities: [],
+    },
     meta: { raw_user_message: "quero agendar pra mim e meu irmao" },
   }
 
   const policy = applySemanticPolicies(snapshot as any, context as any)
   assertEquals(policy.should_clarify, false)
   assertEquals(policy.adjusted_snapshot.risks.audience.requires_confirmation, true)
+})
+
+Deno.test("decideNextSemanticAction redirects out-of-scope service requests to the configured service list", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain({
+      ...createBaseConfig(),
+      lead_policy: { reject_unlisted_services: true },
+    } as any),
+    state: createBaseState(),
+  }
+  const snapshot = {
+    intents: { primary: "fallback", secondary: [], booking: false, confidence: 0.82, source: "unified_ai" },
+    entities: {
+      people: [],
+      attendee_names: [],
+      services: [],
+      date: null,
+      time: null,
+    },
+    signals: {
+      includes_self: false,
+      additional_count: 0,
+    },
+    risks: { ambiguities: [] },
+    meta: { raw_user_message: "quero tirar meu irmao da cadeia" },
+  }
+
+  const decision = decideNextSemanticAction(snapshot as any, context as any)
+  assertEquals(decision.action, "reply_service_list")
+  assertEquals(decision.reason, "service_out_of_scope_redirect")
+})
+
+Deno.test("decideNextSemanticAction asks attendee before audience when booking is still generic", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState(),
+  }
+  const snapshot = {
+    intents: { primary: "booking", secondary: [], booking: true, confidence: 0.9 },
+    entities: {
+      people: [],
+      attendee_names: [],
+      services: [],
+      date: null,
+      time: null,
+    },
+    signals: {
+      includes_self: false,
+      additional_count: 0,
+      sequence_request: false,
+    },
+    risks: { ambiguities: ["missing_attendee", "missing_service"] },
+    meta: { raw_user_message: "quero agendar" },
+  }
+
+  const decision = decideNextSemanticAction(snapshot as any, context as any)
+  assertEquals(decision.action, "ask_attendee_name")
 })
 
 Deno.test("buildSemanticClarificationDecision preserves clarification output", () => {
@@ -747,6 +1216,63 @@ Deno.test("buildSemanticTurnContext keeps runtime metadata and defaults history"
   assertEquals(context.history, [])
 })
 
+Deno.test("applySemanticPolicies does not clarify deterministic greeting intents", () => {
+  const context = buildSemanticTurnContext({
+    channel: "web_simulator",
+    history: [],
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState(),
+  })
+
+  const policy = applySemanticPolicies(
+    {
+      intents: { primary: "greeting", secondary: [], booking: false, confidence: 0.92 },
+      entities: { people: [], attendee_names: [], services: [], quote_service: null, date: null, time: null },
+      signals: { includes_self: false, additional_count: 0 },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "ola" },
+    } as any,
+    context as any
+  )
+
+  assertEquals(policy.should_clarify, false)
+})
+
+Deno.test("applySemanticPolicies does not clarify continuation-derived booking intents by generic low-confidence gate", () => {
+  const context = buildSemanticTurnContext({
+    channel: "web_simulator",
+    history: [],
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState(),
+  })
+
+  const policy = applySemanticPolicies(
+    {
+      intents: {
+        primary: "booking",
+        secondary: ["audience_confirmation"],
+        booking: true,
+        confidence: 0.42,
+        source: "continuation",
+      },
+      entities: {
+        people: [{ includes_self: true, relation: "self", audience_hint: "unknown" }],
+        attendee_names: [],
+        services: [],
+        quote_service: null,
+        date: null,
+        time: null,
+      },
+      signals: { includes_self: true, additional_count: 0 },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "sim, nos encaixamos" },
+    } as any,
+    context as any
+  )
+
+  assertEquals(policy.should_clarify, false)
+})
+
 Deno.test("resolveSemanticDecisionPipeline reuses policy clarification without executing handlers", () => {
   const context = buildSemanticTurnContext({
     channel: "web_simulator",
@@ -767,7 +1293,15 @@ Deno.test("resolveSemanticDecisionPipeline reuses policy clarification without e
       additional_count: 0,
       sequence_request: false,
     },
-    risks: { ambiguities: [] },
+    risks: {
+      audience: {
+        requires_confirmation: true,
+        blocked: true,
+        reason: "person_outside_audience",
+        inferred_fit: false,
+      },
+      ambiguities: [],
+    },
     meta: { raw_user_message: "quero agendar para minha esposa" },
   }
 
@@ -775,6 +1309,9 @@ Deno.test("resolveSemanticDecisionPipeline reuses policy clarification without e
   assertEquals(policy.should_clarify, true)
   assertEquals(decision.action, "ask_clarification")
   assertEquals(execution, null)
+  if (!decision.next_question?.includes("atendemos")) {
+    throw new Error("Expected policy clarification to reuse natural audience restriction prompt")
+  }
 })
 
 Deno.test("decideNextSemanticAction asks contact with primary reuse option for additional booking", () => {
@@ -822,6 +1359,77 @@ Deno.test("decideNextSemanticAction asks contact with primary reuse option for a
     "Celular e email",
     "Pular (usar contato do titular)",
   ])
+})
+
+Deno.test("decideNextSemanticAction reuses snapshot next_question_hint for the active booking step", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({
+      slots: {
+        attendee_name: "Carlos",
+        service: "Corte",
+      },
+    }),
+  }
+  const snapshot = {
+    intents: { primary: "booking", secondary: [], booking: true, confidence: 0.83, source: "continuation" },
+    entities: {
+      people: [{ name: "Carlos", confidence: 0.85 }],
+      attendee_names: ["Carlos"],
+      services: [{ name: "Corte", normalized_name: "corte" }],
+      date: null,
+      time: null,
+    },
+    signals: {
+      includes_self: false,
+      additional_count: 0,
+      sequence_request: false,
+      next_question_hint: "ask_date_preference",
+    },
+    risks: { ambiguities: [] },
+    meta: { raw_user_message: "pode ser" },
+  }
+
+  const decision = decideNextSemanticAction(snapshot as any, context as any)
+  assertEquals(decision.action, "ask_date")
+  assertEquals(decision.next_question, "ask_date_preference")
+})
+
+Deno.test("decideNextSemanticAction reuses snapshot attendee hint for additional booking", () => {
+  const context = {
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: buildBusinessBrain(createBaseConfig() as any),
+    state: createBaseState({
+      pending_additional_booking: true,
+    }),
+  }
+  const snapshot = {
+    intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.87, source: "continuation" },
+    entities: {
+      people: [],
+      attendee_names: [],
+      services: [],
+      date: null,
+      time: null,
+    },
+    signals: {
+      includes_self: false,
+      additional_count: 1,
+      sequence_request: true,
+      next_question_hint: "ask_next_attendee_name",
+    },
+    risks: { ambiguities: ["missing_attendee"] },
+    meta: { raw_user_message: "o outro tambem" },
+  }
+
+  const decision = decideNextSemanticAction(snapshot as any, context as any)
+  assertEquals(decision.action, "ask_attendee_name")
+  assertEquals(decision.next_question, "ask_next_attendee_name")
 })
 
 Deno.test("decideNextSemanticAction asks service with multi-select hint when sequence is enabled", () => {
@@ -963,7 +1571,7 @@ Deno.test("decideNextSemanticAction only offers calendar on closing when post-co
   } as any)
 
   assertEquals(activeDecision.action, "offer_calendar")
-  assertEquals(inactiveDecision.action, "handoff_fallback")
+  assertEquals(inactiveDecision.action, "reply_closing")
 })
 
 Deno.test("decideNextSemanticAction routes calendar prompt replies without generic fallback", () => {
@@ -1005,106 +1613,190 @@ Deno.test("decideNextSemanticAction routes calendar prompt replies without gener
   assertEquals(declineDecision.action, "reply_calendar_declined")
 })
 
-Deno.test("shouldUseSemanticCore enables global semantic core when no allowlists are configured", () => {
-  withEnv(
+Deno.test("detectSemanticContinuation keeps service-only replies inside price flow", () => {
+  const continuation = detectSemanticContinuation(
+    "corte de cabelo",
     {
-      CONVERSATION_TURN_ENGINE: "semantic_core",
-      CONVERSATION_TURN_ENGINE_CHANNELS: undefined,
-      CONVERSATION_TURN_ENGINE_SESSION_IDS: undefined,
-      CONVERSATION_TURN_ENGINE_SENDER_IDS: undefined,
-    },
-    () => {
-      assertEquals(
-        shouldUseSemanticCore({
-          channel: "whatsapp",
-          sessionId: "whatsapp:5511999999999",
-          senderId: "whatsapp:5511999999999",
-        }),
-        true
-      )
-    }
+      state: createBaseState({
+        last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual servico voce quer consultar?",
+        last_action_options: ["Corte", "Barba"],
+      }),
+    } as any
   )
+
+  assertEquals(continuation?.kind, "price_followup")
 })
 
-Deno.test("shouldUseSemanticCore respects configured channel and sender allowlists", () => {
-  withEnv(
-    {
-      CONVERSATION_TURN_ENGINE: "semantic_core",
-      CONVERSATION_TURN_ENGINE_CHANNELS: "whatsapp",
-      CONVERSATION_TURN_ENGINE_SESSION_IDS: undefined,
-      CONVERSATION_TURN_ENGINE_SENDER_IDS: "whatsapp:5511950878863",
-    },
-    () => {
-      assertEquals(
-        shouldUseSemanticCore({
-          channel: "whatsapp",
-          sessionId: "whatsapp:5511950878863",
-          senderId: "whatsapp:5511950878863",
-        }),
-        true
-      )
-      assertEquals(
-        shouldUseSemanticCore({
-          channel: "web_simulator",
-          sessionId: "fixture-session",
-          senderId: "web:fixture",
-        }),
-        false
-      )
-      assertEquals(
-        shouldUseSemanticCore({
-          channel: "whatsapp",
-          sessionId: "whatsapp:5511972763228",
-          senderId: "whatsapp:5511972763228",
-        }),
-        false
-      )
-    }
-  )
+Deno.test("interpretSemanticTurnWithAI is available as the unified semantic interpreter entrypoint", () => {
+  if (typeof interpretSemanticTurnWithAI !== "function") {
+    throw new Error("Expected interpretSemanticTurnWithAI to be exported as a function")
+  }
 })
 
-Deno.test("shouldUseSemanticCore stays disabled when engine is legacy", () => {
-  withEnv(
+Deno.test("resolvePrimaryIntent prioritizes unified AI action over local fallback heuristics", () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+
+  const resolved = resolvePrimaryIntent(
+    "quero um trato no visual",
+    brain,
     {
-      CONVERSATION_TURN_ENGINE: "legacy",
-      CONVERSATION_TURN_ENGINE_CHANNELS: "whatsapp",
-      CONVERSATION_TURN_ENGINE_SESSION_IDS: "whatsapp:5511950878863",
-      CONVERSATION_TURN_ENGINE_SENDER_IDS: "whatsapp:5511950878863",
-    },
-    () => {
-      assertEquals(
-        shouldUseSemanticCore({
-          channel: "whatsapp",
-          sessionId: "whatsapp:5511950878863",
-          senderId: "whatsapp:5511950878863",
-        }),
-        false
-      )
-    }
+      intent: "booking_request",
+      suggested_action: "list_services",
+      confidence: 0.82,
+    } as any,
+    {
+      booking_intent: false,
+      includes_self: false,
+      attendee_names: [],
+      additional_count: 0,
+      for_whom: null,
+      service_names: [],
+    } as any
   )
+
+  assertEquals(resolved.primary, "service_list")
+  assertEquals(resolved.source, "unified_ai")
 })
 
-Deno.test("shouldDefaultExternalToSemanticCore enables external cutover when engine is unset", () => {
-  withEnv(
-    {
-      CONVERSATION_TURN_ENGINE: undefined,
-      CONVERSATION_TURN_ENGINE_CHANNELS: undefined,
-      CONVERSATION_TURN_ENGINE_SESSION_IDS: undefined,
-      CONVERSATION_TURN_ENGINE_SENDER_IDS: undefined,
-    },
-    () => {
-      assertEquals(shouldDefaultExternalToSemanticCore(), true)
-    }
+
+Deno.test("resolvePrimaryIntent classifies open business-context questions as faq", () => {
+  const resolved = resolvePrimaryIntent(
+    "oi, bom dia tudo bem? Como tá o movimento aí hoje?",
+    buildBusinessBrain(createBaseConfig() as any),
+    null,
+    null,
+    undefined
   )
+
+  assertEquals(resolved.primary, "faq")
+})
+Deno.test("resolvePrimaryIntent classifies explicit closing commands as closing", () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+
+  const resolved = resolvePrimaryIntent(
+    "encerrar",
+    brain,
+    null,
+    null,
+  )
+
+  assertEquals(resolved.primary, "closing")
+  assertEquals(resolved.source, "deterministic_fallback")
 })
 
-Deno.test("shouldDefaultExternalToSemanticCore stays off when engine is explicitly legacy", () => {
-  withEnv(
+Deno.test("resolveNextQuestionHint preserves the active booking step when the slot is still missing", () => {
+  const hint = resolveNextQuestionHint(
+    "booking",
+    [{ includes_self: true, relation: "self", audience_hint: "unknown" }] as any,
+    [{ name: "Corte", normalized_name: "corte" }] as any,
+    { requires_confirmation: false, inferred_fit: true } as any,
     {
-      CONVERSATION_TURN_ENGINE: "legacy",
-    },
-    () => {
-      assertEquals(shouldDefaultExternalToSemanticCore(), false)
-    }
+      attendee_name: "Cadu",
+      service: "Corte",
+      date: null,
+      time: null,
+    } as any,
+    "date"
   )
+
+  assertEquals(hint, "ask_date_preference")
 })
+
+Deno.test("resolveNextQuestionHint distinguishes first attendee from next attendee", () => {
+  const singleHint = resolveNextQuestionHint(
+    "booking",
+    [],
+    [],
+    { requires_confirmation: false, inferred_fit: true } as any,
+    null,
+    "attendee_name",
+    false
+  )
+  const additionalHint = resolveNextQuestionHint(
+    "booking_sequence",
+    [],
+    [],
+    { requires_confirmation: false, inferred_fit: true } as any,
+    null,
+    "attendee_name",
+    true
+  )
+
+  assertEquals(singleHint, "ask_first_attendee_name")
+  assertEquals(additionalHint, "ask_next_attendee_name")
+})
+
+Deno.test("resolveSemanticPromptText translates internal prompt keys into human text", () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+
+  const clarificationPrompt = resolveSemanticPromptText({
+    next_question: "ask_contact_preference",
+    fallback: "fallback",
+    brain,
+  })
+  const audiencePrompt = resolveSemanticPromptText({
+    next_question: "confirm_audience_fit_before_booking",
+    fallback: "fallback",
+    brain,
+  })
+
+  assertEquals(clarificationPrompt, "Qual contato você prefere usar para confirmar o agendamento?")
+  if (audiencePrompt.includes("confirm_audience_fit_before_booking")) {
+    throw new Error("Expected internal audience prompt key to be translated before rendering")
+  }
+})
+
+Deno.test("buildTurnSemanticSnapshot stores semantic trace metadata for observability", async () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+  const context = buildSemanticTurnContext({
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: brain,
+    state: createBaseState({
+      pending_date_confirmation: true,
+      slots: {
+        attendee_name: "Carlos",
+        service: "Corte",
+      },
+    }),
+  })
+
+  const snapshot = await buildTurnSemanticSnapshot("pode ser", context as any)
+
+  assertEquals(snapshot.meta.semantic_trace?.waiting_for, "date")
+  assertEquals(snapshot.meta.semantic_trace?.next_question_hint, snapshot.signals.next_question_hint)
+  assertEquals(snapshot.meta.semantic_trace?.intent_source, snapshot.intents.source)
+})
+
+
+
+
+
+
+Deno.test("buildTurnSemanticSnapshot promotes a short proper name reply during attendee step", async () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+  const context = buildSemanticTurnContext({
+    channel: "web_simulator",
+    history: [],
+    sender_display_name: "Cadu",
+    business_brain: brain,
+    state: createBaseState({
+      pending_attendee_name: true,
+      slots: {},
+    }),
+  })
+
+  const snapshot = await buildTurnSemanticSnapshot("Carlos", context as any)
+
+  assertEquals(snapshot.intents.primary, "booking")
+  assertEquals(snapshot.intents.source, "continuation")
+  assertEquals(snapshot.entities.attendee_names, ["Carlos"])
+  if (snapshot.signals.next_question_hint == null) {
+    throw new Error("Expected attendee-name reply to keep booking continuity")
+  }
+})
+
+
+
+

@@ -16,11 +16,25 @@ export async function renderGreeting(semantic: SemanticRuntimeResult): Promise<R
     semantic.business_brain.raw_config,
     semantic.snapshot.meta.raw_user_message,
     semantic.context.history,
-    semantic.context.sender_display_name
+    semantic.context.sender_display_name,
+    {
+      business_brain: semantic.business_brain,
+      agent_narrative: semantic.business_brain.agent_narrative,
+    }
   )
 
+  const businessName = semantic.business_brain.business_name
+  const identityLine = businessName ? `Aqui é o assistente virtual da ${businessName}.` : "Aqui é o assistente virtual."
+  const ensureIdentity = (text: string | null) => {
+    const t = String(text || "").trim()
+    if (!t) return null
+    if (businessName && t.toLowerCase().includes(String(businessName).toLowerCase())) return t
+    if (t.toLowerCase().includes("assistente")) return t
+    return `${identityLine} ${t}`.trim()
+  }
+
   return {
-    message: aiGreeting || buildGreetingFallback(semantic),
+    message: ensureIdentity(aiGreeting) || buildGreetingFallback(semantic),
     action_options: ["Quero agendar"],
   }
 }

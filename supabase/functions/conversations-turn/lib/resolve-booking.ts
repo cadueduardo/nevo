@@ -13,6 +13,7 @@ import {
 } from "./ai.ts"
 import { tryHandleServicesQuestionAnytime } from "./anytime-handlers.ts"
 import { findServiceFromText } from "./services.ts"
+import { resolveConfiguredServicesFromConfig } from "./canonical-services.ts"
 import type { BookingContext } from "./booking/context.ts"
 import { BOOKING_HANDLERS } from "./booking/index.ts"
 
@@ -191,12 +192,13 @@ async function interpretBookingSlotsContext(params: {
 }) {
   const { text, config, nextState, history, senderDisplayName, waitingFor, lastAssistantMsg } = params
   if (!(waitingFor || nextState.pending_attendee_name)) return null
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
   return await interpretSlotsFromMessageWithAI(
     text,
     {
       waiting_for: waitingFor,
       current_slots: nextState.slots,
-      services: config.services || [],
+      services: configuredServices,
       history,
       last_assistant_message: lastAssistantMsg,
       sender_display_name: senderDisplayName,
@@ -218,12 +220,13 @@ function resolveBookingTurnSignals(params: {
 } {
   const { text, config, state } = params
   const normalizedText = normalizeText(text)
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
   return {
     normalizedText,
     allowAiDateAutofill:
       hasExplicitDate(text) || normalizedText.includes("hoje") || normalizedText.includes("amanha"),
     isDigitOnly: /^[1-9]\d*$/.test(text.trim()),
-    explicitService: findServiceFromText(text, config.services || []) ?? null,
+    explicitService: findServiceFromText(text, configuredServices) ?? null,
     wasAdditionalPending: Boolean(state.pending_additional_booking || state.pending_additional_count),
   }
 }

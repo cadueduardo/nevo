@@ -2,7 +2,7 @@
 /** Handler: sequence_booking/service fallbacks (mutate), horário (parseTime, last_time_options), disponibilidade, time_period, pending_suggested_time. */
 import type { SimulatorResult } from "../types.ts"
 import { buildResult } from "../state.ts"
-import { buildAvailabilityForDateMessage, buildDayNotServedMessage } from "../builders.ts"
+import { buildAvailabilityForDateMessage, buildAvailabilityForPeriodMessage, buildDayNotServedMessage } from "../builders.ts"
 import { getScheduleForStaff, getOtherStaffOptions } from "../staff.ts"
 import {
   parseTime,
@@ -17,21 +17,23 @@ import {
   isTimeTooSoonForDate,
   isBusinessClosedForToday,
   MIN_BOOKING_LEAD_MINUTES,
+  filterSlotsByPeriod,
 } from "../utils.ts"
 import { isYes, isNo, isAvailabilityQuestion } from "../detection.ts"
 import { findServicesFromText, findServiceFromText, getServicesTotalDuration } from "../services.ts"
+import { resolveConfiguredServicesFromConfig, resolveSequenceEligibleServicesFromConfig } from "../canonical-services.ts"
 import { isVisitRequest } from "../detection.ts"
 import type { BookingContext } from "./context.ts"
 
 export async function handleTimeAndAvailability(ctx: BookingContext): Promise<SimulatorResult | null> {
   const { config, text, state, nextState, toNumberedOptions, getOtherDayOptions } = ctx
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const eligibleForSequence = resolveSequenceEligibleServicesFromConfig(config)
+  const sequencePool =
+    eligibleForSequence.length > 0 ? eligibleForSequence : configuredServices.map((s) => s.name).filter(Boolean)
 
   if (config.allow_sequence_booking) {
-    const eligibleForSequence =
-      (config.sequence_eligible_services?.length ?? 0) > 0
-        ? config.sequence_eligible_services || []
-        : (config.services || []).map((s) => s.name).filter(Boolean)
-    const mentionedMultiple = findServicesFromText(text, config.services || [], eligibleForSequence)
+    const mentionedMultiple = findServicesFromText(text, configuredServices, sequencePool)
     if (mentionedMultiple.length >= 2 && (!nextState.slots.date || !nextState.slots.time)) {
       nextState.slots.service = mentionedMultiple.join(", ")
       nextState.just_identified_service = true
@@ -41,22 +43,18 @@ export async function handleTimeAndAvailability(ctx: BookingContext): Promise<Si
   if (!nextState.slots.service) {
     if (isVisitRequest(text)) {
       nextState.slots.service = "Visita"
-    } else if (config.services && config.services.length === 1) {
-      nextState.slots.service = config.services[0].name
+    } else if (configuredServices.length === 1) {
+      nextState.slots.service = configuredServices[0].name
     } else if (config.allow_sequence_booking) {
-      const eligibleForSequence =
-        (config.sequence_eligible_services?.length ?? 0) > 0
-          ? config.sequence_eligible_services || []
-          : (config.services || []).map((s) => s.name).filter(Boolean)
-      const multiple = findServicesFromText(text, config.services || [], eligibleForSequence)
+      const multiple = findServicesFromText(text, configuredServices, sequencePool)
       if (multiple.length > 0) {
         nextState.slots.service = multiple.join(", ")
       } else {
-        const service = findServiceFromText(text, config.services || [])
+        const service = findServiceFromText(text, configuredServices)
         if (service) nextState.slots.service = service
       }
     } else {
-      const service = findServiceFromText(text, config.services || [])
+      const service = findServiceFromText(text, configuredServices)
       if (service) nextState.slots.service = service
     }
   }
@@ -188,14 +186,17 @@ export async function handleTimeAndAvailability(ctx: BookingContext): Promise<Si
           : ["Outro dia"]
       return buildResult(msg, nextState, options)
     }
-    nextState.last_time_options = availability.available.slice(0, 24)
+    const timePeriod = nextState.slots.time_period
+    const slotsToShow =
+      timePeriod ? filterSlotsByPeriod(availability.available, timePeriod) : availability.available.slice(0, 24)
+    nextState.last_time_options = slotsToShow.length > 0 ? slotsToShow : availability.available.slice(0, 24)
     nextState.last_time_options_date = nextState.slots.date
     nextState.last_time_options_staff = nextState.slots.staff_name
-    return buildResult(
-      `Tenho estes horarios livres em ${formatDatePt(nextState.slots.date)}. Qual voce prefere?`,
-      nextState,
-      toNumberedOptions(availability.available.slice(0, 24))
-    )
+    const msg =
+      timePeriod && slotsToShow.length > 0
+        ? buildAvailabilityForPeriodMessage(slotsToShow)
+        : `Tenho estes horarios livres em ${formatDatePt(nextState.slots.date)}. Qual voce prefere?`
+    return buildResult(msg, nextState, toNumberedOptions(nextState.last_time_options))
   }
 
   return null

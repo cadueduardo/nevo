@@ -5,8 +5,16 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ChevronDown, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+
+let supabaseClientPromise: Promise<any> | null = null
+
+async function getSupabaseClient() {
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import('@/lib/supabase/client').then((mod) => mod.createClient())
+  }
+  return supabaseClientPromise
+}
 
 type AuthenticatedHeaderUserMenuProps = {
   userEmail: string
@@ -49,7 +57,7 @@ export function AuthenticatedHeaderUserMenu({
 
   const handleSignOut = async () => {
     setUserMenuOpen(false)
-    const supabase = createClient()
+    const supabase = await getSupabaseClient()
     await supabase.auth.signOut()
     router.push(loginHrefAfterSignOut)
     router.refresh()

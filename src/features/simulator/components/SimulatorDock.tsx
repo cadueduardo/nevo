@@ -1,12 +1,37 @@
 'use client'
 
 import * as React from 'react'
+import dynamic from 'next/dynamic'
 import { createPortal } from 'react-dom'
 import { MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useAgentContext } from '@/components/providers/AgentProvider'
-import { SimulatorAppClient } from '@/features/simulator/components/SimulatorAppClient'
+
+const Sheet = dynamic(() => import('@/components/ui/sheet').then((mod) => mod.Sheet), {
+  ssr: false,
+})
+const SheetContent = dynamic(
+  () => import('@/components/ui/sheet').then((mod) => mod.SheetContent),
+  { ssr: false }
+)
+const SheetHeader = dynamic(
+  () => import('@/components/ui/sheet').then((mod) => mod.SheetHeader),
+  { ssr: false }
+)
+const SheetTitle = dynamic(
+  () => import('@/components/ui/sheet').then((mod) => mod.SheetTitle),
+  { ssr: false }
+)
+const SimulatorAppClient = dynamic(
+  () =>
+    import('@/features/simulator/components/SimulatorAppClient').then(
+      (mod) => mod.SimulatorAppClient
+    ),
+  {
+    ssr: false,
+    loading: () => <div className="min-h-0 flex-1 bg-background" />,
+  }
+)
 
 /**
  * Conteúdo do dock (usa AgentContext). Só é montado no cliente para evitar SSR sem Provider.
@@ -56,7 +81,7 @@ function SimulatorDockContent() {
           )}
         </Button>
       </div>
-      <Sheet open={open} onOpenChange={setOpen}>
+      {open && <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent
           side="right"
           className="flex w-full flex-col p-0 sm:max-w-md"
@@ -97,7 +122,7 @@ function SimulatorDockContent() {
             </div>
           </div>
         </SheetContent>
-      </Sheet>
+      </Sheet>}
     </>
   )
 

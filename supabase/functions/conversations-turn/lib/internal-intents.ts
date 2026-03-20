@@ -19,6 +19,7 @@ import {
   getWeekdayKey,
 } from "./utils.ts"
 import { findServiceFromText, getServiceDurationMinutes } from "./services.ts"
+import { resolveConfiguredServicesFromConfig } from "./canonical-services.ts"
 import { getScheduleForStaff } from "./staff.ts"
 import {
   extractQuoteSlotsFromText,
@@ -1038,7 +1039,7 @@ export async function handleInternalIntent(params: HandleInternalIntentParams): 
 
     case "create_appointment_internal": {
       const schedule = params.config?.schedule
-      const services = params.config?.services || []
+      const services = resolveConfiguredServicesFromConfig(params.config)
       const dateIso = slots.date || getTodayIsoBusinessTz()
       const timeStr = slots.time
       const serviceName = slots.service || findServiceFromText(message, services)

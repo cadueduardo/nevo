@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
+import { buildCanonicalBusinessProfile, projectLegacyServiceViewsFromBusinessProfile } from '@/lib/business-profile'
+import {
+  buildEvolutionWebhookUrl,
+  ensureEvolutionWebhookSecret,
+  sanitizeEvolutionBaseUrl,
+} from '@/lib/whatsapp/evolution'
 
 const EMPTY_FLOW_DEFINITION = {
   nodes: [
@@ -47,7 +53,7 @@ function sanitizeInstanceName(raw: string): string {
 }
 
 function getEvolutionEnvConfig() {
-  const baseUrl =
+  const configuredBaseUrl =
     process.env.EVOLUTION_AUTO_BASE_URL?.trim() ||
     process.env.EVOLUTION_BASE_URL?.trim() ||
     null
@@ -55,7 +61,10 @@ function getEvolutionEnvConfig() {
     process.env.EVOLUTION_AUTO_API_KEY?.trim() ||
     process.env.EVOLUTION_API_KEY?.trim() ||
     null
-  return { baseUrl: baseUrl ? baseUrl.replace(/\/$/, '') : null, apiKey }
+  const normalizedBaseUrl = configuredBaseUrl
+    ? sanitizeEvolutionBaseUrl(configuredBaseUrl)
+    : { value: null, error: null }
+  return { baseUrl: normalizedBaseUrl.value, apiKey, baseUrlError: normalizedBaseUrl.error }
 }
 
 async function tryEvolutionCall(
@@ -99,12 +108,15 @@ async function autoProvisionEvolutionForAgent(params: {
   const { supabaseAdmin, agentId, tenantId } = params
   const appOrigin = resolveAppOrigin()
   const { baseUrl, apiKey } = getEvolutionEnvConfig()
+  const { baseUrlError } = getEvolutionEnvConfig()
   const instance = sanitizeInstanceName(
     `nevo-${tenantId.slice(0, 8)}-${agentId.slice(0, 8)}`
   )
+  const webhookSecret = ensureEvolutionWebhookSecret(null)
 
-  if (!baseUrl || !apiKey || !appOrigin) {
+  if (baseUrlError || !baseUrl || !apiKey || !appOrigin) {
     const missing = [
+      baseUrlError ? 'EVOLUTION_BASE_URL inválida' : null,
       !baseUrl ? 'EVOLUTION_AUTO_BASE_URL/EVOLUTION_BASE_URL' : null,
       !apiKey ? 'EVOLUTION_AUTO_API_KEY/EVOLUTION_API_KEY' : null,
       !appOrigin ? 'NEXT_PUBLIC_APP_URL/VERCEL_URL' : null,
@@ -118,8 +130,9 @@ async function autoProvisionEvolutionForAgent(params: {
         status: 'disconnected',
         evolution_base_url: baseUrl,
         evolution_instance: instance,
-        evolution_api_key_encrypted: apiKey,
+        evolution_api_key_encrypted: null,
         webhook_url: null,
+        webhook_secret: webhookSecret,
         last_error: `Provisionamento automático indisponível. Variáveis ausentes: ${missing}`,
       },
       { onConflict: 'agent_id' }
@@ -147,7 +160,11 @@ async function autoProvisionEvolutionForAgent(params: {
   ]
   const createRes = await tryEvolutionCall(createUrls, 'POST', headers, createBodies)
 
-  const webhookUrl = `${appOrigin}/api/webhooks/evolution/${agentId}`
+  const webhookUrl = buildEvolutionWebhookUrl({
+    appOrigin,
+    agentId,
+    webhookSecret,
+  })
   const webhookSetUrls = [
     `${baseUrl}/webhook/set/${encodeURIComponent(instance)}`,
     `${baseUrl}/v1/webhook/set/${encodeURIComponent(instance)}`,
@@ -188,8 +205,9 @@ async function autoProvisionEvolutionForAgent(params: {
       status: ok ? 'connecting' : 'error',
       evolution_base_url: baseUrl,
       evolution_instance: instance,
-      evolution_api_key_encrypted: apiKey,
+      evolution_api_key_encrypted: null,
       webhook_url: webhookUrl,
+      webhook_secret: webhookSecret,
       last_error: lastError,
     },
     { onConflict: 'agent_id' }
@@ -199,28 +217,29 @@ async function autoProvisionEvolutionForAgent(params: {
 }
 
 function buildBusinessConfigFromCollected(collected: Record<string, any>) {
-  const catalogServices = Array.isArray(collected.catalog_services)
-    ? collected.catalog_services
-    : Array.isArray(collected.services)
-      ? collected.services
-      : []
-  const bookingServices = Array.isArray(collected.booking_services)
-    ? collected.booking_services
-    : Array.isArray(collected.services)
-      ? collected.services
-      : []
+  const businessProfile = buildCanonicalBusinessProfile({
+    business_name: collected.business_name,
+    business_type: collected.business_type,
+    business_profile: collected.business_profile ?? null,
+    services: collected.services,
+    booking_services: collected.booking_services,
+    catalog_services: collected.catalog_services,
+    sequence_eligible_services: collected.sequence_eligible_services,
+  })
+  const projectedServices = projectLegacyServiceViewsFromBusinessProfile(businessProfile)
 
   const config: Record<string, any> = {
     business_name: collected.business_name,
     business_type: collected.business_type,
+    business_profile: businessProfile,
     context_mode: collected.context ?? 'booking',
     establishment_address: collected.establishment_address,
     tone_of_voice: collected.tone_of_voice,
     business_config_version: 2,
-    catalog_services: catalogServices,
-    booking_services: bookingServices,
-    // Compat legado durante depreciação: services espelha booking_services
-    services: bookingServices,
+    catalog_services: projectedServices.catalog_services,
+    booking_services: projectedServices.booking_services,
+    // Compat legado durante depreciacao: services espelha a projecao canonica.
+    services: projectedServices.services,
     when_client_asks_price_no_value: collected.when_client_asks_price_no_value || 'offer_handoff_or_booking',
     schedule: collected.schedule,
     staff: Array.isArray(collected.staff) ? collected.staff : [],
@@ -229,9 +248,12 @@ function buildBusinessConfigFromCollected(collected: Record<string, any>) {
     holidays_attend: Array.isArray(collected.holidays_attend) ? collected.holidays_attend : [],
     closure_periods: Array.isArray(collected.closure_periods) ? collected.closure_periods : [],
     allow_sequence_booking: Boolean(collected.allow_sequence_booking),
-    sequence_eligible_services: Array.isArray(collected.sequence_eligible_services)
-      ? collected.sequence_eligible_services
-      : [],
+    sequence_eligible_services:
+      projectedServices.sequence_eligible_services.length > 0
+        ? projectedServices.sequence_eligible_services
+        : Array.isArray(collected.sequence_eligible_services)
+          ? collected.sequence_eligible_services
+          : [],
   }
   if (collected.branding) {
     config.branding = {

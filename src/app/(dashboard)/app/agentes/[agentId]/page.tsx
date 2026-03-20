@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useParams, useSearchParams } from 'next/navigation'
 import { MessageSquare, ArrowLeft } from 'lucide-react'
@@ -15,14 +16,50 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { AgentBasicEditor } from '@/features/agents/components/AgentBasicEditor'
-import { AgentChannelWhatsApp } from '@/features/agents/components/AgentChannelWhatsApp'
-import { AgentFlowBuilder } from '@/features/flow/components/AgentFlowBuilder'
-import { SimulatorAppClient } from '@/features/simulator/components/SimulatorAppClient'
 import { useAgentContext } from '@/components/providers/AgentProvider'
 import type { Service, Schedule } from '@/types/business-model'
 import type { BasicConfigPayload } from '@/features/agents/components/AgentBasicEditor'
 import type { FlowNodeShape, FlowEdgeShape } from '@/features/flow/types'
+import type { WhatsAppChannelState } from '@/features/agents/components/AgentChannelWhatsApp'
+import { buildCanonicalBusinessProfileFromConfig } from '@/lib/business-profile'
+
+const AgentBasicEditor = dynamic(
+  () => import('@/features/agents/components/AgentBasicEditor').then((mod) => mod.AgentBasicEditor),
+  {
+    ssr: false,
+    loading: () => <div className="min-h-[240px] rounded-lg border bg-card" />,
+  }
+)
+
+const AgentChannelWhatsApp = dynamic(
+  () =>
+    import('@/features/agents/components/AgentChannelWhatsApp').then(
+      (mod) => mod.AgentChannelWhatsApp
+    ),
+  {
+    ssr: false,
+    loading: () => <div className="min-h-[240px] rounded-lg border bg-card" />,
+  }
+)
+
+const AgentFlowBuilder = dynamic(
+  () => import('@/features/flow/components/AgentFlowBuilder').then((mod) => mod.AgentFlowBuilder),
+  {
+    ssr: false,
+    loading: () => <div className="min-h-[320px] rounded-lg border bg-card" />,
+  }
+)
+
+const SimulatorAppClient = dynamic(
+  () =>
+    import('@/features/simulator/components/SimulatorAppClient').then(
+      (mod) => mod.SimulatorAppClient
+    ),
+  {
+    ssr: false,
+    loading: () => <div className="min-h-[400px] rounded-lg border bg-card" />,
+  }
+)
 
 /** Forma do retorno de GET /api/app/bootstrap?agent_id=… (evita import do módulo server no client). */
 interface AgentDetailBootstrap {
@@ -67,6 +104,7 @@ export default function AgentDetailPage() {
   const [error, setError] = React.useState<string | null>(null)
   const [publishing, setPublishing] = React.useState(false)
   const [whatsappStatus, setWhatsappStatus] = React.useState<string | null>(null)
+  const [whatsappChannelState, setWhatsappChannelState] = React.useState<WhatsAppChannelState | null>(null)
   const { setActiveAgentId, notifyAgentConfigUpdated } = useAgentContext()
 
   // Sincronizar aba com URL
@@ -83,10 +121,18 @@ export default function AgentDetailPage() {
       })
       .then((d: AgentDetailBootstrap) => {
         if (!cancelled) setData(d)
-        return fetch(`/api/app/agents/${agentId}/channel/whatsapp`)
+        const shouldFetchWhatsappStatus =
+          d.agent.status === 'draft' || parseTab(tabParam) === 'canais' || pendingParam === 'whatsapp'
+
+        if (!shouldFetchWhatsappStatus) return null
+
+        return fetch(`/api/app/agents/${agentId}/channel/whatsapp?include_live=1`)
           .then((r) => (r.ok ? r.json() : null))
           .then((channel) => {
-            if (!cancelled && channel?.status) setWhatsappStatus(channel.status as string)
+            if (!cancelled && channel) {
+              setWhatsappChannelState(channel as WhatsAppChannelState)
+              if (channel.status) setWhatsappStatus(channel.status as string)
+            }
           })
       })
       .catch((e) => {
@@ -96,7 +142,7 @@ export default function AgentDetailPage() {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [agentId])
+  }, [agentId, pendingParam, tabParam])
 
   const handleTabChange = React.useCallback((value: string) => {
     setTab(value as TabValue)
@@ -250,8 +296,19 @@ export default function AgentDetailPage() {
   const locationModeValue =
     validLocationMode === 'fixed' || validLocationMode === 'mobile' ? validLocationMode : undefined
 
+  const canonicalBusinessProfile = buildCanonicalBusinessProfileFromConfig(bc, {
+    business_name: agent.name,
+    business_type: agent.business_type ?? undefined,
+  })
+
   const initialConfig: Partial<BasicConfigPayload> = {
-    services: (bc.services as Service[] | undefined) ?? [],
+    services: canonicalBusinessProfile.services.map((service, index) => ({
+      id: `canonical-${index}-${service.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      name: service.name,
+      description: service.description,
+      duration_minutes: service.duration_minutes,
+      base_price: service.base_price,
+    })) as Service[],
     schedule: (bc.schedule as Schedule | undefined) ?? undefined,
     greeting_message: (bc.greeting_message as string | undefined) ?? '',
     fallback_message: (bc.fallback_message as string | undefined) ?? '',
@@ -347,40 +404,55 @@ export default function AgentDetailPage() {
             <TabsTrigger value="config">Configurações</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="basico" className="mt-4">
-            <AgentBasicEditor
-              name={agent.name}
-              businessType={agent.business_type ?? ''}
-              initialConfig={initialConfig}
-              onSave={handleSaveBasic}
-            />
-          </TabsContent>
+          {tab === 'basico' && (
+            <TabsContent value="basico" className="mt-4">
+              <AgentBasicEditor
+                name={agent.name}
+                businessType={agent.business_type ?? ''}
+                initialConfig={initialConfig}
+                onSave={handleSaveBasic}
+              />
+            </TabsContent>
+          )}
 
-          <TabsContent value="fluxo" className="mt-4">
-            <FlowTabContent agentId={agentId} flow={data.flow} onConfigUpdated={() => notifyAgentConfigUpdated('Fluxo')} />
-          </TabsContent>
+          {tab === 'fluxo' && (
+            <TabsContent value="fluxo" className="mt-4">
+              <FlowTabContent
+                agentId={agentId}
+                flow={data.flow}
+                onConfigUpdated={() => notifyAgentConfigUpdated('Fluxo')}
+              />
+            </TabsContent>
+          )}
 
-          <TabsContent value="simulador" className="mt-4">
-            <div className="rounded-lg border bg-card min-h-[400px] flex flex-col">
-              <SimulatorAppClient agentIdOverride={agentId} />
-            </div>
-          </TabsContent>
+          {tab === 'simulador' && (
+            <TabsContent value="simulador" className="mt-4">
+              <div className="rounded-lg border bg-card min-h-[400px] flex flex-col">
+                <SimulatorAppClient agentIdOverride={agentId} />
+              </div>
+            </TabsContent>
+          )}
 
-          <TabsContent value="canais" className="mt-4">
-            <AgentChannelWhatsApp
-              agentId={agentId}
-              onSave={() => notifyAgentConfigUpdated('Canais WhatsApp')}
-              onConnectionStatusChange={setWhatsappStatus}
-            />
-          </TabsContent>
+          {tab === 'canais' && (
+            <TabsContent value="canais" className="mt-4">
+              <AgentChannelWhatsApp
+                agentId={agentId}
+                onSave={() => notifyAgentConfigUpdated('Canais WhatsApp')}
+                initialState={whatsappChannelState}
+                onConnectionStatusChange={setWhatsappStatus}
+              />
+            </TabsContent>
+          )}
 
-          <TabsContent value="config" className="mt-4">
-            <AgentConfigTab
-              tone={setting.tone ?? 'professional'}
-              handoffMode={setting.handoff_mode ?? 'conditional'}
-              onSave={handleSaveConfig}
-            />
-          </TabsContent>
+          {tab === 'config' && (
+            <TabsContent value="config" className="mt-4">
+              <AgentConfigTab
+                tone={setting.tone ?? 'professional'}
+                handoffMode={setting.handoff_mode ?? 'conditional'}
+                onSave={handleSaveConfig}
+              />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </main>

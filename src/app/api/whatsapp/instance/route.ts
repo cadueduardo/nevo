@@ -2,15 +2,25 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
+import { z } from 'zod'
+import {
+  buildEvolutionBaseCandidates,
+  resolveEvolutionApiKey,
+  sanitizeEvolutionBaseUrl,
+} from '@/lib/whatsapp/evolution'
 
 export const dynamic = 'force-dynamic'
 
-function buildEvolutionBaseCandidates(baseUrl: string): string[] {
-  const normalized = baseUrl.replace(/\/$/, '')
-  const candidates = [normalized]
-  if (normalized.endsWith('/api')) candidates.push(normalized.replace(/\/api$/, ''))
-  else candidates.push(`${normalized}/api`)
-  return Array.from(new Set(candidates))
+const whatsappAgentIdSchema = z.object({
+  agent_id: z.string().trim().min(1),
+})
+
+function getEvolutionEnvApiKey(): string | null {
+  return (
+    process.env.EVOLUTION_AUTO_API_KEY?.trim() ||
+    process.env.EVOLUTION_API_KEY?.trim() ||
+    null
+  )
 }
 
 export async function DELETE(req: NextRequest) {
@@ -32,7 +42,10 @@ export async function DELETE(req: NextRequest) {
       .maybeSingle()
     const isAdmin = tenantUser?.role === 'owner' || tenantUser?.role === 'admin'
     if (!isAdmin) {
-      return NextResponse.json({ error: 'Essa opção só está disponível para o administrador.' }, { status: 403 })
+      return NextResponse.json(
+        { error: 'Essa opção só está disponível para o administrador.' },
+        { status: 403 }
+      )
     }
 
     const fromQuery = new URL(req.url).searchParams.get('agent_id')
@@ -61,27 +74,42 @@ export async function DELETE(req: NextRequest) {
       .eq('provider', 'evolution')
       .maybeSingle()
 
-    if (!channel?.evolution_base_url || !channel?.evolution_instance || !channel?.evolution_api_key_encrypted) {
-      return NextResponse.json({ error: 'Canal Evolution não configurado para este agente.' }, { status: 400 })
+    if (
+      !channel?.evolution_base_url ||
+      !channel?.evolution_instance ||
+      (!channel?.evolution_api_key_encrypted && !getEvolutionEnvApiKey())
+    ) {
+      return NextResponse.json(
+        { error: 'Canal Evolution não configurado para este agente.' },
+        { status: 400 }
+      )
     }
 
-    const baseCandidates = buildEvolutionBaseCandidates(channel.evolution_base_url as string)
+    const baseUrl = sanitizeEvolutionBaseUrl(channel.evolution_base_url as string).value
     const instance = channel.evolution_instance as string
-    const apiKey = channel.evolution_api_key_encrypted as string
+    const apiKey = resolveEvolutionApiKey({
+      storedValue: channel.evolution_api_key_encrypted as string,
+      envValue: getEvolutionEnvApiKey(),
+    })
+    if (!baseUrl || !apiKey) {
+      return NextResponse.json({ error: 'Configuração Evolution inválida.' }, { status: 400 })
+    }
+
+    const baseCandidates = buildEvolutionBaseCandidates(baseUrl)
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       apikey: apiKey,
       Authorization: `Bearer ${apiKey}`,
     }
 
-    const attempts = baseCandidates.flatMap((b) => ([
+    const attempts = baseCandidates.flatMap((b) => [
       { url: `${b}/instance/delete/${encodeURIComponent(instance)}`, method: 'DELETE' as const },
       { url: `${b}/instance/delete/${encodeURIComponent(instance)}`, method: 'POST' as const },
       { url: `${b}/v1/instance/delete/${encodeURIComponent(instance)}`, method: 'DELETE' as const },
       { url: `${b}/v2/instance/delete/${encodeURIComponent(instance)}`, method: 'DELETE' as const },
       { url: `${b}/instance/delete`, method: 'DELETE' as const, body: { instanceName: instance } },
       { url: `${b}/instance/delete`, method: 'POST' as const, body: { instanceName: instance } },
-    ]))
+    ])
 
     let remoteOk = false
     let remoteError = ''
@@ -130,3 +158,4 @@ export async function DELETE(req: NextRequest) {
     )
   }
 }
+

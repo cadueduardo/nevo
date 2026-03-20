@@ -30,6 +30,7 @@ import {
 } from "../utils.ts"
 import { isYes, isNo, isGreeting, isPriceQuestion } from "../detection.ts"
 import { findServiceFromText, getServiceWithPrice } from "../services.ts"
+import { resolveConfiguredServicesFromConfig } from "../canonical-services.ts"
 import { resolveServiceMatchSummary } from "../qualification.ts"
 import { isDateBlocked } from "../holidays.ts"
 import { buildServicesListResult } from "../anytime-handlers.ts"
@@ -209,8 +210,9 @@ export async function handleStaffAndDate(ctx: BookingContext): Promise<Simulator
 
   if (isPriceQuestion(text)) {
     const cordial = getCordialPrefix(config, false)
-    const serviceName = findServiceFromText(text, config.services || [])
-    const svc = getServiceWithPrice(config.services || [], serviceName)
+    const configuredServices = resolveConfiguredServicesFromConfig(config)
+    const serviceName = findServiceFromText(text, configuredServices)
+    const svc = getServiceWithPrice(configuredServices, serviceName)
     if (serviceName && svc && svc.base_price != null) {
       nextState.slots.service = svc.name
       nextState.just_identified_service = true
@@ -220,7 +222,7 @@ export async function handleStaffAndDate(ctx: BookingContext): Promise<Simulator
         ["Quero agendar", "Só queria saber"]
       )
     }
-    if (!serviceName && (config.services || []).length > 0) {
+    if (!serviceName && configuredServices.length > 0) {
       const summary = await resolveServiceMatchSummary({
         text,
         config,
@@ -230,9 +232,9 @@ export async function handleStaffAndDate(ctx: BookingContext): Promise<Simulator
         return buildResult(summary.rejectionMessage, nextState)
       }
     }
-    const withPrice = (config.services || []).filter((s) => s.base_price != null)
+    const withPrice = configuredServices.filter((s) => s.base_price != null)
     if (withPrice.length > 0) {
-      const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+      const serviceOptions = configuredServices.map((s) => s.name).filter(Boolean)
       nextState.last_service_options = serviceOptions
       return buildServicesListResult(config, nextState, cordial)
     }

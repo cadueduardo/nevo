@@ -1,12 +1,20 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import dynamic from 'next/dynamic'
 import { X, RotateCcw, User, Building2 } from 'lucide-react'
 import { ChatComposer } from '@/components/shared/ChatComposer'
-import { ChatMessage } from '@/components/shared/ChatMessage'
 import type { Message } from '@/components/shared/ChatShell'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
+const ChatMessage = dynamic(
+  () => import('@/components/shared/ChatMessage').then((mod) => mod.ChatMessage),
+  {
+    ssr: false,
+    loading: () => <div className="min-h-16" />,
+  }
+)
 
 export type SimulatorRole = 'client' | 'owner'
 

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
+import { z } from 'zod'
+
+const flowPatchSchema = z.object({
+  definition: z.unknown().optional(),
+  layout: z.unknown().optional(),
+})
 
 /**
  * GET /api/app/agents/[id]/flow
@@ -95,17 +101,18 @@ export async function PATCH(
     return NextResponse.json({ error: 'Agente não encontrado' }, { status: 404 })
   }
 
-  const body = await req.json().catch(() => ({}))
-  if (typeof body !== 'object' || body === null) {
-    return NextResponse.json({ error: 'Body inválido' }, { status: 400 })
+  const rawBody = await req.json().catch(() => null)
+  const parsedBody = flowPatchSchema.safeParse(rawBody)
+  if (!parsedBody.success) {
+    return NextResponse.json({ error: 'Body invalido' }, { status: 400 })
   }
 
   const updates: { definition?: unknown; layout?: unknown } = {}
-  if (body.definition !== undefined) {
-    updates.definition = body.definition
+  if (parsedBody.data.definition !== undefined) {
+    updates.definition = parsedBody.data.definition
   }
-  if (body.layout !== undefined) {
-    updates.layout = body.layout
+  if (parsedBody.data.layout !== undefined) {
+    updates.layout = parsedBody.data.layout
   }
   if (Object.keys(updates).length === 0) {
     return NextResponse.json(
@@ -147,3 +154,4 @@ export async function PATCH(
   }
   return NextResponse.json(updated)
 }
+

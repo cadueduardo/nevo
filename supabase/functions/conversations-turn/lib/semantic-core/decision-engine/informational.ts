@@ -59,6 +59,14 @@ export function decideInformational(
         next_question: "answer_price_and_offer_next_step",
         channel_hints: { prefer_numbered_options: false, prefer_multi_select: false },
       })
+    case "quote":
+      return buildInformationalDecision({
+        snapshot,
+        action: informational.quote?.missing_keys?.length ? "ask_quote_measurements" : "reply_quote_estimate",
+        reason: informational.quote?.missing_keys?.length ? "primary_intent_quote_missing_measurements" : "primary_intent_quote",
+        next_question: informational.quote?.missing_keys?.length ? "ask_quote_measurements" : "reply_quote_estimate_and_offer_visit",
+        channel_hints: { prefer_numbered_options: false, prefer_multi_select: false },
+      })
     case "service_detail":
       return buildInformationalDecision({
         snapshot,

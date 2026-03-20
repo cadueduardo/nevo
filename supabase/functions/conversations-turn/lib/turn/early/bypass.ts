@@ -4,6 +4,7 @@ import type { SimulatorResult } from "../../types.ts"
 import type { TurnPipelineContext } from "../../turn-context.ts"
 import { buildResult } from "../../state.ts"
 import { normalizeText } from "../../utils.ts"
+import { resolveConfiguredServicesFromConfig } from "../../canonical-services.ts"
 import { applyConversationRules, earlyConversationRules } from "../../conversation-rules.ts"
 import { buildMultiBookingIntro } from "../../builders.ts"
 import { resolveBooking } from "../../resolve-booking.ts"
@@ -21,7 +22,7 @@ export async function runBypassSteps(ctx: TurnPipelineContext): Promise<Simulato
   const earlyRuleResult = applyConversationRules(earlyConversationRules, { text, config, nextState })
   if (earlyRuleResult) return earlyRuleResult
 
-  if (nextState.step === "qualification" && (config.services || []).length > 0) {
+  if (nextState.step === "qualification" && resolveConfiguredServicesFromConfig(config).length > 0) {
     const nBypass = normalizeText(text).trim()
     const isAudienceConfirmationBypass =
       /^(1\s*[-–—.)]\s*)?(sim,?\s*nos\s+encaixamos|nos\s+encaixamos)\s*$/i.test(nBypass) ||

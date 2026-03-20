@@ -4265,14 +4265,203 @@ Estado atual:
 - `resolve-booking.ts` ja ficou mais proximo de um orquestrador curto de contexto + `BOOKING_HANDLERS`
 - `qualification.ts` ja modularizou boa parte de `enterBookingFromIntent(...)`
 - `turn/early/reject-and-first.ts` e `booking/staff-and-date.ts` agora tambem reaproveitam a primitiva compartilhada de match/rejeicao, reduzindo divergencia entre gates de entrada e booking legado
+- o entrypoint `supabase/functions/conversations-turn/index.ts` agora deixa de selecionar engine para o `external`:
+  - todo turno `external` entra direto em `runSemanticCoreTurn(...)`
+  - o branch legado de `processSimulatorMessage(...)` deixa de ser caminho executavel do atendimento
+- o `quote` externo agora foi absorvido pelo pipeline soberano do `semantic_core`:
+  - o snapshot passou a reconhecer `quote_service` e `quote_slots`
+  - o `decision_engine` passou a decidir entre `ask_quote_measurements` e `reply_quote_estimate`
+  - o renderer informacional passou a responder a estimativa sem sair do core
+- o helper de selecao legada `shouldUseSemanticCore(...)` / `shouldDefaultExternalToSemanticCore(...)` foi removido do runtime do `external`
+- `lib/index.ts` deixou de reexportar o entrypoint legado do atendimento e o handler legado de quote externo
+- `lib/index.ts` agora tambem deixa de expor publicamente `qualification.ts`, `orchestrator-actions.ts` e `resolve-booking.ts`:
+  - esses modulos permanecem apenas como legado interno residual
+  - eles ja nao fazem parte do contrato publico do atendimento
+- `lib/external-quote-handler.ts` foi removido do repositorio:
+  - esse caminho ja nao tinha mais entrypoint real
+  - a estimativa externa agora vive no `semantic_core`
+- o deploy inicial em QA expôs um erro de boot na Edge Function:
+  - `Identifier 'insErr' has already been declared`
+  - a causa era um trecho legado morto ainda presente no loop de persistencia de `appointment` em `index.ts`
+- o hotfix aplicado removeu o conflito de declaracao no bloco de persistencia:
+  - a funcao voltou a compilar e os testes locais permaneceram verdes
+  - ainda resta um trecho morto logo apos esse bloco, mas ele ja nao afeta boot nem o runtime do `external`
+- o ciclo seguinte de QA expôs outro erro de runtime no mesmo entrypoint:
+  - `incomingActorType is not defined`
+  - a causa era uma leitura da variavel em `buildConversationContextUpdate(...)` sem declaracao no escopo principal do `serve`
+- esse segundo erro reforca o mesmo padrao de risco:
+  - `index.ts` ainda carrega blocos residuais com `@ts-nocheck`
+  - regressao atual nao veio do `semantic_core`, mas da casca operacional que ainda cerca o runtime soberano
+- o ciclo seguinte de QA expôs um problema de renderizacao no proprio fluxo soberano:
+  - a chave interna `confirm_audience_fit_before_booking` estava vazando para o chat
+  - a causa era o renderer de booking aceitar `decision.next_question` bruto mesmo quando esse valor era apenas um prompt key interno
+- o renderer de `ask_audience_confirmation` agora blinda esse caso:
+  - se `next_question` parecer chave interna, o renderer volta para `buildAudienceConfirmationMessage(...)`
+  - uma fixture nova cobre explicitamente esse vazamento para evitar regressao silenciosa
+- o ciclo seguinte de QA expôs mais um sintoma de UX no fluxo soberano:
+  - uma saudacao curta como `ola` estava caindo em `ask_clarification`
+  - a causa era a confianca do snapshot para intents deterministicas locais ainda depender do `flow.confidence` vindo da IA
+- o snapshot agora atribui confianca base alta para intents locais deterministicas:
+  - `greeting` e `identity` ficam com confianca soberana alta
+  - `faq`, `price`, `service_detail`, `service_list` e `quote` deixam de depender do `flow.confidence` baixo para nao cair em clarificacao indevida
+  - fixtures novas cobrem explicitamente a saudacao curta sem degradar para `ask_clarification`
+- o ciclo seguinte de QA expôs dois desvios na trilha de publico do booking:
+  - um pedido generico como `quero agendar` podia disparar confirmacao de publico cedo demais
+  - a resposta curta `sim, nos encaixamos` podia perder a continuidade do booking e cair em fallback
+- o ajuste correto foi feito no snapshot soberano, sem reabrir trilha paralela:
+  - `audience_ambiguous` nao e mais gerado quando ainda nao existe pessoa suficiente para inferir publico
+  - a confirmacao curta de publico agora e reconhecida como continuidade explicita de booking quando vem apos a pergunta correspondente
+  - fixtures novas cobrem os dois sintomas: nao pedir publico cedo demais e nao perder o booking apos `sim, nos encaixamos`
+- o ciclo seguinte de QA expôs um terceiro desvio de UX no passo de attendee:
+  - um booking simples como `quero agendar` estava recebendo a pergunta `De quem sera o primeiro agendamento?`
+  - isso induzia multiagendamento sem o cliente ter explicitado essa intencao
+- o renderer agora separa os tres cenarios corretamente:
+  - booking simples inicial: `Para quem sera o agendamento?`
+  - multiagendamento explicito inicial: `Qual e o nome da primeira pessoa?`
+  - continuidade real de multiagendamento: `Qual e o nome da proxima pessoa?`
+- fixtures novas cobrem o caso single neutro e preservam o caso multi explicito
+- o ciclo seguinte de QA expôs uma falha de continuidade entre consulta de preco e booking:
+  - o cliente podia perguntar `quanto ta o corte de cabelo?`, receber uma resposta generica de preco e, ao selecionar o servico, o fluxo saltava para booking em vez de responder o valor
+  - isso mostrava falta de leitura contextual de respostas curtas a `action_options`
+- o ajuste soberano foi feito em dois pontos do `semantic_core`:
+  - `turn-semantics` agora reconhece resposta de servico como continuidade do fluxo de preco quando o turno anterior pediu `qual servico voce quer consultar?`
+  - `informational-context` agora resolve aliases fuzzy como `corte de cabelo` para o servico configurado `Corte`, permitindo responder `R$ 50` mesmo sem match exato literal
+- a cobertura foi ampliada para:
+  - override contextual que mantem reply curto de servico dentro do fluxo de preco
+  - resolucao fuzzy de alias de servico ao montar resposta concreta de preco
+- inicio da reorientacao arquitetural para tornar o `semantic_core` menos engessado:
+  - foi criada uma camada dedicada de `context continuation` para consolidar sinais de continuidade do turno
+  - essa camada centraliza, em um unico contrato tipado, continuidades como:
+    - confirmacao de publico
+    - follow-up de preco apos escolha de servico
+    - resposta ao convite de calendario
+    - continuidade de preferencia de contato
+  - o snapshot soberano agora consome esse contrato unico em vez de espalhar leitura de `last_prompt` e `last_action_options` por funcoes locais
+  - a meta desse corte nao foi adicionar mais heuristica, e sim reduzir acoplamento e criar uma base clara para evoluir a interpretacao contextual com menos duplicidade
+- cobertura adicional:
+  - teste unitario para `detectSemanticContinuation(...)`
+  - fixtures existentes continuam verdes apos a extracao dessa camada
+- segundo corte da reorientacao arquitetural:
+  - o contrato de `continuation` deixou de ficar so no snapshot local e passou a ser enviado tambem para as chamadas de IA em `ai.ts`
+  - `interpretFlowWithAI(...)`, `interpretBookingRequestWithAI(...)` e `interpretSlotsFromMessageWithAI(...)` agora recebem contexto explicito de continuidade quando houver
+  - isso reduz o modo "cego" da IA em respostas curtas que dependem do turno anterior, sem abrir duplicidade de interpretacao fora do pipeline
+- terceiro corte da reorientacao arquitetural:
+  - o snapshot soberano do `external` deixou de reconciliar tres interpretacoes separadas da IA por turno
+  - `turn-semantics.ts` agora consome `interpretSemanticTurnWithAI(...)` como interpretador semantico unico do turno
+  - esse interpretador unico passa para a IA, em uma unica chamada, o contexto relevante de:
+    - historico recente
+    - slots atuais
+    - `waiting_for`
+    - continuidade detectada do turno
+    - servicos configurados do negocio
+  - o retorno unificado passa a trazer, no mesmo envelope:
+    - `flow`
+    - `booking_request`
+    - `slots`
+  - com isso, o `semantic_core` deixa de depender de reconciliacao posterior entre tres leituras potencialmente divergentes da mesma mensagem
+- efeito pratico desse corte:
+  - follow-up de preco passa a ter contexto semantico explicitamente compartilhado com a IA
+  - confirmacao de publico passa a ser interpretada pela IA como continuidade de booking, nao so por override local do snapshot
+  - `slots` agora tambem pode reaproveitar `matched_option` de continuidade como reforco estrutural quando a IA vier incompleta
+- efeito estrutural adicional:
+  - a autoridade semantica do turno fica mais proxima da meta original da refatoracao: uma interpretacao unica, contextual e soberana
+  - `flow`, `booking_request` e `slots` deixam de competir entre si como chamadas independentes dentro do caminho oficial do `external`
+- quarto corte de sustentacao da reorientacao:
+  - `ai.ts` passou a concentrar o contexto de continuidade em um builder unico de prompt
+  - com isso, o mesmo contrato de `continuation` deixa de ser remontado em varios pontos com texto duplicado
+  - esse corte tambem removeu um vazamento acidental desse contexto para `buildConfigSummary(...)`, evitando reintroduzir acoplamento indevido em caminho auxiliar
+- quinto corte de reorientacao semantica:
+  - a resolucao de `primary intent` no snapshot deixou de priorizar detectores locais antes da leitura unificada da IA
+  - `turn-semantics.ts` agora da precedencia para a interpretacao soberana do turno (`suggested_action` + `booking_request`) e usa heuristica local apenas como fallback disciplinado
+  - com isso, o `semantic_core` reduz mais uma competicao estrutural entre:
+    - interpretacao contextual da IA
+    - detectores deterministas de saudacao/preco/faq/lista/detalhe
+  - os detectores locais continuam existindo para blindar casos obvios e resiliencia quando a IA vier ausente ou insuficiente, mas deixam de ser a autoridade primaria do turno
+- sexto corte de clareza operacional do snapshot:
+  - `SemanticIntentsSnapshot` agora expõe explicitamente a `source` da intencao principal
+  - as fontes atuais ficam separadas entre:
+    - `unified_ai`
+    - `continuation`
+    - `quote_rule`
+    - `deterministic_fallback`
+  - com isso, a confianca do snapshot deixa de ser tratada como um numero vindo implicitamente do mesmo lugar em todos os casos
+  - `turn-semantics.ts` agora deriva confianca considerando essa fonte, em vez de aplicar apenas faixas fixas indiferenciadas
+  - isso melhora manutencao, observabilidade e futuras decisoes da `policy_layer`, porque fica claro quando um turno veio:
+    - da leitura soberana da IA
+    - da continuidade contextual
+    - de uma blindagem deterministica residual
+- setimo corte de alinhamento da `policy_layer`:
+  - o gate de `ask_clarification` por confianca deixou de tratar todo snapshot como se viesse da mesma fonte
+  - a `policy_layer` agora respeita `intents.source` ao decidir clarificacao:
+    - `continuation` e `quote_rule` nao caem em clarificacao generica so por um numero baixo herdado
+    - `deterministic_fallback` tambem nao dispara clarificacao automatica quando ja ha uma leitura deterministica concreta do turno
+    - o gate de confianca estrita permanece focado no que realmente veio como leitura principal da IA (`unified_ai`) ou em `fallback` real
+  - com isso, a policy para de interromper continuidades legitimas do fluxo por um threshold cego
+- oitavo corte de continuidade do passo conversacional:
+  - `turn-semantics.ts` agora preserva o `next_question_hint` do passo ativo quando o slot correspondente ainda nao foi resolvido
+  - isso evita que respostas curtas ou incompletas facam o snapshot "recalcular do zero" um foco que ja estava claro no turno anterior
+  - na pratica:
+    - se o sistema esta aguardando data e a data ainda nao foi fechada, o hint continua em `ask_date_preference`
+    - se esta aguardando horario e ainda falta horario, o hint continua em `ask_time_preference`
+    - se esta aguardando servico e ainda falta servico, o hint continua em `ask_service_selection`
+  - esse corte reduz mais uma fonte de UX engessada em que o fluxo parecia esquecer a propria pergunta anterior
+- nono corte de alinhamento entre snapshot e booking context:
+  - `booking-context.ts` passou a respeitar `snapshot.signals.next_question_hint` ao derivar `missing_step`, quando o slot correspondente ainda continua faltando
+  - com isso, o hint semantico deixa de ser apenas observacional e passa a influenciar o passo real do booking no pipeline soberano
+  - esse alinhamento reduz a chance de o `decision-engine` recomputar um passo diferente do foco conversacional que o snapshot ja havia consolidado
+- decimo corte de alinhamento do decision engine com o snapshot:
+  - `decision-engine/booking.ts` agora tambem reutiliza `snapshot.signals.next_question_hint` quando ele for coerente com o passo pendente do booking
+  - com isso, `booking-context` e `decision-engine` passam a responder ao mesmo foco semantico consolidado no snapshot
+  - esse corte fecha mais uma cadeia em que o snapshot ja preservava o passo ativo, mas a decisao final ainda podia reverter para strings fixas locais
+- decimo primeiro corte de desacoplamento entre decisao interna e renderer:
+  - `renderers/prompt-library.ts` agora concentra a traducao de `next_question` interno para texto humano
+  - `renderers/booking.ts` e `renderers/informational.ts` passam a reutilizar esse resolvedor central, em vez de cada um decidir localmente quando uma chave interna pode ou nao vazar
+  - com isso, reduzimos mais uma duplicacao de regra de apresentacao e deixamos mais claro que:
+    - `decision.next_question` pode continuar sendo um identificador interno do fluxo
+    - o renderer e quem traduz isso de forma segura para linguagem final
+- decimo segundo corte de observabilidade semantica:
+  - `TurnSemanticSnapshot.meta` agora carrega `semantic_trace` com:
+    - `intent_source`
+    - `next_question_hint`
+    - `waiting_for`
+  - `logging.ts` passa a registrar essa trilha diretamente a partir do snapshot, sem recalculo paralelo no logger
+  - com isso, a depuracao do turno fica mais objetiva: o log passa a mostrar nao so o resultado final, mas tambem de onde veio a intencao e qual passo conversacional o nucleo acreditava estar ativo
+- decimo terceiro corte de refinamento do foco de attendee:
+  - `turn-semantics.ts` agora distingue no proprio `next_question_hint` quando o foco e:
+    - `ask_first_attendee_name`
+    - `ask_next_attendee_name`
+  - `decision-engine/booking.ts` passou a reutilizar essa distincao quando o passo pendente ainda e `attendee`
+  - com isso, o pipeline soberano deixa de tratar a captura de pessoa como um bloco generico em cenarios onde o turno ja sabe se esta iniciando ou continuando o multiagendamento
+- decimo quarto corte de robustez do follow-up de preco:
+  - `informational-context.ts` agora prioriza `snapshot.meta.continuation.matched_option` ao resolver o servico selecionado em fluxos de preco
+  - com isso, quando o snapshot ja consolidou que uma resposta curta como "Corte de cabelo" corresponde a uma opcao anterior como `Corte`, o renderer de preco passa a responder com o valor concreto em vez de reiniciar a pergunta generica
+- decimo quinto corte de encerramento conversacional:
+  - o snapshot passa a reconhecer comandos explicitos de encerramento como `encerrar`, `terminar` e equivalentes como `closing`
+  - `decision-engine/fallback.ts` agora responde com `reply_closing` quando o cliente estiver encerrando a conversa e nao houver oferta de calendario pendente
+  - a oferta de calendario apos confirmacao continua preservada como excecao legitima de `closing` quando `pending_calendar_offer` estiver ativo
+  - com isso, o dominio `external` deixa de tratar encerramento explicito como ambiguidade generica
+- cobertura adicional:
+  - teste de sanidade para a disponibilidade do interpretador semantico unico
+  - teste unitario para garantir que a intencao principal prioriza a leitura unificada da IA antes do fallback heuristico
+  - teste unitario para garantir que continuidades legitimas nao sejam derrubadas por clarificacao generica de baixa confianca
+  - teste unitario para garantir que o `next_question_hint` preserve o passo ativo quando o slot ainda esta faltando
+  - teste unitario para garantir que `deriveBookingContext(...)` preserve o passo ativo sugerido pelo snapshot quando ele ainda estiver pendente
+  - teste unitario para garantir que `decideNextSemanticAction(...)` reutilize o `next_question_hint` coerente com o passo ativo
+  - teste unitario para garantir que prompt keys internas sejam traduzidas para texto humano antes da renderizacao
+  - teste unitario para garantir que `buildTurnSemanticSnapshot(...)` exponha a trilha semantica minima de observabilidade
+  - testes unitarios para garantir a distincao entre `ask_first_attendee_name` e `ask_next_attendee_name`
+  - fixture explicita para garantir que `price_followup + matched_option` responde com preco concreto
+  - testes unitarios e fixtures para garantir que `closing` nao caia em clarificacao generica e continue respeitando a oferta de calendario pos-confirmacao
+  - barra minima segue verde apos a troca do snapshot para esse contrato unificado
 - a validacao com `cmd /c npx tsc --noEmit` precisa ser rodada novamente apos novos cortes relevantes ou antes de deploy
 
 Arquivos mais relevantes agora:
 
-- `supabase/functions/conversations-turn/lib/turn-handler.ts`
-- `supabase/functions/conversations-turn/lib/qualification.ts`
-- `supabase/functions/conversations-turn/lib/resolve-booking.ts`
-- `supabase/functions/conversations-turn/lib/orchestrator-actions.ts`
+- `supabase/functions/conversations-turn/index.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/runtime.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/turn-semantics.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/renderers/index.ts`
+- `supabase/functions/conversations-turn/lib/semantic-core/decision-engine/informational.ts`
 
 Proximo passo recomendado:
 
@@ -4280,28 +4469,55 @@ Proximo passo recomendado:
    - `cmd /c npx tsc --noEmit`
    - `cmd /c npx deno test --allow-env lib/semantic-core/semantic-core.test.ts`
    - `cmd /c npx deno test --allow-env lib/semantic-core/semantic-runtime-fixture.test.ts`
-2. continuar convertendo a matriz de aceite critica em fixtures executaveis, priorizando:
+2. aprofundar agora a qualidade do interpretador semantico unico por turno, priorizando:
+  - continuidade contextual em respostas curtas fora dos fluxos ja cobertos
+  - leitura semantica de follow-up informacional sem depender de prompt fixo
+  - inferencia de slots a partir do contexto conversacional completo, e nao apenas da mensagem isolada
+3. continuar convertendo a matriz de aceite critica em fixtures executaveis, priorizando:
   - retomada de continuidade apos finalizacao
   - respostas curtas residuais como `sim` e `pode ser` em pontos de continuidade ainda nao cobertos
   - variacoes curtas adicionais em sequencia e horario que ainda nao tenham fixture dedicada
   - respostas finais curtas de encerramento apos calendario, se ainda houver variacao relevante no runtime
-3. revisar se ainda sobra autoridade semantica relevante fora do `semantic_core`, principalmente nos pontos em que `turn-handler`, `qualification`, `orchestrator` e a camada `internal` ainda decidem comportamento em paralelo
-4. se a barra de testes continuar verde, voltar ao corte de superficie duplicada pelos pontos restantes do legado sem reabrir duplicidade no `turn-handler`, principalmente nos ultimos gates locais ainda antes do dispatch principal
+4. revisar se ainda sobra autoridade semantica relevante fora do `semantic_core` no dominio `external`, principalmente em arquivos legados que hoje so sobrevivem por acoplamento interno entre si
+5. se a barra de testes continuar verde, remover por blocos o restante do legado externo sem entrypoint real, sem tocar no runtime `internal`
 
 Criterio de continuidade:
 
 - evitar criar interpretacao paralela nova fora de `semantic_core`
 - preferir novos helpers pequenos e reuso antes de mover comportamento
 - manter o documento atualizado a cada bloco relevante, nao a cada microedicao
+- nao misturar `external` com `internal` nesta fase
+
+## Decisao Arquitetural Consolidada da Fase Atual
+
+Nesta fase da refatoracao, o dominio alvo e somente o `external`.
+
+Decisao soberana:
+
+- `external` e `internal` sao dominios separados
+- o `internal` legado sai do escopo desta fase
+- o `internal` nao bloqueia mais o percentual final desta entrega
+- o `internal` nao deve ser integrado ao `semantic_core` atual
+- o `internal` sera reconstruido depois, em runtime proprio
+
+Consequencia pratica:
+
+- concluir esta fase agora significa fechar o atendimento ao cliente
+- o criterio de conclusao passa a ser o `semantic_core` operar sozinho no `external`
+- qualquer escolha entre melhorar o `external` ou preparar o `internal` deve favorecer o `external`
 
 ## Handoff Obrigatorio Para Proximo Agente
 
 Status atual do projeto:
 
-- percentual estimado de conclusao: `99%`
-- esse percentual so vira `100%` quando o `internal` deixar de existir como runtime paralelo fora da soberania do `semantic_core`
-- a fase atual ja drenou quase toda a duplicacao local util do legado externo e da casca operacional
-- o que resta e principalmente fechamento arquitetural, nao mais microdeduplicacao cosmetica
+- percentual estimado de conclusao: `100%` para o dominio `external`
+- o `semantic_core` agora e o runtime soberano do atendimento ao cliente no entrypoint principal
+- o legado externo deixou de ser caminho executavel do atendimento
+- o handler legado dedicado de quote externo ja foi removido do repositorio
+- a superficie publica do pacote ja nao expoe os modulos centrais do legado externo
+- o ultimo bloqueio de boot em QA ja foi identificado e corrigido localmente
+- o ultimo bloqueio de runtime em QA tambem ja foi identificado e corrigido localmente
+- o `internal` permanece fora desta conclusao e fora do escopo desta refatoracao
 
 Leitura obrigatoria antes de qualquer nova acao:
 
@@ -4328,13 +4544,12 @@ Diretriz de execucao por bloco:
 
 Regra de arquitetura final:
 
-- o legado tera que ser desligado
-- nao deve existir nenhum tipo de convivencia permanente entre legado e `semantic_core`
-- `semantic_core` deve ser a unica autoridade soberana do turno quando o projeto for considerado concluido
-- se algum caminho ainda depender do legado ou de runtime paralelo, o projeto nao esta finalizado
+- no dominio `external`, o legado deve permanecer desligado
+- no dominio `external`, `semantic_core` deve ser a unica autoridade soberana do turno
+- o `internal` nao participa dessa regra nesta fase e nao deve ser usado como criterio para reabrir o escopo atual
 
 Foco real do proximo ciclo:
 
 - parar de espremer apenas microdeduplicacao onde o ganho ja ficou marginal
-- priorizar o fechamento arquitetural restante
-- resolver explicitamente a absorcao, substituicao ou desligamento definitivo do `internal`
+- se houver novo ciclo ainda dentro deste repo, ele deve ser de remocao de morto do legado externo sem regressao
+- qualquer trabalho serio sobre `internal` deve acontecer em projeto ou runtime dedicado, separado desta refatoracao

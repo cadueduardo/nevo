@@ -1,7 +1,13 @@
 import type { Metadata } from 'next'
-import { ThemeProvider } from '@/components/providers/ThemeProvider'
-import { SentryProvider } from '@/components/providers/SentryProvider'
+import dynamic from 'next/dynamic'
 import '@/styles/globals.css'
+
+const SentryProvider = dynamic(
+  () => import('@/components/providers/SentryProvider').then((mod) => mod.SentryProvider),
+  {
+    ssr: false,
+  }
+)
 
 export const metadata: Metadata = {
   title: 'Nevo - Atendimento Inteligente',
@@ -19,9 +25,7 @@ export default function RootLayout({
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <body>
-        <SentryProvider>
-          <ThemeProvider>{children}</ThemeProvider>
-        </SentryProvider>
+        <SentryProvider>{children}</SentryProvider>
       </body>
     </html>
   )

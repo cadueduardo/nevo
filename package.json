@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:semantic-core": "npx deno test --no-check --allow-env supabase/functions/conversations-turn/lib/semantic-core/semantic-core.test.ts",
+    "test:semantic-runtime": "npx deno test --no-check --allow-env supabase/functions/conversations-turn/lib/semantic-core/semantic-runtime-fixture.test.ts",
+    "ci:verify": "npm run test:semantic-core && npm run test:semantic-runtime && npm run build",
     "tunnel": "ngrok http 3000",
+    "drain:whatsapp-outbox": "powershell -ExecutionPolicy Bypass -File scripts/drain-whatsapp-outbox.ps1",
     "deploy:supabase": "powershell -ExecutionPolicy Bypass -File supabase/deploy.ps1",
     "deploy:auto": "powershell -ExecutionPolicy Bypass -File scripts/deploy-and-push.ps1"
   },

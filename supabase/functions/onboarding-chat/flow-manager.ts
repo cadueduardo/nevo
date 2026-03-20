@@ -9,6 +9,19 @@ export interface BusinessModelData extends BusinessModelExtraction {
   business_config_version?: number
   /** @deprecated manter durante janela de compatibilidade. */
   services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
+  business_profile?: {
+    business_name?: string
+    business_type?: string
+    services?: Array<{
+      name: string
+      description?: string
+      duration_minutes?: number
+      base_price?: number
+      bookable?: boolean
+      catalog_visible?: boolean
+      sequence_eligible?: boolean
+    }>
+  }
   services_confirmed?: boolean
   schedule_breaks_configured?: boolean
   faq?: Array<{ question: string; answer: string }>
@@ -24,6 +37,31 @@ export interface BusinessModelData extends BusinessModelExtraction {
   quote_services?: Array<{ name: string; pricing_type: string }>
   /** Variáveis para estimativa rápida (cliente). Subconjunto de dynamic_variables. */
   quote_external_variable_keys?: string[]
+  location_mode?: 'fixed' | 'mobile'
+  establishment_address?: {
+    logradouro?: string
+    numero?: string
+    complemento?: string
+    bairro?: string
+    localidade?: string
+    uf?: string
+  }
+  service_area?: {
+    region?: string
+    coverage?: string
+  }
+  interaction_style?: 'hybrid' | 'conversational' | 'numbered_options'
+  target_audience?: {
+    mode?: 'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'
+    modes?: Array<'all' | 'women_only' | 'men_only' | 'kids_only' | 'custom'>
+    note?: string
+    kids_age_min?: number
+  }
+  policies?: {
+    cancellation_hours?: number
+    deposit_percentage?: number
+    note?: string
+  }
   staff?: Array<{
     name: string
     use_business_schedule?: boolean
@@ -36,6 +74,21 @@ export interface BusinessModelData extends BusinessModelExtraction {
     }
   }>
   staff_setup_index?: number
+  holidays_attend?: string[]
+  holidays_skipped?: boolean
+  closure_periods?: Array<{ start: string; end: string; reason?: string }>
+  closure_skipped?: boolean
+  branding?: {
+    enabled?: boolean
+    logo_url?: string
+    company_legal_name?: string
+    cnpj?: string
+    company_phone?: string
+    company_email?: string
+  }
+  branding_offer_skipped?: boolean
+  handoff_mode?: 'always' | 'conditional' | 'never'
+  tone_of_voice?: 'formal' | 'friendly' | 'professional' | 'funny'
 }
 
 export interface FlowState {
@@ -45,10 +98,85 @@ export interface FlowState {
   context?: 'booking' | 'quote' | 'both'
 }
 
+function normalizeServiceKey(value?: string): string {
+  return (value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+}
+
+function resolveMergedServices(data: Partial<BusinessModelData>) {
+  const merged = new Map<string, {
+    name: string
+    description?: string
+    duration_minutes?: number
+    base_price?: number
+    bookable?: boolean
+    catalog_visible?: boolean
+    sequence_eligible?: boolean
+  }>()
+
+  const upsert = (
+    service?: {
+      name?: string
+      description?: string
+      duration_minutes?: number
+      base_price?: number
+      bookable?: boolean
+      catalog_visible?: boolean
+      sequence_eligible?: boolean
+    },
+    flags?: { bookable?: boolean; catalog_visible?: boolean }
+  ) => {
+    const key = normalizeServiceKey(service?.name)
+    if (!key) return
+    const previous = merged.get(key) || { name: service?.name || '' }
+    merged.set(key, {
+      ...previous,
+      ...service,
+      name: service?.name || previous.name,
+      description: service?.description ?? previous.description,
+      duration_minutes: service?.duration_minutes ?? previous.duration_minutes,
+      base_price: service?.base_price ?? previous.base_price,
+      bookable: flags?.bookable ?? service?.bookable ?? previous.bookable,
+      catalog_visible: flags?.catalog_visible ?? service?.catalog_visible ?? previous.catalog_visible,
+      sequence_eligible: service?.sequence_eligible ?? previous.sequence_eligible,
+    })
+  }
+
+  ;(Array.isArray(data.services) ? data.services : []).forEach((service) => upsert(service))
+  ;(Array.isArray(data.catalog_services) ? data.catalog_services : []).forEach((service) =>
+    upsert(service, { catalog_visible: true })
+  )
+  ;(Array.isArray(data.booking_services) ? data.booking_services : []).forEach((service) =>
+    upsert(service, { bookable: true })
+  )
+  ;(Array.isArray(data.business_profile?.services) ? data.business_profile?.services : []).forEach((service) =>
+    upsert(service)
+  )
+
+  return Array.from(merged.values())
+}
+
 function getCatalogServices(data: Partial<BusinessModelData>): Array<{ name: string; description?: string }> {
   if (Array.isArray(data.catalog_services) && data.catalog_services.length > 0) {
-    return data.catalog_services
+    const merged = resolveMergedServices({
+      services: data.services,
+      catalog_services: data.catalog_services,
+      business_profile: {
+        services: (Array.isArray(data.business_profile?.services) ? data.business_profile?.services : []).filter(
+          (service) => service.catalog_visible === true
+        ),
+      },
+    })
+    return merged
   }
+
+  const canonicalVisible = (Array.isArray(data.business_profile?.services) ? data.business_profile?.services : []).filter(
+    (service) => service.catalog_visible === true
+  )
+  if (canonicalVisible.length > 0) return canonicalVisible
   return Array.isArray(data.services) ? data.services : []
 }
 
@@ -56,9 +184,89 @@ function getBookingServices(
   data: Partial<BusinessModelData>
 ): Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }> {
   if (Array.isArray(data.booking_services) && data.booking_services.length > 0) {
-    return data.booking_services
+    const merged = resolveMergedServices({
+      services: data.services,
+      booking_services: data.booking_services,
+      business_profile: {
+        services: (Array.isArray(data.business_profile?.services) ? data.business_profile?.services : []).filter(
+          (service) => service.bookable === true
+        ),
+      },
+    })
+    return merged
   }
+
+  const canonicalBookable = (Array.isArray(data.business_profile?.services) ? data.business_profile?.services : []).filter(
+    (service) => service.bookable === true
+  )
+  if (canonicalBookable.length > 0) return canonicalBookable
   return Array.isArray(data.services) ? data.services : []
+}
+
+export function buildBusinessProfile(data: Partial<BusinessModelData>) {
+  const catalogServices = Array.isArray(data.catalog_services) ? data.catalog_services : []
+  const bookingServices = Array.isArray(data.booking_services) ? data.booking_services : []
+  const legacyServices = Array.isArray(data.services) ? data.services : []
+  const canonicalServices = Array.isArray(data.business_profile?.services) ? data.business_profile.services : []
+  const byName = new Map<string, {
+    name: string
+    description?: string
+    duration_minutes?: number
+    base_price?: number
+    bookable?: boolean
+    catalog_visible?: boolean
+    sequence_eligible?: boolean
+  }>()
+
+  const normalizeKey = (value?: string) =>
+    (value || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+
+  const sequenceEligible = new Set(
+    (Array.isArray((data as any).sequence_eligible_services) ? (data as any).sequence_eligible_services : [])
+      .map((item: string) => normalizeKey(item))
+      .filter(Boolean)
+  )
+
+  const upsert = (
+    service: { name: string; description?: string; duration_minutes?: number; base_price?: number },
+    flags?: { bookable?: boolean; catalog_visible?: boolean }
+  ) => {
+    const key = normalizeKey(service?.name)
+    if (!key) return
+    const previous = byName.get(key) || { name: service.name }
+    byName.set(key, {
+      ...previous,
+      ...service,
+      name: service.name,
+      description: service.description ?? previous.description,
+      duration_minutes: service.duration_minutes ?? previous.duration_minutes,
+      base_price: service.base_price ?? previous.base_price,
+      bookable: flags?.bookable ?? previous.bookable,
+      catalog_visible: flags?.catalog_visible ?? previous.catalog_visible,
+      sequence_eligible:
+        sequenceEligible.size > 0 ? sequenceEligible.has(key) : previous.sequence_eligible,
+    })
+  }
+
+  legacyServices.forEach((service) => upsert(service))
+  canonicalServices.forEach((service) => upsert(service))
+  catalogServices.forEach((service) => upsert(service, { catalog_visible: true }))
+  bookingServices.forEach((service) => upsert(service, { bookable: true }))
+
+  return {
+    business_name: data.business_name,
+    business_type: data.business_type,
+    services: Array.from(byName.values()).map((service) => ({
+      ...service,
+      bookable: service.bookable === true,
+      catalog_visible: service.catalog_visible === true,
+      sequence_eligible: service.sequence_eligible === true,
+    })),
+  }
 }
 
 function formatContextLabel(context?: 'booking' | 'quote' | 'both'): string | null {
@@ -765,7 +973,7 @@ export function determineNextStep(
 
   return {
     step: 'summary',
-    message: generateSummary(currentData),
+    message: generateNarrativeSummary(currentData),
     action_options: ['Está correto', 'Quero ajustar'],
     requires_action: 'summary_confirmation',
   }
@@ -1034,6 +1242,245 @@ export function generateSummary(data: Partial<BusinessModelData>): string {
   parts.push('\nFicou assim. Pode tocar nos ícones para editar/excluir ou me dizer o que mudar.')
 
   return parts.join('\n')
+}
+
+export interface NarrativeSegment {
+  kind: 'text' | 'editable'
+  text: string
+  item_id?: string
+}
+
+function pushNarrativeText(segments: NarrativeSegment[], text: string) {
+  if (!text) return
+  segments.push({ kind: 'text', text })
+}
+
+function pushNarrativeEditable(segments: NarrativeSegment[], itemId: string, text: string) {
+  if (!text) return
+  segments.push({ kind: 'editable', text, item_id: itemId })
+}
+
+function buildScheduleNarrative(data: Partial<BusinessModelData>): string | null {
+  if (
+    !data.schedule ||
+    !Array.isArray(data.schedule.days_of_week) ||
+    data.schedule.days_of_week.length === 0 ||
+    !data.schedule.start_time ||
+    !data.schedule.end_time
+  ) {
+    return null
+  }
+
+  const daysLabels: Record<string, string> = {
+    monday: 'segunda',
+    tuesday: 'terça',
+    wednesday: 'quarta',
+    thursday: 'quinta',
+    friday: 'sexta',
+    saturday: 'sábado',
+    sunday: 'domingo',
+  }
+
+  const days = data.schedule.days_of_week.map((day) => daysLabels[day] || day).join(', ')
+  const breaks =
+    Array.isArray(data.schedule.breaks) && data.schedule.breaks.length > 0
+      ? `, com pausa em ${data.schedule.breaks.map((item) => `${item.start} às ${item.end}`).join(', ')}`
+      : ''
+
+  return `${days}, das ${data.schedule.start_time} às ${data.schedule.end_time}${breaks}`
+}
+
+function buildToneNarrativeLabel(tone?: string): string | null {
+  if (!tone) return null
+  const labels: Record<string, string> = {
+    formal: 'formal',
+    friendly: 'amigável',
+    professional: 'profissional',
+    funny: 'descontraído',
+  }
+  return labels[tone] || tone
+}
+
+function buildInteractionStyleNarrativeLabel(style?: string): string | null {
+  if (!style) return null
+  const labels: Record<string, string> = {
+    concise: 'mais objetivo',
+    consultative: 'mais consultivo',
+    hybrid: 'equilibrado entre objetividade e conversa',
+    conversational: 'mais conversacional',
+    numbered_options: 'mais guiado por opções',
+  }
+  return labels[style] || style
+}
+
+function buildTargetAudienceNarrative(data: Partial<BusinessModelData>): string | null {
+  const ta = (data as any).target_audience
+  if (!ta) return null
+
+  const labels: Record<string, string> = {
+    all: 'todos os públicos',
+    women_only: 'mulheres',
+    men_only: 'homens',
+    kids_only: 'crianças',
+    custom: typeof ta.note === 'string' && ta.note.trim() ? ta.note.trim() : 'público personalizado',
+  }
+
+  const modes = Array.isArray(ta.modes) && ta.modes.length > 0 ? ta.modes : ta.mode ? [ta.mode] : []
+  if (modes.length === 0) return null
+
+  let base = modes.map((mode: string) => labels[mode] || mode).join(' e ')
+  if (modes.includes('kids_only') && ta.kids_age_min != null) {
+    base += ta.kids_age_min === 0 ? ' de qualquer idade' : ` a partir de ${ta.kids_age_min} anos`
+  }
+
+  return base
+}
+
+export function generateNarrativeSummaryPayload(
+  data: Partial<BusinessModelData>
+): { text: string; segments: NarrativeSegment[] } {
+  const segments: NarrativeSegment[] = []
+
+  pushNarrativeText(segments, 'Ótimo. Foi assim que eu entendi o seu negócio até aqui:\n\n')
+
+  if (data.business_type || data.business_name) {
+    pushNarrativeText(segments, 'Você tem ')
+    if (data.business_type) {
+      pushNarrativeEditable(segments, 'business_type', data.business_type)
+    } else {
+      pushNarrativeText(segments, 'um negócio')
+    }
+    if (data.business_name) {
+      pushNarrativeText(segments, ' que se chama ')
+      pushNarrativeEditable(segments, 'business_name', data.business_name)
+    }
+    pushNarrativeText(segments, '.')
+  }
+
+  if (data.context) {
+    const contextLabel = formatContextLabel(data.context)
+    if (contextLabel) {
+      pushNarrativeText(segments, '\n\nO foco principal desse agente é ')
+      pushNarrativeEditable(segments, 'context', contextLabel)
+      pushNarrativeText(segments, '.')
+    }
+  }
+
+  const address = (data as any).establishment_address
+  if ((data as any).location_mode === 'fixed' && address?.logradouro) {
+    const addressText = `${address.logradouro}, ${address.numero}${address.complemento ? ` ${address.complemento}` : ''} - ${address.bairro}, ${address.localidade}/${address.uf}`
+    pushNarrativeText(segments, '\n\nO atendimento acontece em ')
+    pushNarrativeEditable(segments, 'establishment_address', addressText)
+    pushNarrativeText(segments, '.')
+  } else if ((data as any).service_area?.region) {
+    const serviceAreaText = (data as any).service_area.coverage
+      ? `${(data as any).service_area.region} (${(data as any).service_area.coverage})`
+      : (data as any).service_area.region
+    pushNarrativeText(segments, '\n\nA região principal de atendimento é ')
+    pushNarrativeEditable(segments, 'service_area', serviceAreaText)
+    pushNarrativeText(segments, '.')
+  }
+
+  const services = getBookingServices(data)
+  if (services.length > 0) {
+    pushNarrativeText(segments, '\n\nOs serviços que vão entrar no radar do agente são ')
+    services.forEach((service, index) => {
+      if (index > 0 && index === services.length - 1) {
+        pushNarrativeText(segments, services.length === 2 ? ' e ' : ', e ')
+      } else if (index > 0) {
+        pushNarrativeText(segments, ', ')
+      }
+
+      pushNarrativeEditable(segments, `service_${index}`, service.name)
+
+      const durationText =
+        service.duration_minutes != null
+          ? `${service.duration_minutes} min`
+          : data.schedule?.interval_minutes
+            ? `${data.schedule.interval_minutes} min`
+            : ''
+      if (durationText) {
+        pushNarrativeText(segments, ' com duração de ')
+        pushNarrativeEditable(segments, `service_duration_${index}`, durationText)
+      }
+
+      if (service.base_price != null) {
+        pushNarrativeText(segments, ' e valor de ')
+        pushNarrativeEditable(segments, `service_price_${index}`, `R$ ${service.base_price}`)
+      }
+    })
+    pushNarrativeText(segments, '.')
+  }
+
+    const scheduleText = buildScheduleNarrative(data)
+  if (scheduleText) {
+    pushNarrativeText(segments, '\n\nO horário principal de funcionamento é ')
+    pushNarrativeEditable(segments, 'schedule', scheduleText)
+    pushNarrativeText(segments, '.')
+  }
+
+  const toneLabel = buildToneNarrativeLabel((data as any).tone_of_voice ?? (data as any).tone)
+  if (toneLabel) {
+    pushNarrativeText(segments, '\n\nO jeito de responder deve soar ')
+    pushNarrativeEditable(segments, 'tone_of_voice', toneLabel)
+    pushNarrativeText(segments, '.')
+  }
+
+  const interactionStyleLabel = buildInteractionStyleNarrativeLabel((data as any).interaction_style)
+  if (interactionStyleLabel) {
+    pushNarrativeText(segments, '\n\nNa conversa, o agente deve conduzir de um jeito ')
+    pushNarrativeEditable(segments, 'interaction_style', interactionStyleLabel)
+    pushNarrativeText(segments, '.')
+  }
+
+  const audienceText = buildTargetAudienceNarrative(data)
+  if (audienceText) {
+    pushNarrativeText(segments, '\n\nHoje vocês atendem ')
+    pushNarrativeEditable(segments, 'target_audience', audienceText)
+    pushNarrativeText(segments, '.')
+  }
+
+  const policiesNote = typeof (data as any).policies?.note === 'string' ? (data as any).policies.note.trim() : ''
+  if (policiesNote) {
+    pushNarrativeText(segments, '\n\nUma orientação importante para o atendimento é: ')
+    pushNarrativeEditable(segments, 'policies', policiesNote)
+    pushNarrativeText(segments, '.')
+  }
+
+  const faq = Array.isArray((data as any).faq) ? ((data as any).faq as Array<{ question?: string; answer?: string }>) : []
+  const faqNormalized = faq
+    .map((f) => ({
+      question: typeof f?.question === 'string' ? f.question.trim() : '',
+      answer: typeof f?.answer === 'string' ? f.answer.trim() : '',
+    }))
+    .filter((f) => f.question && f.answer)
+  if (faqNormalized.length > 0) {
+    pushNarrativeText(segments, `\n\nFAQ cadastrado (${faqNormalized.length}):`)
+    const preview = faqNormalized.slice(0, 2)
+    preview.forEach((f, i) => {
+      pushNarrativeText(segments, '\n\n- ')
+      pushNarrativeEditable(segments, `faq_${i}`, `${f.question} — ${f.answer}`)
+    })
+    if (faqNormalized.length > preview.length) {
+      pushNarrativeText(segments, `\n\n(mais ${faqNormalized.length - preview.length} item(ns) no FAQ)`)
+    }
+  }
+
+  const quoteVars = Array.isArray((data as any).dynamic_variables)
+    ? (data as any).dynamic_variables.map((item: any) => item.label || item.key).filter(Boolean)
+    : []
+  if (quoteVars.length > 0 && (data.context === 'quote' || data.context === 'both')) {
+    pushNarrativeText(segments, `\n\nPara orçamento, também vou considerar estas variáveis: ${quoteVars.join(', ')}.`)
+  }
+
+  return {
+    text: segments.map((segment) => segment.text).join(''),
+    segments,
+  }
+}
+
+export function generateNarrativeSummary(data: Partial<BusinessModelData>): string {
+  return generateNarrativeSummaryPayload(data).text
 }
 
 export function generateFullStructure(data: Partial<BusinessModelData>): string {

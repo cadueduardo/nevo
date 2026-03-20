@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
+import { z } from 'zod'
+
+const settingsPatchSchema = z.object({
+  business_config: z.record(z.unknown()).optional(),
+  tone: z.enum(['friendly', 'formal', 'professional']).optional(),
+  handoff_mode: z.enum(['always', 'conditional', 'never']).optional(),
+  agent_id: z.string().trim().min(1).optional(),
+})
 
 /**
  * PATCH /api/app/settings
@@ -20,33 +28,24 @@ export async function PATCH(req: NextRequest) {
   if (!tenantId) {
     return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
   }
-    const body = await req.json().catch(() => ({}))
-    if (typeof body !== 'object' || body === null) {
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = settingsPatchSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
       return NextResponse.json({ error: 'Body inválido' }, { status: 400 })
     }
 
-    const { business_config: incomingBusinessConfig, tone, handoff_mode, agent_id: bodyAgentId } = body as {
-      business_config?: Record<string, unknown>
-      tone?: string
-      handoff_mode?: string
-      agent_id?: string
-    }
-    const agentId = typeof bodyAgentId === 'string' ? bodyAgentId.trim() || undefined : undefined
+    const {
+      business_config: incomingBusinessConfig,
+      tone,
+      handoff_mode,
+      agent_id: bodyAgentId,
+    } = parsedBody.data
+    const agentId = bodyAgentId || undefined
 
     const updates: Record<string, unknown> = {}
 
-    if (tone !== undefined) {
-      const allowed = ['friendly', 'formal', 'professional']
-      if (allowed.includes(tone)) {
-        updates.tone = tone
-      }
-    }
-    if (handoff_mode !== undefined) {
-      const allowed = ['always', 'conditional', 'never']
-      if (allowed.includes(handoff_mode)) {
-        updates.handoff_mode = handoff_mode
-      }
-    }
+    if (tone !== undefined) updates.tone = tone
+    if (handoff_mode !== undefined) updates.handoff_mode = handoff_mode
 
     if (incomingBusinessConfig !== undefined) {
       if (typeof incomingBusinessConfig !== 'object' || incomingBusinessConfig === null) {
@@ -150,3 +149,4 @@ function deepMergePreserveCritical(
   }
   return result
 }
+

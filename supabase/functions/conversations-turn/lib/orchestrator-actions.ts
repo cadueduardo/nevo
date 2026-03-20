@@ -10,6 +10,7 @@ import {
   buildGenericFallback,
   generateRejectionMessageWithAI,
 } from "./builders.ts"
+import { resolveConfiguredServicesFromConfig } from "./canonical-services.ts"
 import { getServiceWithPrice } from "./services.ts"
 import { isPriceQuestion } from "./detection.ts"
 import {
@@ -72,7 +73,7 @@ function buildOrchestratorServiceOptionsState(
   nextState: SimulatorState,
   options?: { step?: SimulatorState["step"] }
 ): { state: SimulatorState; serviceOptions: string[] } {
-  const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+  const serviceOptions = resolveConfiguredServicesFromConfig(config).map((s) => s.name).filter(Boolean)
   return {
     state: {
       ...nextState,
@@ -376,13 +377,14 @@ async function buildOrchestratorAnswerPriceResult(params: {
     inferredAttendees,
     rejectFromPriceQuestion = false,
   } = params
-  const svc = inferredService ? getServiceWithPrice(config.services || [], inferredService) : null
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const svc = inferredService ? getServiceWithPrice(configuredServices, inferredService) : null
   if (inferredService && !svc) {
     const rejectionMessage = await generateRejectionMessageWithAI(inferredService, config, isFirst, true)
     return buildOrchestratorRejectionResult(nextState, rejectionMessage)
   }
 
-  if (!svc && rejectFromPriceQuestion && isPriceQuestion(text) && (config.services || []).length > 0) {
+  if (!svc && rejectFromPriceQuestion && isPriceQuestion(text) && configuredServices.length > 0) {
     const rejectionResult = await buildOrchestratorMatchRejectionOrNull({
       text,
       config,
@@ -423,7 +425,7 @@ async function buildQualificationServicesListOrNull(params: {
   step?: SimulatorState["step"]
 }): Promise<SimulatorResult | null> {
   const { text, config, nextState, isFirst, step } = params
-  if (isPriceQuestion(text) && (config.services || []).length > 0) {
+  if (isPriceQuestion(text) && resolveConfiguredServicesFromConfig(config).length > 0) {
     const rejectionResult = await buildOrchestratorMatchRejectionOrNull({
       text,
       config,

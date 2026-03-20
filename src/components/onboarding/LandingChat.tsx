@@ -1,21 +1,64 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { ChatShell, type Message } from '@/components/shared/ChatShell'
 import { clearSessionId, getOrCreateSessionId } from '@/lib/onboarding/session'
-import { restoreOnboardingSession } from '@/lib/onboarding/restore'
-import { sendOnboardingMessage } from '@/lib/onboarding/api'
+import { sendOnboardingMessage, type NarrativeSegment } from '@/lib/onboarding/api'
+import type { SimulatorRequest } from '@/lib/simulator/api'
 import type { OnboardingStep } from '@/types/onboarding'
 import { Button } from '@/components/ui/button'
-import { SimulatorPanel, type SimulatorRole } from '@/features/simulator/components/SimulatorPanel'
 import { cn } from '@/lib/utils'
-import { sendSimulatorMessage, type SimulatorRequest } from '@/lib/simulator/api'
-import { buildSimulatorContextFromBusinessConfig } from '@/lib/simulator/context'
-import { createClient } from '@/lib/supabase/client'
-import { AuthenticatedHeaderUserMenu } from '@/components/shared/AuthenticatedHeaderUserMenu'
+import type { SimulatorRole } from '@/features/simulator/components/SimulatorPanel'
 import Link from 'next/link'
-import { normalizePhoneNumber } from '@/lib/actor'
+
+const SimulatorPanel = dynamic(
+  () => import('@/features/simulator/components/SimulatorPanel').then((mod) => mod.SimulatorPanel),
+  {
+    ssr: false,
+    loading: () => <div className="h-full w-full bg-background" />,
+  }
+)
+
+const AuthenticatedHeaderUserMenu = dynamic(
+  () =>
+    import('@/components/shared/AuthenticatedHeaderUserMenu').then(
+      (mod) => mod.AuthenticatedHeaderUserMenu
+    ),
+  { ssr: false }
+)
+
+let supabaseClientPromise: Promise<any> | null = null
+
+async function getSupabaseClient() {
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import('@/lib/supabase/client').then((mod) => mod.createClient())
+  }
+  return supabaseClientPromise
+}
+
+async function loadRestoreOnboardingSession() {
+  const mod = await import('@/lib/onboarding/restore')
+  return mod.restoreOnboardingSession
+}
+
+async function loadNormalizePhoneNumber() {
+  const mod = await import('@/lib/actor')
+  return mod.normalizePhoneNumber
+}
+
+async function loadSimulatorDependencies() {
+  const [apiMod, contextMod] = await Promise.all([
+    import('@/lib/simulator/api'),
+    import('@/lib/simulator/context'),
+  ])
+
+  return {
+    sendSimulatorMessage: apiMod.sendSimulatorMessage,
+    buildSimulatorContextFromBusinessConfig: contextMod.buildSimulatorContextFromBusinessConfig,
+  }
+}
 
 const TYPING_PLACEHOLDERS = [
   'Ex: Tenho um escritório de advocacia e recebo muitos contatos no WhatsApp',
@@ -61,55 +104,72 @@ function userMessageDisplayContent(message: string): string {
   return m
 }
 
-function parseSummaryEditableItemsFromText(text: string) {
-  const lines = (text || '').split('\n').map((l) => l.trim())
-  const items: Array<{ id: string; label: string; value: string; type: any }> = []
+function contentFromNarrativeSegments(segments?: NarrativeSegment[]): string {
+  return Array.isArray(segments) ? segments.map((segment) => segment.text).join('') : ''
+}
 
-  const bulletLines = lines
-    .map((l) => l.replace(/^[\u2022\-*]\s*/, ''))
-    .filter(Boolean)
-  const getValue = (prefixes: string[]) => {
-    const line = bulletLines.find((l) =>
-      prefixes.some((prefix) => l.toLowerCase().startsWith(prefix.toLowerCase()))
-    )
-    if (!line) return null
-    const parts = line.split(':')
-    if (parts.length < 2) return null
-    return parts.slice(1).join(':').trim()
+function parseLocalizedNumber(value: string): number | undefined {
+  const normalized = value
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/^R\$\s*/i, '')
+    .replace(/\./g, '')
+    .replace(',', '.')
+
+  if (!normalized) return undefined
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function applyLocalOnboardingEdit(data: Record<string, any>, id: string, value: string): Record<string, any> {
+  const next = { ...data }
+  const trimmedValue = value.trim()
+
+  if (id.startsWith('service_price_')) {
+    const idx = Number.parseInt(id.replace('service_price_', ''), 10)
+    const price = parseLocalizedNumber(trimmedValue)
+    const updateServices = (services: any[] | undefined) => {
+      if (!Array.isArray(services) || Number.isNaN(idx) || idx < 0 || idx >= services.length) return services
+      return services.map((service, serviceIdx) =>
+        serviceIdx === idx ? { ...service, base_price: price } : service
+      )
+    }
+    next.services = updateServices(data.services)
+    next.booking_services = updateServices(data.booking_services)
+    next.catalog_services = updateServices(data.catalog_services)
+    return next
   }
 
-  const businessName = getValue(['Neg?cio', 'Negocio'])
-  if (businessName) items.push({ id: 'business_name', label: 'Nome do neg?cio', value: businessName, type: 'business_name' })
-
-  const businessType = getValue(['Tipo'])
-  if (businessType) items.push({ id: 'business_type', label: 'Tipo de neg?cio', value: businessType, type: 'business_type' })
-
-  const services = getValue(['Servi?os', 'Servicos'])
-  if (services) {
-    const parts = services.split(',').map((s) => s.trim()).filter(Boolean)
-    parts.forEach((name, i) => items.push({ id: `service_${i}`, label: 'Servi?o', value: name, type: 'service' }))
+  if (id.startsWith('service_duration_')) {
+    const idx = Number.parseInt(id.replace('service_duration_', ''), 10)
+    const duration = parseLocalizedNumber(trimmedValue)
+    const updateServices = (services: any[] | undefined) => {
+      if (!Array.isArray(services) || Number.isNaN(idx) || idx < 0 || idx >= services.length) return services
+      return services.map((service, serviceIdx) =>
+        serviceIdx === idx ? { ...service, duration_minutes: duration } : service
+      )
+    }
+    next.services = updateServices(data.services)
+    next.booking_services = updateServices(data.booking_services)
+    next.catalog_services = updateServices(data.catalog_services)
+    return next
   }
 
-  const schedule = getValue(['Agenda'])
-  if (schedule) items.push({ id: 'schedule', label: 'Hor?rio de funcionamento', value: schedule, type: 'schedule' })
-
-  const region = getValue(['Regi?o', 'Regiao'])
-  if (region) items.push({ id: 'service_area', label: 'Regi?o', value: region, type: 'service_area' })
-
-  const tone = getValue(['Tom'])
-  if (tone) items.push({ id: 'tone_of_voice', label: 'Tom', value: tone, type: 'tone_of_voice' })
-
-  const targetAudience = getValue(['P?blico-alvo', 'Publico-alvo', 'Publico alvo'])
-  if (targetAudience) {
-    items.push({ id: 'target_audience', label: 'P?blico-alvo', value: targetAudience, type: 'target_audience' })
+  if (id.startsWith('service_') && !id.startsWith('service_price_') && !id.startsWith('service_duration_')) {
+    const idx = Number.parseInt(id.replace('service_', ''), 10)
+    const updateServices = (services: any[] | undefined) => {
+      if (!Array.isArray(services) || Number.isNaN(idx) || idx < 0 || idx >= services.length) return services
+      return services.map((service, serviceIdx) =>
+        serviceIdx === idx ? { ...service, name: trimmedValue } : service
+      )
+    }
+    next.services = updateServices(data.services)
+    next.booking_services = updateServices(data.booking_services)
+    next.catalog_services = updateServices(data.catalog_services)
+    return next
   }
 
-  const interactionStyle = getValue(['Estilo de respostas'])
-  if (interactionStyle) {
-    items.push({ id: 'interaction_style', label: 'Estilo de respostas', value: interactionStyle, type: 'interaction_style' })
-  }
-
-  return items
+  return next
 }
 
 function normalizeSignupActionOptions(
@@ -155,8 +215,8 @@ export function LandingChat() {
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(false)
   const [simulatorMessages, setSimulatorMessages] = useState<Message[]>([])
   const [isSimulatorLoading, setIsSimulatorLoading] = useState(false)
-  const [simulatorConversationId, setSimulatorConversationId] = useState<string | null>(null)
-  const [simulatorSessionId, setSimulatorSessionId] = useState<string>('')
+  /** Estado semântico do simulador (onboarding): só no navegador, reenviado a cada turno. */
+  const simulatorSemanticStateRef = useRef<Record<string, unknown> | null>(null)
   const [authChoicePending, setAuthChoicePending] = useState(false)
   const [authenticatedEmail, setAuthenticatedEmail] = useState<string | null>(null)
   const [configuredAgentRedirect, setConfiguredAgentRedirect] = useState<string | null>(null)
@@ -175,7 +235,6 @@ export function LandingChat() {
   const [pendingAuthIntent, setPendingAuthIntent] = useState<'connect_whatsapp' | null>(null)
   const connectPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const restoredSessionRef = useRef<string | null>(null)
-  const supabase = useMemo(() => createClient(), [])
   const retriedCompletedSessionRef = useRef(false)
   const migrationCompletedRef = useRef(false)
   /** Credenciais do último signup bem-sucedido; usadas ao clicar "Acessar minha área". */
@@ -185,28 +244,64 @@ export function LandingChat() {
   useEffect(() => {
     const id = getOrCreateSessionId()
     setSessionId(id)
-    setSimulatorSessionId(`${id}:sim:${Date.now()}`)
   }, [])
+
+  const onboardingSimStorageKey = (sid: string) => `nevo_onboarding_sim_v1_${sid}`
+
+  /** Reabrir simulador após F5: histórico e estado só no sessionStorage (não grava conversa no banco). */
+  useEffect(() => {
+    if (!isSimulatorOpen || !sessionId) return
+    try {
+      const raw = sessionStorage.getItem(onboardingSimStorageKey(sessionId))
+      if (!raw) return
+      const data = JSON.parse(raw) as {
+        messages?: Array<Message & { timestamp?: string }>
+        simulator_state?: Record<string, unknown>
+      }
+      setSimulatorMessages((prev) => {
+        if (prev.length > 0) return prev
+        if (!Array.isArray(data.messages) || data.messages.length === 0) return prev
+        return data.messages.map((m) => ({
+          ...m,
+          timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+        }))
+      })
+      if (data.simulator_state && typeof data.simulator_state === 'object') {
+        simulatorSemanticStateRef.current = data.simulator_state
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [isSimulatorOpen, sessionId])
 
   // Estado de autenticação para header dinâmico no onboarding.
   useEffect(() => {
     let mounted = true
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    let subscription: { unsubscribe: () => void } | null = null
+
+    ;(async () => {
+      const supabase = await getSupabaseClient()
+      const { data: { user } } = await supabase.auth.getUser()
       if (!mounted) return
       setAuthenticatedEmail(user?.email ?? null)
-    })
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthenticatedEmail(session?.user?.email ?? null)
+      const authState = supabase.auth.onAuthStateChange(
+        (_event: unknown, session: { user?: { email?: string | null } } | null) => {
+          if (!mounted) return
+          setAuthenticatedEmail(session?.user?.email ?? null)
+        }
+      )
+      subscription = authState.data.subscription
+    })().catch(() => {
+      if (!mounted) return
+      setAuthenticatedEmail(null)
     })
 
     return () => {
       mounted = false
-      subscription.unsubscribe()
+      subscription?.unsubscribe()
     }
-  }, [supabase])
+  }, [])
 
   // Resolve se existe agente em draft para exibir CTA de conclusao apenas quando houver pendencia real.
   useEffect(() => {
@@ -278,10 +373,15 @@ export function LandingChat() {
 
   // Restaurar sessão após F5: buscar do Supabase e re-hidratar estado
   useEffect(() => {
-    if (!sessionId || !supabase) return
+    if (!sessionId) return
     if (restoredSessionRef.current === sessionId) return
     let cancelled = false
-    restoreOnboardingSession(supabase, sessionId).then(({ session, messages: stored }) => {
+    ;(async () => {
+      const [supabase, restoreOnboardingSession] = await Promise.all([
+        getSupabaseClient(),
+        loadRestoreOnboardingSession(),
+      ])
+      const { session, messages: stored } = await restoreOnboardingSession(supabase, sessionId)
       if (cancelled) return
       if (!session || stored.length === 0) return
       restoredSessionRef.current = sessionId
@@ -310,6 +410,9 @@ export function LandingChat() {
           content: displayContent,
           timestamp: new Date(),
           actionOptions,
+          editableItems: isLastAssistant ? (lastMeta?.editable_items as Message['editableItems']) ?? undefined : undefined,
+          selectableOptions: isLastAssistant ? (lastMeta?.selectable_options as Message['selectableOptions']) ?? undefined : undefined,
+          narrativeSegments: isLastAssistant ? (lastMeta?.narrative_segments as Message['narrativeSegments']) ?? undefined : undefined,
           requiresAction,
         }
       })
@@ -325,11 +428,13 @@ export function LandingChat() {
       ) {
         setIsSimulatorAvailable(true)
       }
+    })().catch(() => {
+      /* ignore restore failures */
     })
     return () => {
       cancelled = true
     }
-  }, [sessionId, supabase, authenticatedEmail])
+  }, [sessionId, authenticatedEmail])
 
   const enableSimulator = () => {
     if (!isSimulatorAvailable) setIsSimulatorAvailable(true)
@@ -349,6 +454,7 @@ export function LandingChat() {
 
     // FASE 6.5 — Fluxo Conectar WhatsApp: número para pairing
     if (connectFlowState === 'awaiting_phone' && content.trim()) {
+      const normalizePhoneNumber = await loadNormalizePhoneNumber()
       const phone = normalizePhoneNumber(content)
       if (phone.length < 12) {
         setMessages((prev) => [
@@ -475,7 +581,7 @@ export function LandingChat() {
         setIsSimulatorAvailable(false)
         setIsSimulatorOpen(false)
         setSimulatorMessages([])
-        setSimulatorConversationId(null)
+        simulatorSemanticStateRef.current = null
         setIsLoading(false)
         await handleSend(content)
         return
@@ -499,11 +605,6 @@ export function LandingChat() {
       }
 
       // Fallback: quando o backend não envia editable_items no resumo, inferir do próprio texto.
-      const inferredEditableItems =
-        !response.editable_items && response.requires_action === 'summary_confirmation'
-          ? parseSummaryEditableItemsFromText(response.assistant_message)
-          : undefined
-
       const normalizedActionOptions =
         response.requires_action === 'signup'
           ? normalizeSignupActionOptions(response.action_options, Boolean(authenticatedEmail))
@@ -516,8 +617,9 @@ export function LandingChat() {
         content: response.assistant_message,
         timestamp: new Date(),
         actionOptions: normalizedActionOptions,
-        editableItems: response.editable_items || (inferredEditableItems && inferredEditableItems.length > 0 ? inferredEditableItems : undefined),
+        editableItems: response.editable_items,
         selectableOptions: response.selectable_options,
+        narrativeSegments: response.narrative_segments,
         requiresAction: response.requires_action,
         allowCustomInput:
           response.requires_action === 'catalog_services_list' ||
@@ -535,6 +637,7 @@ export function LandingChat() {
       // Se backend pedir signup: manter apenas a mensagem do backend (Criar conta, Tenho conta, Deixar para depois).
       // Não adicionar bloco duplicado - "Criar conta" abre o formulário direto (Google + email/senha).
       if (response.requires_action === 'signup') {
+        const supabase = await getSupabaseClient()
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
           let nextPath = '/app'
@@ -626,6 +729,7 @@ export function LandingChat() {
 
       // Redirecionar após cadastro completo (quando vem de outro fluxo com sessão já ativa)
       if (response.next_step === 'completed' && currentStep !== 'completed') {
+        const supabase = await getSupabaseClient()
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
           if (isNewAgentOnboarding && !migrationCompletedRef.current) {
@@ -685,6 +789,13 @@ export function LandingChat() {
   }
 
   const resetOnboarding = () => {
+    if (typeof window !== 'undefined' && sessionId) {
+      try {
+        sessionStorage.removeItem(onboardingSimStorageKey(sessionId))
+      } catch {
+        /* ignore */
+      }
+    }
     clearSessionId()
     const freshSessionId = getOrCreateSessionId()
     restoredSessionRef.current = null
@@ -702,8 +813,7 @@ export function LandingChat() {
     setIsSimulatorOpen(false)
     setSimulatorMessages([])
     setIsSimulatorLoading(false)
-    setSimulatorConversationId(null)
-    setSimulatorSessionId(`${freshSessionId}:sim:${Date.now()}`)
+    simulatorSemanticStateRef.current = null
     setIsRestartDialogOpen(false)
     lastSignupCredentialsRef.current = null
     retriedCompletedSessionRef.current = false
@@ -742,6 +852,7 @@ export function LandingChat() {
           actionOptions: r1.action_options,
           editableItems: r1.editable_items,
           selectableOptions: r1.selectable_options,
+          narrativeSegments: r1.narrative_segments,
           requiresAction: r1.requires_action,
         })
         return
@@ -771,6 +882,7 @@ export function LandingChat() {
           actionOptions: r2.action_options,
           editableItems: r2.editable_items,
           selectableOptions: r2.selectable_options,
+          narrativeSegments: r2.narrative_segments,
           requiresAction: r2.requires_action,
         })
         return
@@ -799,6 +911,7 @@ export function LandingChat() {
           actionOptions: r3.action_options,
           editableItems: r3.editable_items,
           selectableOptions: r3.selectable_options,
+          narrativeSegments: r3.narrative_segments,
           requiresAction: r3.requires_action,
         })
         setCurrentStep(r3.next_step as OnboardingStep)
@@ -815,6 +928,7 @@ export function LandingChat() {
             setConfiguredAgentRedirect(`/app/agentes/${agentId}?tab=canais&pending=whatsapp`)
           }
           if (tenantId) setSimulatorTenantId(tenantId)
+          const supabase = await getSupabaseClient()
           const { error: signInError } = await supabase.auth.signInWithPassword({
             email: payload.email,
             password: payload.password,
@@ -862,6 +976,7 @@ export function LandingChat() {
     if (isLoading) return
     setIsLoading(true)
     try {
+      const supabase = await getSupabaseClient()
       const { error } = await supabase.auth.signInWithPassword({
         email: payload.email,
         password: payload.password,
@@ -955,6 +1070,7 @@ export function LandingChat() {
   }
 
   const handleItemEditLocal = (id: string, value: string) => {
+    setOnboardingData((prev) => applyLocalOnboardingEdit(prev, id, value))
     setMessages((prev) => {
       const targetIdx = [...prev]
         .map((msg, idx) => ({ msg, idx }))
@@ -965,8 +1081,29 @@ export function LandingChat() {
       const target = prev[targetIdx]
       if (!target?.editableItems) return prev
 
+      const currentItem = target.editableItems.find((it) => it.id === id)
       const updated = target.editableItems.map((it) => (it.id === id ? { ...it, value } : it))
-      return [...prev.slice(0, targetIdx), { ...target, editableItems: updated }, ...prev.slice(targetIdx + 1)]
+      const updatedNarrativeSegments = target.narrativeSegments?.map((segment) =>
+        segment.kind === 'editable' && segment.item_id === id ? { ...segment, text: value.trim() } : segment
+      )
+
+      let nextContent = target.content
+      const oldValue = currentItem?.value?.trim()
+      const newValue = value.trim()
+      const isNarrativeSummary =
+        target.requiresAction === 'summary_confirmation' || target.requiresAction === 'summary_edit'
+
+      if (updatedNarrativeSegments && updatedNarrativeSegments.length > 0) {
+        nextContent = contentFromNarrativeSegments(updatedNarrativeSegments)
+      } else if (isNarrativeSummary && oldValue && newValue && oldValue !== newValue && nextContent.includes(oldValue)) {
+        nextContent = nextContent.replace(oldValue, newValue)
+      }
+
+      return [
+        ...prev.slice(0, targetIdx),
+        { ...target, content: nextContent, editableItems: updated, narrativeSegments: updatedNarrativeSegments },
+        ...prev.slice(targetIdx + 1),
+      ]
     })
     // Persistir no backend em background para não perder a edição ao adicionar outro item ou avançar
     if (sessionId && currentStep && value.trim()) {
@@ -982,6 +1119,7 @@ export function LandingChat() {
       lastSignupCredentialsRef.current = null
       const redirectTo = configuredAgentRedirect || '/app'
       try {
+        const supabase = await getSupabaseClient()
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
           if (!migrationCompletedRef.current) {
@@ -1045,6 +1183,7 @@ export function LandingChat() {
       return
     }
     if (action === 'Conectar agora' || action === 'Conectar meu WhatsApp agora') {
+      const supabase = await getSupabaseClient()
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
         setPendingAuthIntent('connect_whatsapp')
@@ -1138,34 +1277,31 @@ export function LandingChat() {
     handleSend(action)
   }
 
-  const simulatorRequestBase: Omit<SimulatorRequest, 'message'> = useMemo(
-    () => ({
-      session_id: simulatorSessionId || sessionId,
-      conversation_id: simulatorConversationId || undefined,
-      channel: 'web_simulator',
-      mode: simulatorRole === 'owner' ? 'internal' : 'external',
-      actor_type: simulatorRole === 'owner' ? 'owner' : 'client',
-      ...(simulatorTenantId && { tenant_id: simulatorTenantId }),
-      ...(simulatorAgentId && { agent_id: simulatorAgentId }),
-      context: buildSimulatorContextFromBusinessConfig({
-        businessName: onboardingData.business_name,
-        businessConfig: {
-          ...onboardingData,
-          context_mode: onboardingData.context,
-          when_client_asks_price_no_value:
-            onboardingData.when_client_asks_price_no_value || 'offer_handoff_or_booking',
-          services: onboardingData.services,
-          booking_services: onboardingData.booking_services ?? onboardingData.services,
-          catalog_services: onboardingData.catalog_services ?? onboardingData.services,
-        },
-        tone: onboardingData.tone_of_voice ?? onboardingData.tone,
-      }),
-    }),
-    [onboardingData, sessionId, simulatorSessionId, simulatorConversationId, simulatorTenantId, simulatorAgentId, simulatorRole]
-  )
+  /** Simulador onboarding: simulation_local — não persiste conversa no banco; estado em sessionStorage. */
+  const persistOnboardingSimulator = (msgs: Message[], state: Record<string, unknown> | null) => {
+    if (typeof window === 'undefined' || !sessionId) return
+    try {
+      sessionStorage.setItem(
+        onboardingSimStorageKey(sessionId),
+        JSON.stringify({
+          messages: msgs.map((m) => ({
+            ...m,
+            timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
+          })),
+          simulator_state: state,
+        })
+      )
+    } catch {
+      /* quota / private mode */
+    }
+  }
 
   const handleSimulatorSend = async (content: string) => {
-    if (!content.trim() || !sessionId) return
+    if (!content.trim() || !sessionId || isSimulatorLoading) return
+    const historyForApi = simulatorMessages
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
+      .map((m) => ({ role: m.role, content: String(m.content).trim() }))
+      .slice(-20)
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -1175,11 +1311,41 @@ export function LandingChat() {
     setSimulatorMessages((prev) => [...prev, userMessage])
     setIsSimulatorLoading(true)
     try {
+      const { sendSimulatorMessage, buildSimulatorContextFromBusinessConfig } =
+        await loadSimulatorDependencies()
+      const simulatorRequestBase: Omit<
+        SimulatorRequest,
+        'message' | 'simulator_state' | 'simulator_history'
+      > = {
+        session_id: sessionId,
+        onboarding_session_id: sessionId,
+        simulation_local: true,
+        channel: 'web_simulator',
+        mode: simulatorRole === 'owner' ? 'internal' : 'external',
+        actor_type: simulatorRole === 'owner' ? 'owner' : 'client',
+        context: buildSimulatorContextFromBusinessConfig({
+          businessName: onboardingData.business_name,
+          businessConfig: {
+            ...onboardingData,
+            context_mode: onboardingData.context,
+            when_client_asks_price_no_value:
+              onboardingData.when_client_asks_price_no_value || 'offer_handoff_or_booking',
+            services: onboardingData.services,
+            booking_services: onboardingData.booking_services ?? onboardingData.services,
+            catalog_services: onboardingData.catalog_services ?? onboardingData.services,
+          },
+          tone: onboardingData.tone_of_voice ?? onboardingData.tone,
+        }),
+      }
       const response = await sendSimulatorMessage({
         ...simulatorRequestBase,
         message: content,
+        simulator_state: simulatorSemanticStateRef.current ?? undefined,
+        simulator_history: historyForApi,
       })
-      setSimulatorConversationId(response.conversation_id)
+      if (response.simulator_state && typeof response.simulator_state === 'object') {
+        simulatorSemanticStateRef.current = response.simulator_state as Record<string, unknown>
+      }
       const assistantMessages = response.messages.map((m, idx) => ({
         id: `${Date.now() + idx + 1}`,
         role: 'assistant' as const,
@@ -1189,7 +1355,11 @@ export function LandingChat() {
         serviceMultiSelect: m.service_multi_select ?? false,
       }))
       if (assistantMessages.length > 0) {
-        setSimulatorMessages((prev) => [...prev, ...assistantMessages])
+        setSimulatorMessages((prev) => {
+          const next = [...prev, ...assistantMessages]
+          persistOnboardingSimulator(next, simulatorSemanticStateRef.current)
+          return next
+        })
       }
     } catch (error: any) {
       const errMsg = error?.message || 'Erro desconhecido'
@@ -1208,46 +1378,22 @@ export function LandingChat() {
     }
   }
 
-  const handleSimulatorReset = async () => {
-    const currentConversationId = simulatorConversationId
+  const handleSimulatorReset = () => {
     setSimulatorMessages([])
     setIsSimulatorLoading(false)
-    setSimulatorConversationId(null)
-    if (sessionId) {
-      setSimulatorSessionId(`${sessionId}:sim:${Date.now()}`)
-    }
-
-    // Blindagem: encerra também a conversa no backend para não reaproveitar estado antigo.
-    if (!currentConversationId) return
-    try {
-      await sendSimulatorMessage({
-        ...simulatorRequestBase,
-        conversation_id: currentConversationId,
-        message: 'reiniciar conversa',
-      })
-    } catch {
-      // Não bloquear UX do reset local caso o backend falhe.
+    simulatorSemanticStateRef.current = null
+    if (typeof window !== 'undefined' && sessionId) {
+      try {
+        sessionStorage.removeItem(onboardingSimStorageKey(sessionId))
+      } catch {
+        /* ignore */
+      }
     }
   }
 
-  const handleSimulatorRoleChange = async (newRole: SimulatorRole) => {
-    const currentConversationId = simulatorConversationId
+  const handleSimulatorRoleChange = (newRole: SimulatorRole) => {
     setSimulatorRole(newRole)
-    setSimulatorMessages([])
-    setSimulatorConversationId(null)
-    if (sessionId) {
-      setSimulatorSessionId(`${sessionId}:sim:${Date.now()}`)
-    }
-    if (!currentConversationId) return
-    try {
-      await sendSimulatorMessage({
-        ...simulatorRequestBase,
-        conversation_id: currentConversationId,
-        message: 'reiniciar conversa',
-      })
-    } catch {
-      // Não bloquear troca de perfil por falha de rede.
-    }
+    handleSimulatorReset()
   }
 
   const simulatorButton = isSimulatorAvailable ? (

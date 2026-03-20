@@ -10,6 +10,7 @@ import {
   buildPriceNotAvailableMessage,
   generateRejectionMessageWithAI,
 } from "./builders.ts"
+import { resolveConfiguredServicesFromConfig, resolveSequenceEligibleServicesFromConfig } from "./canonical-services.ts"
 import { getServiceWithPrice, findServiceFromText } from "./services.ts"
 import { interpretAdditionalBookingsWithAI, interpretBookingRequestWithAI } from "./ai.ts"
 import { buildServicesListResult, getSequenceServicesFromText } from "./anytime-handlers.ts"
@@ -114,8 +115,9 @@ export function resolveCatalogService(params: {
     inferredService,
     preferExplicitMentionForInferredService = false,
   } = params
-  const inferredCatalogService = inferredService ? getServiceWithPrice(config.services || [], inferredService) : null
-  const textService = currentService || findServiceFromText(text, config.services || [])
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const inferredCatalogService = inferredService ? getServiceWithPrice(configuredServices, inferredService) : null
+  const textService = currentService || findServiceFromText(text, configuredServices)
   const normalizedText = normalizeText(text)
   const canUseInferredService =
     inferredCatalogService &&
@@ -123,13 +125,13 @@ export function resolveCatalogService(params: {
       normalizedText.includes(normalizeText(inferredCatalogService.name)))
   const serviceName =
     (canUseInferredService ? inferredCatalogService?.name : null) ||
-    (textService ? getServiceWithPrice(config.services || [], textService)?.name : null) ||
+    (textService ? getServiceWithPrice(configuredServices, textService)?.name : null) ||
     textService ||
     (!preferExplicitMentionForInferredService ? inferredCatalogService?.name : null) ||
     null
   return {
     serviceName,
-    service: serviceName ? getServiceWithPrice(config.services || [], serviceName) : null,
+    service: serviceName ? getServiceWithPrice(configuredServices, serviceName) : null,
   }
 }
 
@@ -167,14 +169,15 @@ export function buildCatalogPriceListResult(
   nextState: SimulatorState,
   intro: string
 ): SimulatorResult | null {
-  const withPrice = (config.services || []).filter((s) => s.base_price != null)
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const withPrice = configuredServices.filter((s) => s.base_price != null)
   if (withPrice.length === 0) return null
-  nextState.last_service_options = (config.services || []).map((s) => s.name).filter(Boolean)
+  nextState.last_service_options = configuredServices.map((s) => s.name).filter(Boolean)
   return buildServicesListResult(config, nextState, intro)
 }
 
 export function handleShortDecline(config: SimulatorConfig, nextState: SimulatorState): SimulatorResult {
-  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
+  const servicesList = resolveConfiguredServicesFromConfig(config).map((s) => s.name).filter(Boolean)
   if (servicesList.length > 0) {
     const list = servicesList.join(", ")
     return buildResult(`Tudo bem! Se precisar, atendemos: ${list}. Fico a disposicao.`, nextState)
@@ -390,10 +393,10 @@ function buildBookingIntentServicePrompt(
 ): SimulatorResult {
   const prompt = buildServicePrompt(config, text, { attendee_name: nextState.slots.attendee_name })
   const canSequence = config.allow_sequence_booking
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const eligibleForSequence = resolveSequenceEligibleServicesFromConfig(config)
   const sequenceList =
-    (config.sequence_eligible_services?.length ?? 0) > 0
-      ? config.sequence_eligible_services!
-      : (config.services || []).map((s) => s.name).filter(Boolean)
+    eligibleForSequence.length > 0 ? eligibleForSequence : configuredServices.map((s) => s.name).filter(Boolean)
   if (canSequence && sequenceList.length > 0) {
     nextState.service_selection_multi = true
     const sequenceOpts = [...sequenceList, "Quero agendar uma visita"]
@@ -402,7 +405,7 @@ function buildBookingIntentServicePrompt(
   }
 
   nextState.service_selection_multi = false
-  nextState.last_service_options = buildServiceOptions(config.services || [])
+  nextState.last_service_options = buildServiceOptions(configuredServices)
   return buildResult(prompt.message, nextState, prompt.action_options)
 }
 

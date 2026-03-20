@@ -34,13 +34,18 @@ export function formatSemanticActionOptions(
   return actionOptions
 }
 
+function compactDefined<T extends Record<string, unknown>>(value?: T | null): Partial<T> {
+  const entries = Object.entries(value || {}).filter(([, entry]) => entry !== undefined)
+  return Object.fromEntries(entries) as Partial<T>
+}
+
 export function mergeSemanticState(
   baseState: SimulatorState,
   semantic: SemanticRuntimeResult,
   formattedActionOptions?: string[]
 ): SimulatorState {
   const execution = semantic.execution
-  const slotUpdates = execution?.slot_updates || semantic.decision.slot_updates || {}
+  const slotUpdates = compactDefined(execution?.slot_updates || semantic.decision.slot_updates || {})
   const statePatch = execution?.state_patch || {}
   return {
     ...baseState,
@@ -55,6 +60,7 @@ export function mergeSemanticState(
   }
 }
 
+
 export function buildSemanticResult(
   baseState: SimulatorState,
   semantic: SemanticRuntimeResult,
@@ -62,12 +68,16 @@ export function buildSemanticResult(
 ): SimulatorResult {
   const formattedActionOptions = formatSemanticActionOptions(semantic, rendered.action_options)
   const mergedState = mergeSemanticState(baseState, semantic, formattedActionOptions)
+  const isAudienceStep = semantic.decision.action === "ask_audience_confirmation"
+  const didConfirmAudience = semantic.snapshot?.meta?.continuation?.kind === "audience_confirmation"
   return {
     message: rendered.message,
     state: {
       ...mergedState,
       last_prompt: rendered.message,
       last_action_options: formattedActionOptions,
+      pending_audience_confirmation: isAudienceStep ? true : false,
+      ...(didConfirmAudience ? { audience_confirmed: true } : {}),
     },
     action_options: formattedActionOptions,
     render_hints: rendered.render_hints,

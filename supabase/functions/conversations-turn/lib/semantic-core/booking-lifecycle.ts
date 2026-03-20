@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { getServicesTotalDurationOrFallback } from "../services.ts"
+import { getServicesTotalDurationOrFallback, parseServiceNames } from "../services.ts"
 import { getOtherStaffOptions } from "../staff.ts"
 import { planSequentialBooking } from "./sequence-planner.ts"
 import { buildDynamicPeopleQueue, shiftCurrentAttendeeFromQueue } from "./booking-context.ts"
@@ -23,10 +23,7 @@ function getServiceNames(
   if (fromSnapshot.length > 0) return fromSnapshot
   const serviceValue = decision.slot_updates?.service || context.state.slots?.service
   if (!serviceValue) return []
-  return String(serviceValue)
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
+  return parseServiceNames(serviceValue)
 }
 
 export function buildCompletedBookingDraft(
@@ -48,6 +45,20 @@ export function buildCompletedBookingDraft(
   const durationMinutes = serviceValue
     ? getServicesTotalDurationOrFallback(context.business_brain.raw_config, serviceValue)
     : undefined
+  const isAdditional = Array.isArray(context.state.completed_bookings) && context.state.completed_bookings.length > 0
+  // Para o 2º agendamento, não herdar automaticamente o telefone do titular.
+  // Só grava customer_phone se o cliente explicitamente informou um telefone neste turno
+  // (ou se for o 1º agendamento e já temos customer_phone no estado).
+  const phoneFromTurn = decision.slot_updates?.customer_phone || snapshot.signals.contact_phone || undefined
+  const emailFromTurn = decision.slot_updates?.customer_email || snapshot.signals.contact_email || undefined
+  const reusedPrimaryPhone =
+    effectiveContactPreference === "skip_primary"
+      ? context.state.slots?.customer_phone || (context.state.completed_bookings?.[0] as any)?.customer_phone
+      : undefined
+  const reusedPrimaryEmail =
+    effectiveContactPreference === "skip_primary"
+      ? context.state.slots?.customer_email || (context.state.completed_bookings?.[0] as any)?.customer_email
+      : undefined
   return {
     attendee_name: attendeeName,
     service: serviceValue,
@@ -56,8 +67,8 @@ export function buildCompletedBookingDraft(
     date,
     time,
     staff_name: staffName,
-    customer_phone: context.state.slots?.customer_phone,
-    customer_email: context.state.slots?.customer_email,
+    customer_phone: phoneFromTurn || (isAdditional ? reusedPrimaryPhone : context.state.slots?.customer_phone),
+    customer_email: emailFromTurn || (isAdditional ? reusedPrimaryEmail : context.state.slots?.customer_email),
     contact_delivery: effectiveContactPreference === "skip_primary" ? "primary" : "own",
   }
 }

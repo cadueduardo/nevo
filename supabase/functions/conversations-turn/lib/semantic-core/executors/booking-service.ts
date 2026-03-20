@@ -16,8 +16,11 @@ export function executeBookingService(
   const booking = deriveBookingContext(snapshot, context)
   const queueState = buildBookingQueueState(decision, snapshot, context)
   const selectedServices = snapshot.entities.services?.map((service) => service.name).filter(Boolean) || []
-  const serviceValue = selectedServices.length > 0 ? selectedServices.join(", ") : decision.slot_updates?.service
   const multiSelect = Boolean(context.business_brain.policies.sequence_enabled)
+  const serviceValue =
+    selectedServices.length > 0
+      ? (multiSelect ? selectedServices.join(", ") : selectedServices[0])
+      : decision.slot_updates?.service
 
   return buildExecutorResult({
     executor: "booking-service",
@@ -33,6 +36,12 @@ export function executeBookingService(
           ...(queueState.attendee_name ? { attendee_name: queueState.attendee_name } : {}),
         },
     state_patch: {
+      ...(snapshot.signals.contact_preference || decision.slot_updates?.customer_phone || decision.slot_updates?.customer_email
+        ? {
+            pending_contact_field: undefined,
+            contact_preference: snapshot.signals.contact_preference || context.state.contact_preference,
+          }
+        : {}),
       pending_attendee_queue: queueState.remaining_queue,
       last_service_options: booking.service_options,
       service_selection_multi: multiSelect,

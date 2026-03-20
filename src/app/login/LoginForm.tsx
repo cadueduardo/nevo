@@ -5,7 +5,15 @@ import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { createClient } from '@/lib/supabase/client'
+
+let supabaseClientPromise: Promise<ReturnType<typeof import('@/lib/supabase/client')['createClient']>> | null = null
+
+async function getSupabaseClient() {
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import('@/lib/supabase/client').then((mod) => mod.createClient())
+  }
+  return supabaseClientPromise
+}
 
 export function LoginForm() {
   const router = useRouter()
@@ -28,7 +36,7 @@ export function LoginForm() {
     setError(null)
     setLoading(true)
     try {
-      const supabase = createClient()
+      const supabase = await getSupabaseClient()
       const { error: signInError } = await supabase.auth.signInWithPassword({
         email: eTrim,
         password,

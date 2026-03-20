@@ -3,6 +3,7 @@
  * Permite que o usuário pergunte dados do cadastro mesmo após a conversa finalizada. */
 import { normalizeText, formatDatePt } from "./utils.ts"
 import { buildServicesListWithPrices } from "./builders.ts"
+import { resolveConfiguredServicesFromConfig } from "./canonical-services.ts"
 import type { SimulatorConfig, EstablishmentAddress, SimulatorState } from "./types.ts"
 
 const DAY_NAMES: Record<string, string> = {
@@ -26,13 +27,100 @@ function formatAddress(addr: EstablishmentAddress): string {
   return parts.filter(Boolean).join(", ")
 }
 
-/** Detecta perguntas sobre endereço/localização. */
+const FAQ_STOPWORDS = new Set([
+  "tem",
+  "temos",
+  "tem",
+  "existe",
+  "tem",
+  "como",
+  "da",
+  "de",
+  "do",
+  "dos",
+  "das",
+  "no",
+  "na",
+  "nos",
+  "nas",
+  "a",
+  "o",
+  "os",
+  "as",
+  "um",
+  "uma",
+  "voces",
+  "vocês",
+  "vc",
+  "ai",
+  "aí",
+  "por",
+  "pra",
+  "para",
+  "e",
+  "ou",
+  "que",
+  "qual",
+  "quais",
+  "onde",
+  "local",
+])
+
+function tokenizeFaq(text: string): string[] {
+  const msg = normalizeText(text)
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  return msg.filter((t) => t.length >= 3 && !FAQ_STOPWORDS.has(t))
+}
+
+function tryAnswerFaq(config: SimulatorConfig, text: string): string | null {
+  const faq = Array.isArray(config.faq) ? config.faq : []
+  if (!Array.isArray(faq) || faq.length === 0) return null
+  const msgNorm = normalizeText(text)
+  if (!msgNorm) return null
+
+  const msgTokens = new Set(tokenizeFaq(msgNorm))
+  if (msgTokens.size === 0) return null
+
+  let best: { answer: string; score: number } | null = null
+
+  for (const item of faq as Array<{ question?: string; answer?: string }>) {
+    const q = (item?.question || "").toString().trim()
+    const a = (item?.answer || "").toString().trim()
+    if (!q || !a) continue
+
+    const qNorm = normalizeText(q)
+    // Match forte por substring (ex.: "estacionamento" aparece na pergunta)
+    if (qNorm && (msgNorm.includes(qNorm) || qNorm.includes(msgNorm))) {
+      return a
+    }
+
+    const qTokens = tokenizeFaq(qNorm)
+    if (qTokens.length === 0) continue
+    let overlap = 0
+    for (const t of qTokens) if (msgTokens.has(t)) overlap++
+    // Heurística: 2+ tokens relevantes em comum geralmente significa que é o mesmo tema.
+    const score = overlap
+    if (!best || score > best.score) {
+      best = { answer: a, score }
+    }
+  }
+
+  if (best && best.score >= 2) return best.answer
+  return null
+}
+
+/** Detecta perguntas sobre endereço/localização. Use apenas dados do config; nunca inventar endereço. */
 export function isAddressQuestion(text: string): boolean {
   const msg = normalizeText(text)
   return (
     /\b(endereco|endereço|onde ficam|onde ficam voces|qual endereco|qual o endereco)\b/.test(msg) ||
-    /\b(rua|avenida|localizacao|localização|como chego|como chegar)\b/.test(msg) ||
-    /(qual o endereco de voces|qual endereco de voces|endereco de voces|onde voces ficam)/.test(msg)
+    /\b(rua|avenida|localizacao|localização|localizado|localizados|como chego|como chegar)\b/.test(msg) ||
+    /(qual o endereco de voces|qual endereco de voces|endereco de voces|onde voces ficam)/.test(msg) ||
+    /(onde\s+(voces|vc|vocês)\s+(estao|estão)\s+localizad)/.test(msg) ||
+    /(onde\s+estao\s+localizad|onde\s+estão\s+localizad|qual\s+a\s+localiz)/.test(msg)
   )
 }
 
@@ -175,13 +263,17 @@ export function tryAnswerInformationalQuestion(config: SimulatorConfig, text: st
 
   // Lista de serviços/ramos
   if (isListServicesInformational(msg)) {
-    const services = config.services || []
+    const services = resolveConfiguredServicesFromConfig(config)
     if (services.length > 0) {
       const list = buildServicesListWithPrices(config)
       return `${list} Se precisar de algo mais, estou à disposição.`
     }
     return "No momento não temos a lista de serviços cadastrada. Posso ajudar com algo mais?"
   }
+
+  // FAQ do negócio (ex.: estacionamento, forma de pagamento, políticas, etc.)
+  const faqAnswer = tryAnswerFaq(config, msg)
+  if (faqAnswer) return faqAnswer
 
   return null
 }

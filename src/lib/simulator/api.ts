@@ -3,6 +3,14 @@ export interface SimulatorRequest {
   conversation_id?: string
   message: string
   channel?: 'web_simulator'
+  /**
+   * Onboarding: true = não grava conversa no banco; estado no cliente (sessionStorage).
+   * Painel (/api/app/simulator) não envia — continua persistindo na conta.
+   */
+  simulation_local?: boolean
+  onboarding_session_id?: string
+  simulator_state?: Record<string, unknown>
+  simulator_history?: Array<{ role: string; content: string }>
   /** Modo do actor: internal = dono/admin; external = cliente. Simulador do onboarding envia internal. */
   mode?: 'internal' | 'external'
   /** Tipo do actor. Simulador do onboarding envia owner (quem testa é o dono). */
@@ -13,6 +21,19 @@ export interface SimulatorRequest {
   context?: {
     business_name?: string
     business_type?: string
+    business_profile?: {
+      business_name?: string
+      business_type?: string
+      services?: Array<{
+        name: string
+        description?: string
+        duration_minutes?: number
+        base_price?: number
+        bookable?: boolean
+        catalog_visible?: boolean
+        sequence_eligible?: boolean
+      }>
+    }
     context_mode?: 'booking' | 'quote' | 'both'
     establishment_address?: {
       cep?: string
@@ -25,9 +46,6 @@ export interface SimulatorRequest {
     }
     faq?: Array<{ question?: string; answer?: string }>
     tone?: 'formal' | 'amigavel' | 'profissional' | 'engracado'
-    catalog_services?: Array<{ name: string; description?: string }>
-    booking_services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
-    services?: Array<{ name: string; duration_minutes?: number; base_price?: number; description?: string }>
     when_client_asks_price_no_value?: 'handoff' | 'offer_handoff_or_booking'
     schedule?: {
       days_of_week?: string[]
@@ -81,6 +99,9 @@ export interface SimulatorResponse {
     /** Quando true, exibir action_options como multi-select (checkboxes) para escolher mais de um serviço em sequência. */
     service_multi_select?: boolean
   }>
+  /** Preenchido quando simulation_local: true — guardar e reenviar no próximo turno. */
+  simulator_state?: Record<string, unknown>
+  simulation_local?: boolean
 }
 
 export async function sendSimulatorMessage(payload: SimulatorRequest): Promise<SimulatorResponse> {

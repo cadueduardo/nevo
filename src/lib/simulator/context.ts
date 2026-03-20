@@ -1,3 +1,9 @@
+import {
+  buildCanonicalBusinessProfile,
+  normalizeBusinessProfileServices,
+  projectLegacyServiceViewsFromBusinessProfile,
+} from '@/lib/business-profile'
+
 type ToneValue = 'formal' | 'amigavel' | 'profissional' | 'engracado'
 type InteractionStyle = 'numbered_options' | 'conversational' | 'hybrid'
 type ContextMode = 'booking' | 'quote' | 'both'
@@ -10,7 +16,7 @@ type EstablishmentAddress = {
   localidade: string
   uf: string
 }
-type ServiceItem = { name: string; description?: string; duration_minutes?: number; base_price?: number }
+type ServiceItem = ReturnType<typeof normalizeBusinessProfileServices>[number]
 type PriceNoValueMode = 'handoff' | 'offer_handoff_or_booking'
 type StaffItem = {
   name: string
@@ -64,35 +70,6 @@ function normalizeAddress(value: unknown): EstablishmentAddress | undefined {
     localidade: String(v.localidade),
     uf: String(v.uf),
   }
-}
-
-function normalizeServices(value: unknown): ServiceItem[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .map((item) => {
-      if (!item || typeof item !== 'object') return null
-      const v = item as Record<string, unknown>
-      if (typeof v.name !== 'string' || !v.name.trim()) return null
-      const duration =
-        typeof v.duration_minutes === 'number'
-          ? v.duration_minutes
-          : typeof v.duration_minutes === 'string'
-            ? Number(v.duration_minutes)
-            : undefined
-      const basePrice =
-        typeof v.base_price === 'number'
-          ? v.base_price
-          : typeof v.base_price === 'string'
-            ? Number(v.base_price)
-            : undefined
-      return {
-        name: v.name.trim(),
-        description: typeof v.description === 'string' ? v.description : undefined,
-        duration_minutes: Number.isFinite(duration) ? duration : undefined,
-        base_price: Number.isFinite(basePrice) ? basePrice : undefined,
-      } as ServiceItem
-    })
-    .filter((item): item is ServiceItem => Boolean(item))
 }
 
 function normalizePriceNoValueMode(value: unknown): PriceNoValueMode {
@@ -180,23 +157,25 @@ export function buildSimulatorContextFromBusinessConfig(input: {
   tone?: unknown
 }) {
   const bc = (input.businessConfig ?? {}) as Record<string, unknown>
-  const bookingServices = normalizeServices(bc.booking_services).length > 0
-    ? normalizeServices(bc.booking_services)
-    : normalizeServices(bc.services)
-  const catalogServices = normalizeServices(bc.catalog_services).length > 0
-    ? normalizeServices(bc.catalog_services)
-    : bookingServices
+  const businessProfile = buildCanonicalBusinessProfile({
+    business_name: input.businessName,
+    business_type: (bc.business_type as string | undefined) ?? undefined,
+    business_profile: (bc.business_profile as Record<string, unknown> | undefined) ?? null,
+    services: bc.services,
+    booking_services: bc.booking_services,
+    catalog_services: bc.catalog_services,
+    sequence_eligible_services: bc.sequence_eligible_services,
+  })
+  const projectedServices = projectLegacyServiceViewsFromBusinessProfile(businessProfile)
 
   return {
     business_name: input.businessName,
     business_type: (bc.business_type as string | undefined) ?? undefined,
+    business_profile: businessProfile,
     context_mode: normalizeContextMode(bc.context_mode),
     establishment_address: normalizeAddress(bc.establishment_address),
     faq: Array.isArray(bc.faq) ? (bc.faq as Array<{ question?: string; answer?: string }>) : undefined,
     tone: normalizeToneFromOnboarding(input.tone),
-    catalog_services: catalogServices,
-    booking_services: bookingServices,
-    services: bookingServices,
     when_client_asks_price_no_value: normalizePriceNoValueMode(bc.when_client_asks_price_no_value),
     schedule: (bc.schedule as Record<string, unknown> | undefined) ?? undefined,
     staff: normalizeStaff(bc.staff),
@@ -208,7 +187,10 @@ export function buildSimulatorContextFromBusinessConfig(input: {
     holidays_attend: normalizeStringArray(bc.holidays_attend),
     closure_periods: normalizeClosurePeriods(bc.closure_periods),
     allow_sequence_booking: Boolean(bc.allow_sequence_booking),
-    sequence_eligible_services: normalizeStringArray(bc.sequence_eligible_services),
+    sequence_eligible_services:
+      projectedServices.sequence_eligible_services.length > 0
+        ? projectedServices.sequence_eligible_services
+        : normalizeStringArray(bc.sequence_eligible_services),
     target_audience:
       typeof bc.target_audience === 'object' && bc.target_audience !== null
         ? (bc.target_audience as Record<string, unknown>)

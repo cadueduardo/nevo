@@ -1,7 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { consumeRateLimit, getRequestRateLimitKey } from '@/lib/security/rate-limit'
+import { previewText, summarizeError } from '@/lib/security/log-sanitizer'
 
 export async function POST(req: NextRequest) {
   try {
+    const rateLimit = consumeRateLimit({
+      key: getRequestRateLimitKey(req, 'public-onboarding'),
+      limit: 20,
+      windowMs: 60_000,
+    })
+    if (!rateLimit.ok) {
+      return NextResponse.json(
+        { error: 'Muitas tentativas. Aguarde antes de enviar outra mensagem.' },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(rateLimit.retryAfterSeconds) },
+        }
+      )
+    }
+
     const body = await req.json()
     
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -15,11 +32,15 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    console.log('Fazendo requisição para Edge Function:', `${supabaseUrl}/functions/v1/onboarding-chat`)
+    console.log('Fazendo requisição para Edge Function:', `${supabaseUrl}/functions/v1/onboarding-chat`, {
+      current_step: body?.current_step ?? null,
+      message_preview:
+        typeof body?.message === 'string' ? previewText(body.message, 80) : null,
+    })
 
     // Fazer proxy para a Edge Function com timeout
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 segundos de timeout
+    const timeoutId = setTimeout(() => controller.abort(), 75000) // 75 segundos de timeout
 
     try {
       const response = await fetch(`${supabaseUrl}/functions/v1/onboarding-chat`, {
@@ -45,9 +66,9 @@ export async function POST(req: NextRequest) {
         try {
           data = await response.json()
         } catch (parseError) {
-          console.error('Erro ao fazer parse do JSON:', parseError)
+          console.error('Erro ao fazer parse do JSON:', summarizeError(parseError))
           const text = await response.text()
-          console.error('Resposta como texto:', text)
+          console.error('Resposta como texto:', previewText(text, 120))
           return NextResponse.json(
             { error: 'Resposta inválida da Edge Function' },
             { status: 500 }
@@ -63,7 +84,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (!response.ok) {
-        console.error('Erro na resposta:', data)
+        console.error('Erro na resposta:', previewText(JSON.stringify(data), 160))
         return NextResponse.json(
           { error: data.error || 'Erro ao processar mensagem' },
           { status: response.status }
@@ -82,14 +103,14 @@ export async function POST(req: NextRequest) {
         )
       }
 
-      console.error('Erro ao fazer requisição para Edge Function:', fetchError)
+      console.error('Erro ao fazer requisição para Edge Function:', summarizeError(fetchError))
       return NextResponse.json(
         { error: `Erro ao conectar com o servidor: ${fetchError.message}` },
         { status: 503 }
       )
     }
   } catch (error: any) {
-    console.error('Error in onboarding API route:', error)
+    console.error('Error in onboarding API route:', summarizeError(error))
     return NextResponse.json(
       { error: error.message || 'Erro interno do servidor' },
       { status: 500 }
@@ -108,3 +129,4 @@ export async function OPTIONS() {
     },
   })
 }
+

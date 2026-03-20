@@ -1,5 +1,11 @@
 // @ts-nocheck
-import type { EstablishmentAddress, SimulatorConfig, SimulatorState } from "../types.ts"
+import type { EstablishmentAddress, SimulatorConfig, SimulatorQuoteService, SimulatorState } from "../types.ts"
+
+export type SemanticContinuationKind =
+  | "audience_confirmation"
+  | "price_followup"
+  | "calendar_response"
+  | "contact_preference"
 
 export type AudienceMode = "all" | "women_only" | "men_only" | "kids_only" | "custom"
 
@@ -64,6 +70,29 @@ export interface BusinessBrainPolicies {
   interaction_style: "numbered_options" | "conversational" | "hybrid"
 }
 
+export interface AgentNarrative {
+  summary: string
+  service_overview: string
+  audience_rules: string
+  operational_rules: string
+  tone_guidance: string
+  booking_guidance: string
+  multi_booking_guidance: string
+  triage_guidance: string
+  prompt_context: string
+}
+
+export interface AgentRuntimeContext {
+  identity_context: string
+  service_context: string
+  audience_context: string
+  operational_context: string
+  booking_context: string
+  multi_booking_context: string
+  triage_context: string
+  prompt_context: string
+}
+
 export interface BusinessBrain {
   business_name?: string
   business_type?: string
@@ -77,6 +106,8 @@ export interface BusinessBrain {
   schedule?: BusinessBrainStaffSchedule
   holidays_attend?: string[]
   closure_periods?: Array<{ start: string; end: string; reason?: string }>
+  agent_narrative: AgentNarrative
+  agent_runtime_context?: AgentRuntimeContext
   raw_config: SimulatorConfig
 }
 
@@ -91,6 +122,14 @@ export interface SemanticPersonCandidate {
 export interface SemanticServiceCandidate {
   name: string
   normalized_name: string
+  confidence?: number
+}
+
+export interface SemanticQuoteServiceCandidate {
+  id: string
+  name: string
+  pricing_type: string
+  required_keys: string[]
   confidence?: number
 }
 
@@ -120,12 +159,14 @@ export interface SemanticIntentsSnapshot {
   secondary: SemanticSecondaryIntent[]
   booking: boolean
   confidence: number
+  source?: "unified_ai" | "continuation" | "quote_rule" | "deterministic_fallback"
 }
 
 export interface SemanticEntitiesSnapshot {
   people: SemanticPersonCandidate[]
   attendee_names: string[]
   services: SemanticServiceCandidate[]
+  quote_service?: SemanticQuoteServiceCandidate | null
   date?: SemanticDateCandidate | null
   time?: SemanticTimeCandidate | null
 }
@@ -137,7 +178,10 @@ export interface SemanticSignalsSnapshot {
   availability_check?: boolean
   next_question_hint?: string
   contact_preference?: "phone" | "email" | "both" | "skip_primary"
+  contact_phone?: string
+  contact_email?: string
   calendar_response?: "accept" | "decline"
+  quote_slots?: Record<string, string | number | boolean>
 }
 
 export interface SemanticRisksSnapshot {
@@ -147,6 +191,17 @@ export interface SemanticRisksSnapshot {
 
 export interface SemanticMetaSnapshot {
   raw_user_message: string
+  continuation?: {
+    kind: SemanticContinuationKind
+    matched_option?: string
+  }
+  semantic_trace?: {
+    intent_source?: SemanticIntentsSnapshot["source"]
+    next_question_hint?: string
+    waiting_for?: "attendee_name" | "service" | "date" | "time" | "contact"
+  }
+  /** Quando preenchido pela IA, define a próxima ação de booking sem ordem fixa (decisão por contexto). */
+  suggested_booking_action?: string
 }
 
 export interface TurnSemanticSnapshot {
@@ -162,9 +217,12 @@ export type SemanticDecisionAction =
   | "reply_greeting"
   | "reply_identity"
   | "reply_faq"
+  | "reply_closing"
   | "reply_calendar_confirmed"
   | "reply_calendar_declined"
   | "reply_price"
+  | "ask_quote_measurements"
+  | "reply_quote_estimate"
   | "reply_service_detail"
   | "reply_service_list"
   | "enter_booking"
@@ -252,4 +310,16 @@ export interface SemanticTurnContext {
   history: Array<{ role: string; content: string }>
   state: SimulatorState
   business_brain: BusinessBrain
+}
+
+export interface SemanticQuoteEstimate {
+  service: SimulatorQuoteService
+  slots: Record<string, string | number | boolean>
+  missing_keys: string[]
+  required_keys: string[]
+  range?: {
+    min: number
+    max: number
+    currency: string
+  }
 }

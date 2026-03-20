@@ -4,6 +4,7 @@ import { normalizeText } from "./utils.ts"
 import { buildResult } from "./state.ts"
 import {
   parseTime,
+  parseTimePeriod,
   parseDateOrWeekday,
   addDaysToIsoDate,
   getTodayIsoBusinessTz,
@@ -11,6 +12,10 @@ import {
   resolveMultipleOptionsByNumber,
   isWithinSchedule,
   getMockAvailability,
+  isTimeTooSoonForDate,
+  MIN_BOOKING_LEAD_MINUTES,
+  getNextAvailableSlotAfter,
+  filterSlotsByPeriod,
 } from "./utils.ts"
 import {
   findServiceFromText,
@@ -19,6 +24,7 @@ import {
   getServiceDurationMinutes,
   getServicesTotalDuration,
 } from "./services.ts"
+import { resolveConfiguredServicesFromConfig, resolveSequenceEligibleServicesFromConfig } from "./canonical-services.ts"
 import { getStaffList, getScheduleForStaff, getOtherStaffOptions } from "./staff.ts"
 import {
   isPriceQuestion,
@@ -39,7 +45,8 @@ export function buildServicesListResult(
   state: SimulatorState,
   prefix?: string
 ): SimulatorResult {
-  const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const serviceOptions = configuredServices.map((s) => s.name).filter(Boolean)
   const fullMessage = prefix ? `${prefix} ${buildServicesListWithPrices(config)}` : buildServicesListWithPrices(config)
   return buildResult(
     fullMessage,
@@ -50,11 +57,11 @@ export function buildServicesListResult(
 
 export function getSequenceServicesFromText(config: SimulatorConfig, text: string): string[] {
   if (!config.allow_sequence_booking) return []
-  const eligibleForSequence =
-    (config.sequence_eligible_services?.length ?? 0) > 0
-      ? config.sequence_eligible_services || []
-      : (config.services || []).map((s) => s.name).filter(Boolean)
-  return findServicesFromText(text, config.services || [], eligibleForSequence)
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const eligibleForSequence = resolveSequenceEligibleServicesFromConfig(config)
+  const sequencePool =
+    eligibleForSequence.length > 0 ? eligibleForSequence : configuredServices.map((s) => s.name).filter(Boolean)
+  return findServicesFromText(text, configuredServices, sequencePool)
 }
 
 export function tryResolveNumericServiceSelection(incomingText: string, state: SimulatorState): string | null {
@@ -96,8 +103,9 @@ export function tryHandlePriceQuestionAnytime(
 ): SimulatorResult | null {
   if (!isPriceQuestion(text)) return null
   const cordial = getCordialPrefix(config, false)
-  const serviceName = findServiceFromText(text, config.services || [])
-  const svc = getServiceWithPrice(config.services || [], serviceName)
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const serviceName = findServiceFromText(text, configuredServices)
+  const svc = getServiceWithPrice(configuredServices, serviceName)
   if (serviceName && svc && svc.base_price != null) {
     return buildResult(
       cordial + `O ${svc.name} esta R$ ${Number(svc.base_price).toFixed(2).replace(".", ",")}. Gostaria de agendar?`,
@@ -109,7 +117,7 @@ export function tryHandlePriceQuestionAnytime(
     const noPrice = buildPriceNotAvailableMessage(config, serviceName)
     return buildResult(cordial + noPrice.message, state, noPrice.action_options)
   }
-  const withPrice = (config.services || []).filter((s) => s.base_price != null)
+  const withPrice = configuredServices.filter((s) => s.base_price != null)
   if (withPrice.length > 0) return buildServicesListResult(config, state, cordial)
   const noPrice = buildPriceNotAvailableMessage(config, serviceName || undefined)
   return buildResult(cordial + noPrice.message, state, noPrice.action_options)
@@ -122,10 +130,11 @@ export function tryHandleServicesQuestionAnytime(
 ): SimulatorResult | null {
   if (isListServicesQuestion(text)) return buildServicesListResult(config, state)
   if (!isServiceDetailQuestion(text)) return null
-  const serviceName = findServiceFromText(text, config.services || []) || state.slots?.service || null
-  const svc = getServiceWithPrice(config.services || [], serviceName)
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const serviceName = findServiceFromText(text, configuredServices) || state.slots?.service || null
+  const svc = getServiceWithPrice(configuredServices, serviceName)
   if (!svc) {
-    const serviceOptions = (config.services || []).map((s) => s.name).filter(Boolean)
+    const serviceOptions = configuredServices.map((s) => s.name).filter(Boolean)
     if (serviceOptions.length > 0) {
       return buildResult("Claro. Sobre qual serviço você quer mais detalhes?", state, serviceOptions)
     }
@@ -146,18 +155,53 @@ export async function tryHandleAvailabilityQuestionAnytime(
   history: Array<{ role: string; content: string }>
 ): Promise<SimulatorResult | null> {
   if (/^[1-9]\d*$/.test(text.trim())) return null
-  const timeFromText = parseTime(text)
-  if (!timeFromText) return null
   const hasAvailabilityIntent =
     isAvailabilityQuestion(text) ||
     /\b(agendar|marcar)\b.*\b(as|às|as)\s*\d|quero\s+as\s+\d/.test(normalizeText(text))
-  if (!hasAvailabilityIntent) return null
-  const dateIso = parseDateOrWeekday(text) || state.slots?.date || addDaysToIsoDate(getTodayIsoBusinessTz(), 1)
+  const period = parseTimePeriod(text)
+  const timeFromText = parseTime(text)
+  // Pergunta só por período (ex.: "tem algum horário à tarde?") sem horário específico
+  if (!timeFromText && period && hasAvailabilityIntent) {
+    const dateIso = parseDateOrWeekday(text) || state.slots?.date || getTodayIsoBusinessTz()
+    const staffList = getStaffList(config)
+    const staffName = state.slots?.staff_name || staffList[0]?.name
+    const schedule = getScheduleForStaff(config, staffName)
+    const configuredServices = resolveConfiguredServicesFromConfig(config)
+    const service =
+      state.slots?.service || findServiceFromText(text, configuredServices) || configuredServices[0]?.name
+    const duration = getServicesTotalDuration(config, service) ?? 30
+    const availability = getMockAvailability(dateIso, schedule, state.booked_slots, staffName, duration)
+    const slotsInPeriod = filterSlotsByPeriod(availability.available, period)
+    const nextState: SimulatorState = { ...state }
+    nextState.slots = { ...nextState.slots, date: dateIso, time_period: period }
+    if (staffName) nextState.slots.staff_name = staffName
+    if (service) nextState.slots.service = service
+    nextState.last_time_options = slotsInPeriod.slice(0, 24)
+    nextState.last_time_options_date = dateIso
+    nextState.last_time_options_staff = staffName
+    if (slotsInPeriod.length === 0) {
+      const msg = `Para ${period === "afternoon" ? "a tarde" : period === "morning" ? "de manha" : "a noite"} nao tenho horarios livres nessa data. Quer escolher outro dia ou outro periodo?`
+      return buildResult(msg, nextState, ["Outro dia", "Outro horario"])
+    }
+    const list = slotsInPeriod.slice(0, 8).join(", ")
+    const msg = `Tenho ainda alguns horarios, qual voce deseja? Eu vejo aqui a disponibilidade: ${list}.`
+    const options = slotsInPeriod.slice(0, 8).map((t, i) => `${i + 1} - ${t}`)
+    return buildResult(msg, nextState, options)
+  }
+  if (!timeFromText) return null
+  const hasSpecificTimeIntent =
+    isAvailabilityQuestion(text) ||
+    /\b(agendar|marcar)\b.*\b(as|às|as)\s*\d|quero\s+as\s+\d/.test(normalizeText(text))
+  if (!hasSpecificTimeIntent) return null
+  // Se o cliente não mencionou data, preferir HOJE (não amanhã).
+  // Se hoje não tiver horários, a própria lista de available_slots virá vazia e a IA sugerirá alternativas.
+  const dateIso = parseDateOrWeekday(text) || state.slots?.date || getTodayIsoBusinessTz()
   const staffList = getStaffList(config)
   const staffName = state.slots?.staff_name || staffList[0]?.name
   const schedule = getScheduleForStaff(config, staffName)
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
   const service =
-    state.slots?.service || findServiceFromText(text, config.services || []) || (config.services || [])[0]?.name
+    state.slots?.service || findServiceFromText(text, configuredServices) || configuredServices[0]?.name
   const duration = getServicesTotalDuration(config, service) ?? 30
   const availability = getMockAvailability(dateIso, schedule, state.booked_slots, staffName, duration)
   const normalizedTime = timeFromText.includes(":")
@@ -167,7 +211,22 @@ export async function tryHandleAvailabilityQuestionAnytime(
     : `${timeFromText.padStart(2, "0")}:00`
   const isAvailable = availability.available.includes(normalizedTime)
   const within = !isAvailable ? isWithinSchedule(normalizedTime, schedule) : null
-  const unavailableReason = within && !within.ok ? within.reason : undefined
+  const occupied = availability.occupied.includes(normalizedTime)
+  const minLead = schedule?.min_booking_lead_minutes ?? MIN_BOOKING_LEAD_MINUTES
+  const tooSoon = dateIso === getTodayIsoBusinessTz() && isTimeTooSoonForDate(dateIso, normalizedTime, minLead)
+  const unavailableReason =
+    (within && !within.ok ? within.reason : undefined) ||
+    (tooSoon
+      ? `Este horário exige antecedência mínima de ${minLead} minutos.`
+      : occupied
+        ? `Esse horário já está ocupado.`
+        : !isAvailable
+          ? `Esse horário não está disponível.`
+          : undefined)
+  const suggestedNext =
+    !isAvailable && occupied && availability.available.length > 0
+      ? getNextAvailableSlotAfter(availability.available, normalizedTime)
+      : undefined
   const fluidResponse = await generateAvailabilityResponseWithAI(
     config,
     {
@@ -177,6 +236,7 @@ export async function tryHandleAvailabilityQuestionAnytime(
       available_slots: availability.available.slice(0, 12),
       service: service || undefined,
       unavailable_reason: unavailableReason,
+      suggested_next_slot: suggestedNext,
     },
     history
   )

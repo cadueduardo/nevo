@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -19,11 +19,14 @@ import {
 import {
   determineNextStep,
   generateSummary,
+  generateNarrativeSummaryPayload,
+  buildBusinessProfile,
   buildServiceExamples,
   buildServiceSelectableOptions,
   buildQuoteVariablesSelectableOptions,
   BusinessModelData,
   FlowState,
+  NarrativeSegment,
 } from './flow-manager.ts'
 import { migrateOnboardingToTenant } from './migrate.ts'
 
@@ -69,6 +72,7 @@ interface OnboardingResponse {
     value: string
     selected?: boolean
   }>
+  narrative_segments?: NarrativeSegment[]
 }
 
 const corsHeaders = {
@@ -1003,12 +1007,14 @@ function shouldReplaceServices(text: string): boolean {
 function attachSummaryPayload(resp: OnboardingResponse, data: any): OnboardingResponse {
   if (resp.next_step !== 'summary') return resp
   if (!(data?.business_name && data?.business_type && data?.context)) return resp
+  const narrative = generateNarrativeSummaryPayload(data)
   return {
     ...resp,
-    assistant_message: 'Edite os campos abaixo se quiser alterar algo.',
+    assistant_message: narrative.text,
     editable_items: buildEditableItems(data),
-    action_options: ['Está correto', 'Quero ajustar'],
+    action_options: ['Continuar', 'Quero ajustar'],
     requires_action: 'summary_confirmation',
+    narrative_segments: narrative.segments,
   }
 }
 
@@ -3773,16 +3779,16 @@ async function processMessage(
     if (!audience) {
       return {
         assistant_message:
-          'Seu atendimento e focado em algum publico especifico? (Pode escolher mais de um, ex.: homens e infantil.)',
+          'Seu atendimento é focado em algum público específico? (Pode escolher mais de um, ex.: homens e infantil.)',
         next_step: 'target_audience',
         action_options: [
-          'Atendo todos os publicos',
+          'Atendo todos os públicos',
           'Somente mulheres',
           'Somente homens',
           'Infantil',
           'Homens e infantil',
           'Mulheres e infantil',
-          'Outro publico especifico',
+          'Outro público específico',
         ],
         requires_action: 'target_audience',
       }
@@ -3793,7 +3799,7 @@ async function processMessage(
     if (isCustomWithoutNote) {
       return {
         assistant_message:
-          'Perfeito. Qual publico especifico voce quer atender? (responda em texto livre)',
+          'Perfeito. Qual público específico você quer atender? (responda em texto livre)',
         next_step: 'target_audience',
       }
     }
@@ -3841,7 +3847,7 @@ async function processMessage(
     if (!style) {
       return {
         assistant_message:
-          'Como voce prefere o estilo das respostas no chat?',
+          'Como você prefere o estilo das respostas no chat?',
         next_step: 'interaction_style',
         action_options: ['Misto (recomendado)', 'Opcoes numeradas (mais agil)', 'Conversa natural (mais humana)'],
         requires_action: 'interaction_style',
@@ -3893,7 +3899,7 @@ async function processMessage(
       const merged = { ...collectedData, holidays_attend: allDates, holidays_skipped: true }
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_offer', merged))
       return {
-        assistant_message: `✅ Anotado — voce atende em todos os feriados de ${year}.\n\n${next.message}`,
+        assistant_message: `✅ Anotado — você atende em todos os feriados de ${year}.\n\n${next.message}`,
         next_step: next.step,
         extracted_data: { holidays_attend: allDates, holidays_skipped: true },
         requires_action: next.requires_action,
@@ -3906,7 +3912,7 @@ async function processMessage(
       const selected = collectedData.holidays_attend || []
       return {
         assistant_message:
-          'Marque os feriados em que voce atende (pode selecionar varios). Depois clique em Continuar.',
+          'Marque os feriados em que você atende (pode selecionar vários). Depois clique em Continuar.',
         next_step: 'holidays_select',
         extracted_data: { holidays_entered: true },
         selectable_options: buildHolidaysSelectableOptions(allHolidays, selected),
@@ -3936,7 +3942,7 @@ async function processMessage(
       const merged = { ...collectedData, holidays_attend: allDates, holidays_skipped: true }
       const next = determineNextStep(merged as BusinessModelData, '', makeFlowState('holidays_select', merged))
       return {
-        assistant_message: `✅ Anotado — voce atende em todos os feriados de ${year}.\n\n${next.message}`,
+        assistant_message: `✅ Anotado — você atende em todos os feriados de ${year}.\n\n${next.message}`,
         next_step: next.step,
         extracted_data: { holidays_attend: allDates, holidays_skipped: true },
         requires_action: next.requires_action,
@@ -3972,7 +3978,7 @@ async function processMessage(
       return {
         assistant_message:
           selectedDates.length > 0
-            ? `✅ Anotei ${selectedDates.length} feriado(s) em que voce atende.\n\n${next.message}`
+            ? `✅ Anotei ${selectedDates.length} feriado(s) em que você atende.\n\n${next.message}`
             : `✅ Anotado.\n\n${next.message}`,
         next_step: next.step,
         extracted_data: { holidays_attend: selectedDates, holidays_skipped: true },
@@ -3984,7 +3990,7 @@ async function processMessage(
     const year = new Date().getFullYear()
     const allHolidays = await fetchNationalHolidays(year)
     return {
-      assistant_message: 'Marque os feriados em que voce atende e clique em Continuar.',
+      assistant_message: 'Marque os feriados em que você atende e clique em Continuar.',
       next_step: 'holidays_select',
       selectable_options: buildHolidaysSelectableOptions(allHolidays, selectedDates),
       action_options: ['Atendo todos os feriados', 'Continuar', 'Nao atendo em nenhum'],
@@ -4492,7 +4498,13 @@ async function processMessage(
   }
 
   if (currentStep === 'summary') {
-    if (lower.includes('correto') || lower.includes('está certo') || lower.includes('esta certo') || lower.includes('sim')) {
+    if (
+      lower.includes('continuar') ||
+      lower.includes('correto') ||
+      lower.includes('está certo') ||
+      lower.includes('esta certo') ||
+      lower.includes('sim')
+    ) {
       return {
         assistant_message:
           'Perfeito! Já consigo montar a primeira versão do seu atendimento.\n\nPara salvar tudo e te mostrar o fluxo visual, preciso criar sua conta rapidinho.',
@@ -4677,14 +4689,23 @@ serve(async (req) => {
           requires_action: 'services_edit',
         }
       } else if (currentStep === 'summary_edit' || currentStep === 'summary') {
-        syncResponse = {
-          assistant_message: 'Edite os campos abaixo se quiser alterar algo.',
-          next_step: currentStep,
-          extracted_data: collectedData,
-          editable_items: buildEditableItems(collectedData),
-          action_options: currentStep === 'summary_edit' ? ['Salvar ajustes', 'Voltar'] : ['Está correto', 'Quero ajustar'],
-          requires_action: currentStep === 'summary_edit' ? 'edit_fields' : 'summary_confirmation',
-        }
+        syncResponse = currentStep === 'summary'
+          ? attachSummaryPayload(
+              {
+                assistant_message: generateNarrativeSummaryPayload(collectedData).text,
+                next_step: 'summary',
+                extracted_data: collectedData,
+              },
+              collectedData
+            )
+          : {
+              assistant_message: 'Edite os campos abaixo se quiser alterar algo.',
+              next_step: currentStep,
+              extracted_data: collectedData,
+              editable_items: buildEditableItems(collectedData),
+              action_options: ['Salvar ajustes', 'Voltar'],
+              requires_action: 'edit_fields',
+            }
       } else {
         syncResponse = {
           assistant_message: 'Atualizado.',
@@ -4788,7 +4809,15 @@ serve(async (req) => {
 
     response = ensureNextStep(response, currentStep || 'collect_free_text')
 
-    const updatedData = { ...collectedData, ...(response.extracted_data || {}) }
+    const updatedData = {
+      ...collectedData,
+      ...(response.extracted_data || {}),
+    }
+    updatedData.business_profile = buildBusinessProfile(updatedData)
+    response.extracted_data = {
+      ...(response.extracted_data || {}),
+      business_profile: updatedData.business_profile,
+    }
 
     // Opções de serviços: em booking_services_list usar o catálogo já confirmado pelo usuário (não lista genérica da IA)
     if (
@@ -4837,6 +4866,7 @@ serve(async (req) => {
         missing_fields: missingFields,
         selectable_options: response.selectable_options ?? undefined,
         editable_items: response.editable_items ?? undefined,
+        narrative_segments: response.narrative_segments ?? undefined,
       },
     })
 

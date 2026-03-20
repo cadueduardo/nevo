@@ -1,5 +1,6 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -10,10 +11,27 @@ import {
   Users,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { AgentSwitcher } from '@/features/agents/components/AgentSwitcher'
 import { useAgentContext } from '@/components/providers/AgentProvider'
 import { cn } from '@/lib/utils'
-import { AuthenticatedHeaderUserMenu } from '@/components/shared/AuthenticatedHeaderUserMenu'
+
+const AgentSwitcher = dynamic(
+  () => import('@/features/agents/components/AgentSwitcher').then((mod) => mod.AgentSwitcher),
+  {
+    ssr: false,
+    loading: () => <div className="h-9 w-[160px] rounded-md border bg-background" />,
+  }
+)
+
+const AuthenticatedHeaderUserMenu = dynamic(
+  () =>
+    import('@/components/shared/AuthenticatedHeaderUserMenu').then(
+      (mod) => mod.AuthenticatedHeaderUserMenu
+    ),
+  {
+    ssr: false,
+    loading: () => <div className="h-9 w-9 rounded-full border bg-background" />,
+  }
+)
 
 /** Ordem: Dashboard primeiro; Agentes = detalhe do agente ativo (Básico/Fluxo/Canais etc.). */
 function buildNavItems(activeAgentId: string | null) {

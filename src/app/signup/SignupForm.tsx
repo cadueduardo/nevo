@@ -6,7 +6,15 @@ import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { createClient } from '@/lib/supabase/client'
+
+let supabaseClientPromise: Promise<ReturnType<typeof import('@/lib/supabase/client')['createClient']>> | null = null
+
+async function getSupabaseClient() {
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import('@/lib/supabase/client').then((mod) => mod.createClient())
+  }
+  return supabaseClientPromise
+}
 
 /**
  * Formulário de cadastro de nova conta. Cria usuário no Supabase Auth.
@@ -39,7 +47,7 @@ export function SignupForm() {
     setSuccessMessage(null)
     setLoading(true)
     try {
-      const supabase = createClient()
+      const supabase = await getSupabaseClient()
       const { data, error: signUpError } = await supabase.auth.signUp({
         email: eTrim,
         password,

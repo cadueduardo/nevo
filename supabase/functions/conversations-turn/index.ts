@@ -1,7 +1,6 @@
 // @ts-nocheck
-/** Edge Function: direciona requisições para lib (turn-handler, DB, persistência). Lógica de turno em lib/turn-handler.ts. */
+/** Edge Function: atende external pelo semantic_core e mantém internal isolado. */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { processSimulatorMessage } from "./lib/turn-handler.ts"
 import {
   json,
   createSupabaseAdmin,
@@ -18,6 +17,11 @@ import {
   loadServicesFromSettings,
   loadServicesFromOnboardingSession,
   mergeServicesPreferIncoming,
+  buildBusinessProfileFromServiceViews,
+  projectLegacyServiceViewsFromBusinessProfile,
+  reconcileCanonicalServiceViews,
+  resolveConfiguredServicesFromConfig,
+  resolveSequenceEligibleServicesFromConfig,
   getTenantById,
   getOrCreateTenant,
   getOrCreateAgentForSimTenant,
@@ -27,14 +31,10 @@ import {
   ChannelType,
   isEndTestCommand,
   handleInternalIntent,
-  tryHandleExternalQuote,
 } from "./lib/index.ts"
-import {
-  runSemanticCoreTurn,
-  shouldDefaultExternalToSemanticCore,
-  shouldUseSemanticCore,
-} from "./lib/semantic-core/runtime.ts"
+import { runSemanticCoreTurn } from "./lib/semantic-core/runtime.ts"
 import { renderSemanticSimulatorResult } from "./lib/semantic-core/renderers/index.ts"
+import { executeSimulationLocalTurn } from "./lib/simulation-local-turn.ts"
 import type {
   ConversationTurnRequest,
   ConversationTurnResponse,
@@ -42,8 +42,6 @@ import type {
   SimulatorState,
   SimulatorResult,
 } from "./lib/index.ts"
-
-// Lógica de turno (processSimulatorMessage, handleBookingModeMessage) em lib/turn-handler.ts
 
 function buildSimulatorResult(params: {
   state: SimulatorState
@@ -79,7 +77,7 @@ async function runConversationFlowSafely(
   try {
     return await runMainConversationFlow(options)
   } catch (err) {
-    console.error("processSimulatorMessage error:", err)
+    console.error("external semantic runtime error:", err)
     return buildProcessingErrorResult(state)
   }
 }
@@ -150,8 +148,30 @@ function buildInternalActorConfig(config: SimulatorConfig) {
     business_name: config.business_name,
     branding: config.branding,
     schedule: config.schedule,
-    services: config.services,
+    services: resolveConfiguredServicesFromConfig(config),
   }
+}
+
+function syncConfigServiceViews(config: SimulatorConfig, preferredServices?: unknown) {
+  const resolvedServices = Array.isArray(preferredServices)
+    ? mergeServicesPreferIncoming(preferredServices as any[], resolveConfiguredServicesFromConfig(config))
+    : resolveConfiguredServicesFromConfig(config)
+
+  config.business_profile = {
+    ...(config.business_profile || {}),
+    business_name: config.business_profile?.business_name ?? config.business_name,
+    business_type: config.business_profile?.business_type ?? config.business_type,
+    services: resolvedServices,
+  }
+
+  const projectedConfigServices = projectLegacyServiceViewsFromBusinessProfile(config.business_profile)
+  config.services = projectedConfigServices.services
+  config.booking_services = projectedConfigServices.booking_services
+  config.catalog_services = projectedConfigServices.catalog_services
+  config.sequence_eligible_services =
+    projectedConfigServices.sequence_eligible_services.length > 0
+      ? projectedConfigServices.sequence_eligible_services
+      : config.sequence_eligible_services
 }
 
 function buildHandledFlowResult(params: {
@@ -185,32 +205,6 @@ function buildInternalActorFallbackResult(state: SimulatorState): SimulatorResul
     state,
     message:
       "Nao reconheci esse comando interno. Tente consultar agenda, clientes do dia ou um comando administrativo suportado.",
-  })
-}
-
-async function tryHandleExternalQuoteFlow(params: {
-  semanticCoreEnabled: boolean
-  supabaseAdmin: any
-  tenantId: string
-  agentId: string
-  conversationId: string
-  message: string
-  state: SimulatorState
-}): Promise<SimulatorResult | null> {
-  const { semanticCoreEnabled, supabaseAdmin, tenantId, agentId, conversationId, message, state } = params
-  if (semanticCoreEnabled) return null
-  const externalQuoteResult = await tryHandleExternalQuote({
-    supabaseAdmin,
-    tenantId,
-    agentId,
-    conversationId,
-    message,
-  })
-  if (!externalQuoteResult.handled) return null
-  return buildHandledFlowResult({
-    message: externalQuoteResult.message,
-    fallbackState: state,
-    action_options: externalQuoteResult.action_options,
   })
 }
 
@@ -302,8 +296,8 @@ function shouldRenderServiceMultiSelect(params: {
   if (!actionOptions.every((opt) => serviceOptions.includes(opt))) return false
 
   const catalogServiceOptions = [
-    ...(config.services || []).map((s) => String(s?.name || "")),
-    ...(config.sequence_eligible_services || []).map((s) => String(s || "")),
+    ...resolveConfiguredServicesFromConfig(config).map((s) => String(s?.name || "")),
+    ...resolveSequenceEligibleServicesFromConfig(config).map((s) => String(s || "")),
     "Quero agendar uma visita",
     "visita",
   ]
@@ -408,22 +402,47 @@ serve(async (req) => {
         ? { reject_unlisted_services: true, use_ai_matching: true, ...ctxLead }
         : { reject_unlisted_services: true, use_ai_matching: true }
 
-    const incomingCatalogServices = normalizeIncomingServices((body.context as any)?.catalog_services)
-    const incomingBookingServices = normalizeIncomingServices((body.context as any)?.booking_services)
-    const incomingLegacyServices = normalizeIncomingServices(body.context?.services)
-    const resolvedBookingServices = incomingBookingServices.length > 0 ? incomingBookingServices : incomingLegacyServices
-    const resolvedCatalogServices = incomingCatalogServices.length > 0 ? incomingCatalogServices : resolvedBookingServices
+    const reconciledIncomingServices = reconcileCanonicalServiceViews({
+      catalog: (body.context as any)?.catalog_services,
+      booking: (body.context as any)?.booking_services,
+      legacy: body.context?.services,
+    })
+    const incomingBusinessProfile =
+      typeof body.context?.business_profile === "object" && body.context?.business_profile !== null
+        ? body.context.business_profile
+        : buildBusinessProfileFromServiceViews({
+            business_name: body.context?.business_name,
+            business_type: body.context?.business_type,
+            catalog: reconciledIncomingServices.catalog_services,
+            booking: reconciledIncomingServices.booking_services,
+            legacy: reconciledIncomingServices.services,
+            sequenceEligible: body.context?.sequence_eligible_services,
+          })
+    const projectedIncomingServices = projectLegacyServiceViewsFromBusinessProfile(incomingBusinessProfile)
+    const resolvedCatalogServices =
+      projectedIncomingServices.catalog_services.length > 0
+        ? projectedIncomingServices.catalog_services
+        : reconciledIncomingServices.catalog_services
+    const resolvedBookingServices =
+      projectedIncomingServices.booking_services.length > 0
+        ? projectedIncomingServices.booking_services
+        : reconciledIncomingServices.booking_services
+    const incomingLegacyServices =
+      projectedIncomingServices.services.length > 0
+        ? projectedIncomingServices.services
+        : reconciledIncomingServices.services
 
     const config: SimulatorConfig = {
       business_name: body.context?.business_name,
       business_type: body.context?.business_type,
+      business_profile: incomingBusinessProfile,
       context_mode: body.context?.context_mode,
       establishment_address: body.context?.establishment_address,
       tone: body.context?.tone,
       catalog_services: resolvedCatalogServices,
       booking_services: resolvedBookingServices,
       // Compat legado: enquanto houver cÃ³digo antigo, services aponta para booking_services.
-      services: resolvedBookingServices,
+      services: mergeServicesPreferIncoming(incomingLegacyServices, resolvedBookingServices),
       when_client_asks_price_no_value: body.context?.when_client_asks_price_no_value || "offer_handoff_or_booking",
       schedule: body.context?.schedule,
       staff: body.context?.staff || [],
@@ -432,10 +451,47 @@ serve(async (req) => {
       holidays_attend: body.context?.holidays_attend,
       closure_periods: body.context?.closure_periods,
       allow_sequence_booking: body.context?.allow_sequence_booking ?? false,
-      sequence_eligible_services: body.context?.sequence_eligible_services ?? [],
+      sequence_eligible_services:
+        projectedIncomingServices.sequence_eligible_services.length > 0
+          ? projectedIncomingServices.sequence_eligible_services
+          : body.context?.sequence_eligible_services ?? [],
       target_audience: body.context?.target_audience,
       interaction_style: body.context?.interaction_style ?? "hybrid",
       branding: body.context?.branding,
+    }
+
+    /** Onboarding: simulador só no navegador — não cria tenant/conversa/agendamento. */
+    const simulationLocal =
+      !isWhatsApp && (body as { simulation_local?: boolean }).simulation_local === true
+    if (simulationLocal) {
+      const resolvedConfiguredServices = resolveConfiguredServicesFromConfig(config)
+      if (!resolvedConfiguredServices.length || !hasAnyConfiguredPrice(resolvedConfiguredServices)) {
+        const onbSid =
+          typeof (body as { onboarding_session_id?: string }).onboarding_session_id === "string"
+            ? String((body as { onboarding_session_id: string }).onboarding_session_id).trim()
+            : String(body.session_id || "")
+                .split(":sim:")[0]
+                .trim() || body.session_id
+        const servicesFromOnboarding = await loadServicesFromOnboardingSession(supabaseAdmin, onbSid)
+        if (servicesFromOnboarding.length > 0) {
+          syncConfigServiceViews(config, servicesFromOnboarding)
+        }
+      }
+      return json(
+        await executeSimulationLocalTurn(
+          {
+            message: body.message,
+            session_id: body.session_id,
+            mode: (body as { mode?: string }).mode,
+            actor_type: (body as { actor_type?: string }).actor_type,
+            sender_display_name: (body as { sender_display_name?: string }).sender_display_name,
+            simulator_state: (body as { simulator_state?: SimulatorState }).simulator_state,
+            simulator_history: (body as { simulator_history?: Array<{ role: string; content: string }> })
+              .simulator_history,
+          },
+          config
+        )
+      )
     }
 
     const tenant = (body as { tenant_id?: string }).tenant_id
@@ -462,18 +518,34 @@ serve(async (req) => {
       return json({ error: "tenant sem agente configurado; agent_id obrigatorio para conversation/channel" }, 400)
     }
 
+    try {
+      const { data: quoteServices, error: quoteServicesError } = await supabaseAdmin
+        .from("quote_service")
+        .select("id, agent_id, name, pricing_type, variables_schema, pricing_rules, external_variable_keys, keywords, active")
+        .eq("agent_id", agentId)
+        .eq("active", true)
+      if (quoteServicesError) {
+        console.error("quote service hydration error:", quoteServicesError)
+      } else if (Array.isArray(quoteServices) && quoteServices.length > 0) {
+        config.quote_services = quoteServices
+      }
+    } catch (quoteServicesErr) {
+      console.error("quote service hydration exception:", quoteServicesErr)
+    }
+
     // Sempre mescla com agent_setting/tenant_setting para completar campos faltantes
     // (ex.: duration_minutes ausente no contexto vindo do simulador).
     {
       const servicesFromSettings = await loadServicesFromSettings(supabaseAdmin, tenant.id, agentId)
       if (servicesFromSettings.length > 0) {
-        config.services = mergeServicesPreferIncoming(config.services || [], servicesFromSettings)
+        syncConfigServiceViews(config, servicesFromSettings)
       }
     }
-    if (!config.services?.length || !hasAnyConfiguredPrice(config.services)) {
+    const resolvedConfiguredServices = resolveConfiguredServicesFromConfig(config)
+    if (!resolvedConfiguredServices.length || !hasAnyConfiguredPrice(resolvedConfiguredServices)) {
       const servicesFromOnboarding = await loadServicesFromOnboardingSession(supabaseAdmin, body.session_id)
       if (servicesFromOnboarding.length > 0) {
-        config.services = mergeServicesPreferIncoming(config.services || [], servicesFromOnboarding)
+        syncConfigServiceViews(config, servicesFromOnboarding)
       }
     }
 
@@ -644,47 +716,25 @@ serve(async (req) => {
     }
 
     const senderDisplayName = (body as { sender_display_name?: string }).sender_display_name?.trim() || undefined
+    const incomingActorType = (body as { actor_type?: string }).actor_type
     let result: SimulatorResult
     const internalActor = isInternalOwnerActor(body)
-    const semanticCoreEnabled =
-      shouldUseSemanticCore({
-        channel: channelType === "whatsapp" ? "whatsapp" : "web_simulator",
-        sessionId: body.session_id,
-        senderId: (body as { from?: string }).from,
-      }) ||
-      (!internalActor && shouldDefaultExternalToSemanticCore())
     let usedSemanticCore = false
     const semanticChannel = channelType === "whatsapp" ? "whatsapp" : "web_simulator"
     const runMainConversationFlow = async (options?: { isExternalActor?: boolean }): Promise<SimulatorResult> => {
-      if (semanticCoreEnabled) {
-        usedSemanticCore = true
-        const semantic = await runSemanticCoreTurn({
-          message: body.message,
-          channel: semanticChannel,
-          config,
-          state: stateWithFirstFlag,
-          history,
-          sender_display_name: senderDisplayName,
-          session_id: body.session_id,
-          sender_id: (body as { from?: string }).from,
-        })
-        return await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
-      }
-
-      return await processSimulatorMessage(body.message, config, stateWithFirstFlag, history, senderDisplayName, {
-        supabaseAdmin,
-        tenantId: tenant.id,
-        agentId,
+      void options
+      usedSemanticCore = true
+      const semantic = await runSemanticCoreTurn({
+        message: body.message,
         channel: semanticChannel,
-        sessionId: body.session_id,
-        senderId: (body as { from?: string }).from,
-        contactId: contact.id,
-        contact,
-        senderDisplayName,
-        history,
         config,
-        ...options,
+        state: stateWithFirstFlag,
+        history,
+        sender_display_name: senderDisplayName,
+        session_id: body.session_id,
+        sender_id: (body as { from?: string }).from,
       })
+      return await renderSemanticSimulatorResult(stateWithFirstFlag, semantic)
     }
 
     // Intents internas (modo internal, owner/admin): consulta/cancelamento de agenda.
@@ -707,16 +757,7 @@ serve(async (req) => {
       }
     } else {
       // FASE 5: OrÃ§amento externo (cliente pergunta preÃ§o com medidas â†’ faixa + CTA)
-      const externalQuoteResult = await tryHandleExternalQuoteFlow({
-        semanticCoreEnabled,
-        supabaseAdmin,
-        tenantId: tenant.id,
-        agentId,
-        conversationId: conversation.id,
-        message: body.message,
-        state: stateWithFirstFlag,
-      })
-      result = externalQuoteResult ?? await runConversationFlowSafely(
+      result = await runConversationFlowSafely(
         runMainConversationFlow,
         stateWithFirstFlag,
         { isExternalActor: true }
@@ -841,7 +882,7 @@ serve(async (req) => {
         const duration = getServicesTotalDuration(config, service) ?? getServiceDurationMinutes(config, service) ?? 30
         const endAt = new Date(Date.parse(startAt) + duration * 60 * 1000).toISOString()
         const serviceNames = parseServiceNames(service)
-        const { error: insErr } = await supabaseAdmin.from("appointment").insert({
+        const { error: insErrLegacy } = await supabaseAdmin.from("appointment").insert({
           tenant_id: tenantIdForAppointment,
           agent_id: agentId,
           contact_id: contact.id,
@@ -852,7 +893,7 @@ serve(async (req) => {
           end_at: endAt,
           status: "confirmed",
         })
-        if (insErr && insErr.code !== "23505") console.error("appointment insert error:", insErr)
+        if (insErrLegacy && insErrLegacy.code !== "23505") console.error("appointment insert error:", insErrLegacy)
       }
     }
 

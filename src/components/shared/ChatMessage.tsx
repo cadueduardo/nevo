@@ -4,7 +4,11 @@ import { useState, useEffect, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { cn } from '@/lib/utils'
 import { Pencil, X } from 'lucide-react'
-import type { EditableItem, SelectableOption } from './ChatShell'
+import type { EditableItem, NarrativeSegment, SelectableOption } from './ChatShell'
+import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 
 /** Renderiza **texto** como negrito (compatível com Markdown/WhatsApp). */
 function renderContentWithMarkdown(text: string): ReactNode {
@@ -59,6 +63,141 @@ function stripOptionLabel(option: string): string {
   return match ? match[1].trim() : trimmed
 }
 
+function isNarrativeEditableItem(item: EditableItem): boolean {
+  return Boolean(item?.value?.trim())
+}
+
+function isNarrativeSummaryMessage(requiresAction?: string | null): boolean {
+  return requiresAction === 'summary_confirmation' || requiresAction === 'summary_edit'
+}
+
+function shouldRenderNarrativeMessage(params: {
+  isUser: boolean
+  requiresAction?: string | null
+  narrativeItems: EditableItem[]
+  narrativeSegments?: NarrativeSegment[]
+}): boolean {
+  if (params.isUser || params.narrativeItems.length === 0) return false
+  if (isNarrativeSummaryMessage(params.requiresAction)) return true
+  return params.requiresAction === 'edit_fields' && Array.isArray(params.narrativeSegments) && params.narrativeSegments.length > 0
+}
+
+function isMultilineEditor(item: EditableItem | null): boolean {
+  if (!item) return false
+  return item.type === 'schedule' || item.type === 'policies' || item.type === 'establishment_address'
+}
+
+function isItemRemovable(item: EditableItem | null): boolean {
+  if (!item) return false
+  return (
+    item.id.startsWith('service_') ||
+    item.id.startsWith('faq_') ||
+    item.id.startsWith('variable_') ||
+    item.id === 'schedule' ||
+    item.id === 'service_area' ||
+    item.id === 'tone_of_voice' ||
+    item.id === 'policies'
+  )
+}
+
+function renderTextSegment(text: string, keyPrefix: string): ReactNode[] {
+  const lines = text.split('\n')
+  return lines.flatMap((line, index) => {
+    const nodes: ReactNode[] = [<span key={`${keyPrefix}-${index}`}>{renderContentWithMarkdown(line)}</span>]
+    if (index < lines.length - 1) nodes.push(<br key={`${keyPrefix}-br-${index}`} />)
+    return nodes
+  })
+}
+
+function renderNarrativeWithEditableSpans(params: {
+  text: string
+  editableItems: EditableItem[]
+  onActivate: (item: EditableItem) => void
+}): ReactNode {
+  const candidates = params.editableItems
+    .filter(isNarrativeEditableItem)
+    .sort((a, b) => b.value.length - a.value.length)
+
+  if (candidates.length === 0) return renderContentWithMarkdown(params.text)
+
+  const nodes: ReactNode[] = []
+  let cursor = 0
+  let keyIndex = 0
+
+  while (cursor < params.text.length) {
+    let nextMatch:
+      | {
+          item: EditableItem
+          start: number
+          end: number
+        }
+      | undefined
+
+    for (const item of candidates) {
+      const start = params.text.indexOf(item.value, cursor)
+      if (start === -1) continue
+      if (!nextMatch || start < nextMatch.start) {
+        nextMatch = {
+          item,
+          start,
+          end: start + item.value.length,
+        }
+      }
+    }
+
+    if (!nextMatch) {
+      nodes.push(...renderTextSegment(params.text.slice(cursor), `tail-${keyIndex}`))
+      break
+    }
+
+    if (nextMatch.start > cursor) {
+      nodes.push(...renderTextSegment(params.text.slice(cursor, nextMatch.start), `seg-${keyIndex}`))
+    }
+
+    nodes.push(
+      <button
+        key={`edit-${keyIndex}`}
+        type="button"
+        onClick={() => params.onActivate(nextMatch!.item)}
+        className="inline text-left align-baseline rounded-sm underline decoration-primary/50 underline-offset-4 transition-colors hover:text-primary"
+      >
+        {nextMatch.item.value}
+      </button>
+    )
+
+    cursor = nextMatch.end
+    keyIndex += 1
+  }
+
+  return nodes
+}
+
+function renderNarrativeSegments(params: {
+  segments: NarrativeSegment[]
+  editableItems: EditableItem[]
+  onActivate: (item: EditableItem) => void
+}): ReactNode[] {
+  return params.segments.map((segment, index) => {
+    if (segment.kind === 'editable' && segment.item_id) {
+      const item = params.editableItems.find((entry) => entry.id === segment.item_id)
+      if (item) {
+        return (
+          <button
+            key={`segment-edit-${index}`}
+            type="button"
+            onClick={() => params.onActivate(item)}
+            className="inline text-left align-baseline rounded-sm underline decoration-primary/50 underline-offset-4 transition-colors hover:text-primary"
+          >
+            {segment.text}
+          </button>
+        )
+      }
+    }
+
+    return <span key={`segment-text-${index}`}>{renderContentWithMarkdown(segment.text)}</span>
+  })
+}
+
 interface ChatMessageProps {
   role: 'user' | 'assistant'
   content: string
@@ -68,6 +207,7 @@ interface ChatMessageProps {
   actionOptionsMultiSelect?: boolean
   editableItems?: EditableItem[]
   selectableOptions?: SelectableOption[]
+  narrativeSegments?: NarrativeSegment[]
   onActionClick?: (action: string) => void
   onItemEdit?: (id: string, newValue: string, allItems?: EditableItem[]) => void
   /** Salva localmente sem enviar mensagem (ex: Enter em service_price). */
@@ -89,6 +229,7 @@ export function ChatMessage({
   actionOptionsMultiSelect = false,
   editableItems,
   selectableOptions,
+  narrativeSegments,
   onActionClick,
   onItemEdit,
   onItemEditLocal,
@@ -105,6 +246,9 @@ export function ChatMessage({
   /** Campo de preço em edição: ao dar Enter, salva localmente sem enviar mensagem. */
   const [editingPriceId, setEditingPriceId] = useState<string | null>(null)
   const [editingPriceValue, setEditingPriceValue] = useState('')
+  const [narrativeSheetOpen, setNarrativeSheetOpen] = useState(false)
+  const [selectedNarrativeItemId, setSelectedNarrativeItemId] = useState<string | null>(null)
+  const [narrativeDraftValue, setNarrativeDraftValue] = useState('')
   const [selectedOptions, setSelectedOptions] = useState<Set<string>>(() => {
     return new Set(selectableOptions?.filter(opt => opt.selected).map(opt => opt.value) || [])
   })
@@ -117,6 +261,25 @@ export function ChatMessage({
       setSelectedOptions(new Set(selectableOptions.filter(opt => opt.selected).map(opt => opt.value)))
     }
   }, [selectableOptions])
+
+  const narrativeItems = editableItems?.filter(isNarrativeEditableItem) || []
+  const selectedNarrativeItem =
+    narrativeItems.find((item) => item.id === selectedNarrativeItemId) || narrativeItems[0] || null
+  const isNarrativeSummary = shouldRenderNarrativeMessage({
+    isUser,
+    requiresAction,
+    narrativeItems,
+    narrativeSegments,
+  })
+  const hasNarrativeSegments = Array.isArray(narrativeSegments) && narrativeSegments.length > 0
+
+  useEffect(() => {
+    if (!narrativeSheetOpen) return
+    const item = narrativeItems.find((entry) => entry.id === selectedNarrativeItemId) || narrativeItems[0] || null
+    if (!item) return
+    setSelectedNarrativeItemId(item.id)
+    setNarrativeDraftValue(item.value)
+  }, [narrativeSheetOpen, narrativeItems, selectedNarrativeItemId])
 
 
   const handleEditStart = (item: EditableItem) => {
@@ -167,6 +330,26 @@ export function ChatMessage({
     if (onItemDelete) {
       onItemDelete(id, editableItems)
     }
+  }
+
+  const openNarrativeEditor = (item: EditableItem) => {
+    setSelectedNarrativeItemId(item.id)
+    setNarrativeDraftValue(item.value)
+    setNarrativeSheetOpen(true)
+  }
+
+  const saveNarrativeEdit = () => {
+    if (!selectedNarrativeItem) return
+    const valueToSave = narrativeDraftValue.trim()
+    if (!valueToSave) return
+    if (onItemEditLocal) {
+      flushSync(() => {
+        onItemEditLocal(selectedNarrativeItem.id, valueToSave)
+      })
+    } else if (onItemEdit) {
+      onItemEdit(selectedNarrativeItem.id, valueToSave, editableItems)
+    }
+    setNarrativeSheetOpen(false)
   }
 
   const handleOptionToggle = (value: string) => {
@@ -222,12 +405,24 @@ export function ChatMessage({
             : 'bg-muted text-foreground'
         )}
       >
-        <p className="text-sm sm:text-base whitespace-pre-wrap break-words font-normal leading-relaxed">
-          {renderContentWithMarkdown(content)}
-        </p>
-        
+        <div className="text-sm sm:text-base whitespace-pre-wrap break-words font-normal leading-relaxed">
+          {isNarrativeSummary
+            ? hasNarrativeSegments
+              ? renderNarrativeSegments({
+                  segments: narrativeSegments || [],
+                  editableItems: narrativeItems,
+                  onActivate: openNarrativeEditor,
+                })
+              : renderNarrativeWithEditableSpans({
+                  text: content,
+                  editableItems: narrativeItems,
+                  onActivate: openNarrativeEditor,
+                })
+            : renderContentWithMarkdown(content)}
+        </div>
+
         {/* Lista de itens editáveis (serviços, FAQ, etc) */}
-        {!isUser && editableItems && editableItems.length > 0 && (
+        {!isUser && editableItems && editableItems.length > 0 && (!isNarrativeSummary || (requiresAction === 'edit_fields' && !hasNarrativeSegments)) && (
           <div className="mt-4 space-y-2">
             {editableItems.map((item) => {
               const isServicePrice = item.type === 'service_price'
@@ -347,6 +542,20 @@ export function ChatMessage({
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {!isUser && isNarrativeSummary && requiresAction === 'edit_fields' && (
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedNarrativeItem) openNarrativeEditor(selectedNarrativeItem)
+              }}
+              className="text-sm underline underline-offset-4 transition-colors hover:text-primary"
+            >
+              Editar narrativa
+            </button>
           </div>
         )}
 
@@ -563,6 +772,95 @@ export function ChatMessage({
           </p>
         )}
       </div>
+
+      {!isUser && isNarrativeSummary && selectedNarrativeItem && (
+        <Sheet open={narrativeSheetOpen} onOpenChange={setNarrativeSheetOpen}>
+          <SheetContent side="bottom" className="mx-auto max-h-[85vh] max-w-2xl rounded-t-xl">
+            <SheetHeader className="border-b border-border px-4 py-4">
+              <SheetTitle>Editar narrativa</SheetTitle>
+              <p className="text-sm text-muted-foreground">
+                Ajuste o trecho selecionado. Em telas menores, a edicao abre neste painel para evitar conflito com o teclado.
+              </p>
+            </SheetHeader>
+
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+              <div className="space-y-2">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {selectedNarrativeItem.label}
+                </div>
+                {isMultilineEditor(selectedNarrativeItem) ? (
+                  <Textarea
+                    value={narrativeDraftValue}
+                    onChange={(event) => setNarrativeDraftValue(event.target.value)}
+                    className="min-h-[120px]"
+                    autoFocus
+                  />
+                ) : (
+                  <Input
+                    value={narrativeDraftValue}
+                    onChange={(event) => setNarrativeDraftValue(event.target.value)}
+                    autoFocus
+                  />
+                )}
+              </div>
+
+              {narrativeItems.length > 1 && (
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Outros trechos editaveis
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {narrativeItems.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedNarrativeItemId(item.id)
+                          setNarrativeDraftValue(item.value)
+                        }}
+                        className={cn(
+                          'rounded-full border px-3 py-1.5 text-sm transition-colors',
+                          item.id === selectedNarrativeItem.id
+                            ? 'border-primary bg-primary/10 text-foreground'
+                            : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                        )}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <SheetFooter className="border-t border-border px-4 py-4 sm:justify-between">
+              {isItemRemovable(selectedNarrativeItem) && onItemDelete ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="sm:mr-auto"
+                  onClick={() => {
+                    onItemDelete(selectedNarrativeItem.id, editableItems)
+                    setNarrativeSheetOpen(false)
+                  }}
+                >
+                  Remover trecho
+                </Button>
+              ) : (
+                <div />
+              )}
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                <Button type="button" variant="outline" onClick={() => setNarrativeSheetOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button type="button" onClick={saveNarrativeEdit} disabled={!narrativeDraftValue.trim()}>
+                  Salvar
+                </Button>
+              </div>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
+      )}
     </div>
   )
 }

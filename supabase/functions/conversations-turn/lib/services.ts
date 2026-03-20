@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { normalizeText } from "./utils.ts"
 import type { SimulatorConfig } from "./types.ts"
+import { resolveConfiguredServicesFromConfig } from "./canonical-services.ts"
 
 export function findServiceByExactMatch(text: string, services: Array<{ name: string }> = []): string | null {
   const msg = normalizeText((text || "").trim())
@@ -112,7 +113,7 @@ export function getServiceWithPrice(
 
 export function getServiceDurationMinutes(config: SimulatorConfig, serviceName?: string): number | null {
   if (!serviceName) return null
-  const services = config.services || []
+  const services = resolveConfiguredServicesFromConfig(config)
   const normalizedService = normalizeText(serviceName)
   let match = services.find((s) => normalizeText(s.name || "") === normalizedService)
   if (!match) {
@@ -180,8 +181,9 @@ export function getServicesTotalPrice(
   const names = parseServiceNames(serviceStr)
   if (names.length === 0) return null
   let total = 0
+  const services = resolveConfiguredServicesFromConfig(config)
   for (const name of names) {
-    const svc = getServiceWithPrice(config.services || [], name)
+    const svc = getServiceWithPrice(services, name)
     if (!svc) return null
     const p = svc.base_price
     if (p != null && !Number.isNaN(p)) total += p
@@ -292,7 +294,7 @@ export async function inferAreaWithAI(
 
   const business = config.business_name ? `Nome: ${config.business_name}` : ""
   const businessType = config.business_type ? `Ramo: ${config.business_type}` : ""
-  const servicesList = (config.services || []).map((s) => s.name).filter(Boolean)
+  const servicesList = resolveConfiguredServicesFromConfig(config).map((s) => s.name).filter(Boolean)
   const servicesHint =
     servicesList.length > 0
       ? `\nServiços oferecidos pelo negócio (use estes nomes exatos quando fizer sentido): ${servicesList.join(", ")}\n`
@@ -366,7 +368,8 @@ export async function classifyServiceMatch(
   message: string,
   config: SimulatorConfig
 ): Promise<{ service?: string; reject?: boolean; confidence?: number; inferred_area?: string }> {
-  const direct = findServiceFromText(message, config.services || [])
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const direct = findServiceFromText(message, configuredServices)
   if (direct) return { service: direct }
 
   const policy = config.lead_policy || {}
@@ -388,18 +391,18 @@ export async function classifyServiceMatch(
   }
 
   // Se a IA retornou o nome exato de um serviço, aceitar diretamente
-  const exactServiceMatch = (config.services || []).find(
+  const exactServiceMatch = configuredServices.find(
     (s) => s.name && normalizeText(s.name) === normalizeText(inferred)
   )
   if (exactServiceMatch?.name && (ai.confidence ?? 0) >= minConfidence) {
     return { service: exactServiceMatch.name, confidence: ai.confidence, inferred_area: inferred }
   }
 
-  const matchedService = pickServiceByArea(inferred, config.services || [])
+  const matchedService = pickServiceByArea(inferred, configuredServices)
   if (matchedService && (ai.confidence ?? 0) >= minConfidence) {
     return { service: matchedService, confidence: ai.confidence, inferred_area: inferred }
   }
-  const areaMatches = areaMatchesServices(inferred, config.services || [])
+  const areaMatches = areaMatchesServices(inferred, configuredServices)
   if (rejectEnabled && (ai.confidence ?? 0) >= minConfidence && !areaMatches) {
     return { reject: true, confidence: ai.confidence, inferred_area: inferred }
   }

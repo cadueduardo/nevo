@@ -16,6 +16,7 @@ export interface WhatsAppChannelState {
   last_error: string | null
   evolution_base_url: string | null
   evolution_instance: string | null
+  evolution_state?: string | null
 }
 
 interface ConnectStartResponse {
@@ -28,12 +29,18 @@ interface ConnectStartResponse {
 export interface AgentChannelWhatsAppProps {
   agentId: string
   onSave: () => void
+  initialState?: WhatsAppChannelState | null
   onConnectionStatusChange?: (status: string) => void
 }
 
-export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange }: AgentChannelWhatsAppProps) {
-  const [state, setState] = React.useState<WhatsAppChannelState | null>(null)
-  const [loading, setLoading] = React.useState(true)
+export function AgentChannelWhatsApp({
+  agentId,
+  onSave,
+  initialState = null,
+  onConnectionStatusChange,
+}: AgentChannelWhatsAppProps) {
+  const [state, setState] = React.useState<WhatsAppChannelState | null>(initialState)
+  const [loading, setLoading] = React.useState(!initialState)
   const [error, setError] = React.useState<string | null>(null)
   const [savingConfig, setSavingConfig] = React.useState(false)
   const [isModalOpen, setIsModalOpen] = React.useState(false)
@@ -58,9 +65,19 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
   const [showTechnicalDetails, setShowTechnicalDetails] = React.useState(false)
   const [footerNotice, setFooterNotice] = React.useState<string | null>(null)
   const prevStatusRef = React.useRef<string | null>(null)
+  const pollingTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pollingAttemptRef = React.useRef(0)
+
+  React.useEffect(() => {
+    if (!initialState) return
+    setState(initialState)
+    setEvolutionBaseUrl(initialState.evolution_base_url ?? '')
+    setEvolutionInstance(initialState.evolution_instance ?? '')
+    setLoading(false)
+  }, [initialState])
 
   const fetchChannel = React.useCallback(async () => {
-    const res = await fetch(`/api/app/agents/${agentId}/channel/whatsapp`)
+    const res = await fetch(`/api/app/agents/${agentId}/channel/whatsapp?include_live=1`)
     const data = (await res.json().catch(() => ({}))) as WhatsAppChannelState & { error?: string }
     if (!res.ok) throw new Error(data.error || res.statusText)
     setState(data)
@@ -71,7 +88,12 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
 
   const fetchLiveStatus = React.useCallback(async () => {
     const res = await fetch(`/api/whatsapp/connect/status?agent_id=${encodeURIComponent(agentId)}`)
-    const data = (await res.json().catch(() => ({}))) as { status?: string; last_error?: string }
+    const data = (await res.json().catch(() => ({}))) as {
+      status?: string
+      last_error?: string
+      phone_number?: string | null
+      evolution_state?: string | null
+    }
     if (!res.ok) return
     setState((prev) =>
       prev
@@ -79,6 +101,8 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
             ...prev,
             status: (data.status || prev.status) as WhatsAppChannelState['status'],
             last_error: data.last_error ?? prev.last_error,
+            phone_number: data.phone_number ?? prev.phone_number,
+            evolution_state: data.evolution_state ?? prev.evolution_state,
           }
         : prev
     )
@@ -86,15 +110,14 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
 
   React.useEffect(() => {
     let cancelled = false
-    setLoading(true)
     setError(null)
     ;(async () => {
       try {
-        const initial = await fetchChannel()
-        if (initial.provider === 'evolution' && initial.evolution_base_url && initial.evolution_instance) {
-          await fetchLiveStatus()
+        if (initialState?.provider === 'evolution' && initialState?.evolution_base_url && initialState?.evolution_instance) {
           await fetchChannel()
+          return
         }
+        await fetchChannel()
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Erro ao carregar canal')
       }
@@ -105,20 +128,46 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
     return () => {
       cancelled = true
     }
-  }, [fetchChannel, fetchLiveStatus])
+  }, [fetchChannel, initialState])
 
   React.useEffect(() => {
-    if (!isModalOpen || state?.status !== 'connecting') return
-    const interval = setInterval(() => {
-      void fetchLiveStatus()
-    }, 4000)
-    return () => clearInterval(interval)
-  }, [isModalOpen, state?.status, fetchLiveStatus])
+    if (pollingTimeoutRef.current) {
+      clearTimeout(pollingTimeoutRef.current)
+      pollingTimeoutRef.current = null
+    }
+
+    if (!isModalOpen || state?.status !== 'connecting') {
+      pollingAttemptRef.current = 0
+      return
+    }
+
+    const delayByAttempt = [4000, 6000, 10000]
+    const delay = delayByAttempt[Math.min(pollingAttemptRef.current, delayByAttempt.length - 1)]
+
+    pollingTimeoutRef.current = setTimeout(async () => {
+      pollingAttemptRef.current += 1
+      try {
+        await fetchChannel()
+      } catch {
+        await fetchLiveStatus()
+      }
+    }, delay)
+
+    return () => {
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current)
+        pollingTimeoutRef.current = null
+      }
+    }
+  }, [isModalOpen, state?.status, fetchChannel, fetchLiveStatus])
 
   React.useEffect(() => {
     const currentStatus = state?.status ?? null
     const previousStatus = prevStatusRef.current
     const justConnected = previousStatus !== 'connected' && currentStatus === 'connected'
+    if (currentStatus !== 'connecting') {
+      pollingAttemptRef.current = 0
+    }
     if (isModalOpen && justConnected) {
       setIsModalOpen(false)
       setConnectError(null)
@@ -213,7 +262,6 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
       setPairingCode(data.pairingCode ?? null)
       setConnectHint(data.message ?? null)
       await fetchChannel()
-      await fetchLiveStatus()
     } catch (e) {
       setConnectError(e instanceof Error ? e.message : 'Erro ao iniciar conexão')
     } finally {
@@ -234,7 +282,6 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
       if (!res.ok) throw new Error(data.error || res.statusText)
       setPairingCode(data.pairingCode ?? null)
       await fetchChannel()
-      await fetchLiveStatus()
     } catch (e) {
       setConnectError(e instanceof Error ? e.message : 'Erro ao regerar código')
     } finally {
@@ -340,7 +387,7 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button onClick={() => setIsModalOpen(true)}>Conectar WhatsApp agora</Button>
-                <Button variant="outline" onClick={() => void fetchLiveStatus()}>
+                <Button variant="outline" onClick={() => void fetchChannel()}>
                   Sincronizar conexão
                 </Button>
               </div>
@@ -430,7 +477,7 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
               {state?.status !== 'connected' && (
                 <Button onClick={() => setIsModalOpen(true)}>Conectar WhatsApp</Button>
               )}
-              <Button variant="outline" onClick={() => void fetchLiveStatus()}>
+              <Button variant="outline" onClick={() => void fetchChannel()}>
                 Sincronizar conexão
               </Button>
               <Button variant="outline" className="gap-2" onClick={handleDisconnect} disabled={opLoading !== null}>
@@ -558,7 +605,7 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
                 <Button type="button" variant="outline" onClick={handleRetryCode} disabled={connectLoading || !phoneInput.trim()}>
                   Regerar código
                 </Button>
-                <Button type="button" variant="outline" onClick={() => void fetchLiveStatus()}>
+                <Button type="button" variant="outline" onClick={() => void fetchChannel()}>
                   Verificar status
                 </Button>
               </div>
@@ -625,3 +672,4 @@ export function AgentChannelWhatsApp({ agentId, onSave, onConnectionStatusChange
     </div>
   )
 }
+

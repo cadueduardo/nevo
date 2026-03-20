@@ -1,6 +1,11 @@
+import dynamic from 'next/dynamic'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { SignupForm } from './SignupForm'
+
+const SignupForm = dynamic(() => import('./SignupForm').then((mod) => mod.SignupForm), {
+  ssr: false,
+  loading: () => <div className="min-h-[320px] rounded-lg border bg-card" />,
+})
 
 /**
  * Página de cadastro de nova conta. Se o usuário já estiver autenticado, redireciona para /app.

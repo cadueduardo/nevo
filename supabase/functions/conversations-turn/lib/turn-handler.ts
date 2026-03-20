@@ -8,6 +8,7 @@
 import type { SimulatorConfig, SimulatorState, SimulatorResult, FlowOrchestratorOutput } from "./types.ts"
 import type { Phase } from "./flow-pipeline.ts"
 import type { SimulatorHandlerContext, ConversationRuntimeContext, TurnPipelineContext } from "./turn-context.ts"
+import { resolveConfiguredServicesFromConfig } from "./canonical-services.ts"
 import { runEarlySteps } from "./turn/early/index.ts"
 import { buildResult } from "./state.ts"
 import { normalizeText } from "./utils.ts"
@@ -163,7 +164,8 @@ async function tryBuildLegacyDirectInquiryRejection(params: {
   isFirst: boolean
 }): Promise<SimulatorResult | null> {
   const { text, config, nextState, isFirst } = params
-  if (!isDirectServiceInquiry(text) || (config.services || []).length === 0) return null
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  if (!isDirectServiceInquiry(text) || configuredServices.length === 0) return null
   const { match, hasContext, rejectionMessage } = await getLegacyServiceMatchSummary({
     text,
     config,
@@ -295,7 +297,8 @@ function resolveLegacyInitialServiceCandidate(
   text: string,
   config: SimulatorConfig
 ): string | null {
-  const exactService = findServiceByExactMatch(text, config.services || [])
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
+  const exactService = findServiceByExactMatch(text, configuredServices)
   if (exactService) return exactService
   const { serviceName } = resolveCatalogService({ text, config })
   if (serviceName) return serviceName
@@ -360,6 +363,7 @@ async function tryHandleLegacyPriceQuestion(params: {
     allowNoPriceFallback,
   } = params
   if (!isPriceQuestion(text)) return null
+  const configuredServices = resolveConfiguredServicesFromConfig(config)
 
   const { serviceName, service: svc } = resolveCatalogService({
     text,
@@ -379,7 +383,7 @@ async function tryHandleLegacyPriceQuestion(params: {
     return buildLegacyPriceUnavailableResult(config, nextState, cordial, serviceName)
   }
 
-  if (!serviceName && (config.services || []).length > 0) {
+  if (!serviceName && configuredServices.length > 0) {
     const { match, hasContext, rejectionMessage } = await getLegacyServiceMatchSummary({
       text,
       config,
@@ -390,7 +394,7 @@ async function tryHandleLegacyPriceQuestion(params: {
     }
   }
 
-  const withPrice = (config.services || []).filter((s) => s.base_price != null)
+  const withPrice = configuredServices.filter((s) => s.base_price != null)
   if (withPrice.length > 0) {
     await applyBookingLeadContext({ text, nextState, history })
     return buildLegacyPriceCatalogListResult(config, nextState, cordial)
@@ -463,7 +467,7 @@ async function tryRejectInvalidLegacyBookingEntry(params: {
     nextState.slots.service ||
     isAttendeeNameTurn ||
     !config.lead_policy?.reject_unlisted_services ||
-    (config.services || []).length === 0 ||
+    resolveConfiguredServicesFromConfig(config).length === 0 ||
     isGreeting(text)
   ) {
     return null
@@ -572,7 +576,7 @@ function tryApplyLegacyAudienceConfirmation(
   config: SimulatorConfig,
   nextState: SimulatorState
 ): SimulatorResult | null {
-  if ((config.services || []).length === 0) return null
+  if (resolveConfiguredServicesFromConfig(config).length === 0) return null
   const trimmed = normalizeText(text).trim()
   const isAudienceConfirmation =
     /^(1\s*[-�"".)]\s*)?(sim,?\s*nos\s+encaixamos|nos\s+encaixamos)\s*$/i.test(trimmed) ||
@@ -1069,7 +1073,7 @@ async function buildLegacyQualificationServiceGateResult(params: {
     })
   }
 
-  const areaMatches = areaMatchesServices(summary.match.inferred_area, config.services || [])
+  const areaMatches = areaMatchesServices(summary.match.inferred_area, resolveConfiguredServicesFromConfig(config))
   if (summary.match.reject || (summary.hasContext && !summary.match.service && !areaMatches)) {
     return buildLegacyRejectedQualificationResult(nextState, summary.rejectionMessage)
   }
@@ -1088,7 +1092,7 @@ async function tryResolveLegacyQualificationServiceGate(params: {
   const { text, config, nextState, history, senderDisplayName, isFirst } = params
   if (
     isGreeting(text) ||
-    (config.services || []).length === 0 ||
+    resolveConfiguredServicesFromConfig(config).length === 0 ||
     nextState.slots.service ||
     !(config.lead_policy?.reject_unlisted_services || config.lead_policy?.use_ai_matching)
   ) {
@@ -1212,7 +1216,7 @@ function shouldTryLegacyFallbackQualificationEntry(params: {
   return Boolean(
     !nextState.mode &&
       config.lead_policy?.reject_unlisted_services &&
-      (config.services || []).length > 0 &&
+      resolveConfiguredServicesFromConfig(config).length > 0 &&
       !nextState.slots.service &&
       !isAttendeeNameTurn &&
       !isGreeting(text) &&
@@ -1454,6 +1458,124 @@ function buildLegacyTurnCaches(params: {
   }
 }
 
+function shouldHandleLegacyAttendeePrompt(params: {
+  text: string
+  nextState: SimulatorState
+  history: Array<{ role: string; content: string }>
+}): boolean {
+  const { text, nextState, history } = params
+  const last =
+    nextState.last_prompt ||
+    (history.length > 0 ? history.filter((m) => m.role === "assistant").pop()?.content : undefined)
+  const lastNorm = normalizeText(String(last || ""))
+  const asked =
+    lastNorm &&
+    (/(?:de\s+quem\s+)?sera(o)?\s+o\s+(?:primeiro|proximo)\s+agendamento/i.test(lastNorm) ||
+      (/\b(?:primeiro|proximo)\b/.test(lastNorm) && /\bagendamento\b/.test(lastNorm)))
+  const trimmed = text.trim()
+  const plausible =
+    trimmed.length >= 2 &&
+    trimmed.length <= 200 &&
+    !isExplicitBookingIntent(text) &&
+    !isGreeting(text)
+  return Boolean(asked || nextState.pending_attendee_name) && plausible
+}
+
+function buildLegacyTurnPhases(params: {
+  text: string
+  config: SimulatorConfig
+  nextState: SimulatorState
+  history: Array<{ role: string; content: string }>
+  senderDisplayName?: string
+  runtime?: ConversationRuntimeContext
+  isFirst: boolean
+  hasStrongBookingIntent: boolean
+  minOrchestratorConfidence: number
+  getOrchestrator: () => Promise<FlowOrchestratorOutput | null>
+  getBookingRequest: () => Promise<import("./ai.ts").BookingRequestInterpretation | null>
+}): Array<Phase<TurnPipelineContext>> {
+  const {
+    text,
+    config,
+    nextState,
+    history,
+    senderDisplayName,
+    runtime,
+    isFirst,
+    hasStrongBookingIntent,
+    minOrchestratorConfidence,
+    getOrchestrator,
+    getBookingRequest,
+  } = params
+
+  return [
+    {
+      when: () =>
+        shouldHandleLegacyAttendeePrompt({
+          text,
+          nextState,
+          history,
+        }),
+      run: async () =>
+        await tryHandleLegacyAttendeePromptAnswer({
+          text,
+          config,
+          nextState,
+          history,
+          senderDisplayName,
+        }),
+    },
+    {
+      when: () => nextState.step === "qualification_rejected",
+      run: async () =>
+        await runLegacyQualificationRejectedPhase({
+          text,
+          config,
+          nextState,
+          history,
+          senderDisplayName,
+          resolveBooking,
+          hasStrongBookingIntent,
+          minOrchestratorConfidence,
+          getOrchestrator,
+          getBookingRequest,
+        }),
+    },
+    {
+      when: () => nextState.step === "qualification",
+      run: async () =>
+        await runLegacyQualificationPhase({
+          text,
+          config,
+          nextState,
+          history,
+          senderDisplayName,
+          isFirst,
+          resolveBooking,
+          hasStrongBookingIntent,
+          minOrchestratorConfidence,
+          getOrchestrator,
+          getBookingRequest,
+        }),
+    },
+    {
+      when: () => true,
+      run: async () =>
+        await runLegacyFallbackPhase({
+          text,
+          config,
+          nextState,
+          history,
+          senderDisplayName,
+          isFirst,
+          runtime,
+          resolveBooking,
+          getBookingRequest,
+        }),
+    },
+  ]
+}
+
 function tryHandleLegacyFinalizedThanks(
   text: string,
   config: SimulatorConfig,
@@ -1554,94 +1676,22 @@ export async function processSimulatorMessage(
   const finalizedThanksResult = tryHandleLegacyFinalizedThanks(text, config, nextState)
   if (finalizedThanksResult) return finalizedThanksResult
 
-  const phases: Phase<typeof ctx>[] = [
-    // Intercepta��o: quando o contexto � "quem ser� o primeiro/pr�ximo agendamento?" e o usu�rio responde, usar IA para extrair o nome e seguir no booking. Roda sempre que a �ltima pergunta pediu o nome (ou state tem pending_attendee_name), mesmo que mode j� seja booking � evita "Pode me dar mais detalhes?" quando o cliente j� disse o nome.
-    {
-      when: (c) => {
-        const last =
-          c.nextState.last_prompt ||
-          (c.history.length > 0 ? c.history.filter((m) => m.role === "assistant").pop()?.content : undefined)
-        const lastNorm = normalizeText(String(last || ""))
-        const asked =
-          lastNorm && (/(?:de\s+quem\s+)?sera(o)?\s+o\s+(?:primeiro|proximo)\s+agendamento/i.test(lastNorm) || (/\b(?:primeiro|proximo)\b/.test(lastNorm) && /\bagendamento\b/.test(lastNorm)))
-        const trimmed = c.text.trim()
-        const plausible =
-          trimmed.length >= 2 &&
-          trimmed.length <= 200 &&
-          !isExplicitBookingIntent(c.text) &&
-          !isGreeting(c.text)
-        return (asked || Boolean(c.nextState.pending_attendee_name)) && plausible
-      },
-      run: async () =>
-        await tryHandleLegacyAttendeePromptAnswer({
-          text,
-          config,
-          nextState,
-          history,
-          senderDisplayName,
-        }),
-    },
-    {
-      when: (c) => c.nextState.step === "qualification_rejected",
-      run: async () =>
-        await runLegacyQualificationRejectedPhase({
-          text,
-          config,
-          nextState,
-          history,
-          senderDisplayName,
-          resolveBooking,
-          hasStrongBookingIntent,
-          minOrchestratorConfidence,
-          getOrchestrator,
-          getBookingRequest,
-        }),
-    // Prioridade: regex (ágil) ou orquestrador (IA como consierge �" qualquer redação)
-    },
-    {
-      when: (c) => c.nextState.step === "qualification",
-      run: async () =>
-        await runLegacyQualificationPhase({
-          text,
-          config,
-          nextState,
-          history,
-          senderDisplayName,
-          isFirst,
-          resolveBooking,
-          hasStrongBookingIntent,
-          minOrchestratorConfidence,
-          getOrchestrator,
-          getBookingRequest,
-        }),
-    // NÃO chamar a IA primeiro: priorizar entrada em booking e coleta de slots (nome, contato).
-    // A IA só é usada como fallback no final do bloco, para perguntas que não são agendamento.
-
-    // Confirmação de público (esclarecimento homens+infantil): "Sim, nos encaixamos" �' fluxo múltiplo (antes da triagem para não ser capturado pela IA)
-    // Regex ou orquestrador (IA como consierge �" qualquer estilo)
-    // Fallback: IA consierge só quando não entrou em booking nem em nenhum fluxo acima
-    },
-    {
-      when: () => true,
-      run: async () =>
-        await runLegacyFallbackPhase({
-          text,
-          config,
-          nextState,
-          history,
-          senderDisplayName,
-          isFirst,
-          runtime,
-          resolveBooking,
-          getBookingRequest,
-        }),
-  // Recupera��o: se a �ltima pergunta foi "quem ser� o primeiro/pr�ximo agendamento" (hist�rico ou last_prompt) e o usu�rio respondeu com texto plaus�vel (nome ou frase curta), for�ar booking e pular o bloco que pede "mais detalhes"
-  // Verificar se o serviço existe ANTES de entrar no modo booking
-  // Isso previne que o bot tente agendar serviços que não existem
-    },
-  ]
+  const phases = buildLegacyTurnPhases({
+    text,
+    config,
+    nextState,
+    history,
+    senderDisplayName,
+    runtime,
+    isFirst,
+    hasStrongBookingIntent,
+    minOrchestratorConfidence,
+    getOrchestrator,
+    getBookingRequest,
+  })
   return runPipeline(ctx, phases)
 }
+
 
 
 

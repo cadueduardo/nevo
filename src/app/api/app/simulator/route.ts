@@ -6,6 +6,15 @@ import {
   type AppBootstrapByAgentResult,
 } from '@/lib/app/bootstrap'
 import { buildSimulatorContextFromBusinessConfig } from '@/lib/simulator/context'
+import { z } from 'zod'
+
+const simulatorPostSchema = z.object({
+  message: z.string().trim().min(1),
+  conversation_id: z.unknown().optional(),
+  agent_id: z.string().trim().min(1).optional(),
+  mode: z.enum(['internal', 'external']).optional(),
+  actor_type: z.string().optional(),
+})
 
 /**
  * POST /api/app/simulator
@@ -22,20 +31,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
     }
 
-    const body = await req.json().catch(() => ({}))
-    if (typeof body !== 'object' || body === null) {
-      return NextResponse.json({ error: 'Body inválido' }, { status: 400 })
+    const rawBody = await req.json().catch(() => null)
+    const parsedBody = simulatorPostSchema.safeParse(rawBody)
+    if (!parsedBody.success) {
+      return NextResponse.json({ error: 'Body invalido' }, { status: 400 })
     }
-    const { message, conversation_id, agent_id: bodyAgentId, mode: bodyMode, actor_type: bodyActorType } = body as {
-      message?: unknown
-      conversation_id?: unknown
-      agent_id?: string
-      mode?: 'internal' | 'external'
-      actor_type?: string
-    }
-    if (typeof message !== 'string' || !message.trim()) {
-      return NextResponse.json({ error: 'message é obrigatório' }, { status: 400 })
-    }
+    const { message, conversation_id, agent_id: bodyAgentId, mode: bodyMode, actor_type: bodyActorType } = parsedBody.data
 
     let agentId = typeof bodyAgentId === 'string' ? bodyAgentId.trim() || undefined : undefined
     let bootstrap = agentId
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           session_id: sessionId,
-          message: message.trim(),
+          message,
           conversation_id: conversation_id ?? undefined,
           channel: 'web_simulator',
           context,
@@ -153,3 +154,5 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
+

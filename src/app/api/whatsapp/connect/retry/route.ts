@@ -1,22 +1,32 @@
 /**
  * POST /api/whatsapp/connect/retry
- * Reexecuta connect e gera novo pairing code (mantém instance_key).
- * Body: { agent_id: string, phone: string }
+ * Reexecuta connect e gera novo pairing code.
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 import { normalizePhoneNumber } from '@/lib/actor'
+import { z } from 'zod'
+import {
+  buildEvolutionBaseCandidates,
+  resolveEvolutionApiKey,
+  sanitizeEvolutionBaseUrl,
+} from '@/lib/whatsapp/evolution'
 
 export const dynamic = 'force-dynamic'
 
-function buildEvolutionBaseCandidates(baseUrl: string): string[] {
-  const normalized = baseUrl.replace(/\/$/, '')
-  const candidates = [normalized]
-  if (normalized.endsWith('/api')) candidates.push(normalized.replace(/\/api$/, ''))
-  else candidates.push(`${normalized}/api`)
-  return Array.from(new Set(candidates))
+const whatsappConnectRetrySchema = z.object({
+  agent_id: z.string().trim().min(1),
+  phone: z.string().trim().min(1),
+})
+
+function getEvolutionEnvApiKey(): string | null {
+  return (
+    process.env.EVOLUTION_AUTO_API_KEY?.trim() ||
+    process.env.EVOLUTION_API_KEY?.trim() ||
+    null
+  )
 }
 
 function isLikelyValidPairingCode(value: unknown): value is string {
@@ -80,7 +90,10 @@ export async function POST(req: NextRequest) {
 
     const isAdmin = tenantUser?.role === 'owner' || tenantUser?.role === 'admin'
     if (!isAdmin) {
-      return NextResponse.json({ error: 'Essa opção só está disponível para o administrador.' }, { status: 403 })
+      return NextResponse.json(
+        { error: 'Essa opção só está disponível para o administrador.' },
+        { status: 403 }
+      )
     }
 
     const body = await req.json().catch(() => ({}))
@@ -120,7 +133,7 @@ export async function POST(req: NextRequest) {
     if (
       !channel?.evolution_base_url ||
       !channel?.evolution_instance ||
-      !channel?.evolution_api_key_encrypted
+      (!channel?.evolution_api_key_encrypted && !getEvolutionEnvApiKey())
     ) {
       return NextResponse.json(
         { error: 'Canal Evolution não configurado. Use "Conectar WhatsApp" para iniciar.' },
@@ -128,9 +141,15 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const baseUrl = (channel.evolution_base_url as string).replace(/\/$/, '')
+    const baseUrl = sanitizeEvolutionBaseUrl(channel.evolution_base_url as string).value
     const instance = channel.evolution_instance as string
-    const apiKey = channel.evolution_api_key_encrypted as string
+    const apiKey = resolveEvolutionApiKey({
+      storedValue: channel.evolution_api_key_encrypted as string,
+      envValue: getEvolutionEnvApiKey(),
+    })
+    if (!baseUrl || !apiKey) {
+      return NextResponse.json({ error: 'Configuração Evolution inválida.' }, { status: 400 })
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -140,14 +159,15 @@ export async function POST(req: NextRequest) {
 
     const encodedInstance = encodeURIComponent(instance)
     const encodedPhone = encodeURIComponent(phone)
-    const connectAttempts = buildEvolutionBaseCandidates(baseUrl).flatMap((b) => ([
+    const connectAttempts = buildEvolutionBaseCandidates(baseUrl).flatMap((b) => [
       { method: 'GET' as const, url: `${b}/instance/connect/${encodedInstance}?number=${encodedPhone}` },
       { method: 'GET' as const, url: `${b}/v1/instance/connect/${encodedInstance}?number=${encodedPhone}` },
       { method: 'GET' as const, url: `${b}/v2/instance/connect/${encodedInstance}?number=${encodedPhone}` },
       { method: 'POST' as const, url: `${b}/instance/connect/${encodedInstance}`, body: { number: phone } },
       { method: 'POST' as const, url: `${b}/v1/instance/connect/${encodedInstance}`, body: { number: phone } },
       { method: 'POST' as const, url: `${b}/v2/instance/connect/${encodedInstance}`, body: { number: phone } },
-    ]))
+    ])
+
     let pairingCode: string | null = null
     let connectError = ''
     let qrOnlyModeDetected = false
@@ -213,3 +233,4 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+

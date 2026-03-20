@@ -32,6 +32,11 @@ export function logSemanticSnapshot(context: SemanticTurnContext, snapshot: Turn
       entities: snapshot.entities,
       signals: snapshot.signals,
       risks: snapshot.risks,
+      meta: {
+        continuation: snapshot.meta?.continuation,
+        semantic_trace: snapshot.meta?.semantic_trace,
+        suggested_booking_action: snapshot.meta?.suggested_booking_action,
+      },
     })
   )
 }

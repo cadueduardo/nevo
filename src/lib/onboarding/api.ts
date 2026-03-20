@@ -48,6 +48,12 @@ export interface SelectableOption {
   selected?: boolean
 }
 
+export interface NarrativeSegment {
+  kind: 'text' | 'editable'
+  text: string
+  item_id?: string
+}
+
 interface OnboardingResponse {
   assistant_message: string
   next_step: string
@@ -56,6 +62,7 @@ interface OnboardingResponse {
   action_options?: string[]
   editable_items?: EditableItem[]
   selectable_options?: SelectableOption[]
+  narrative_segments?: NarrativeSegment[]
 }
 
 export async function sendOnboardingMessage(

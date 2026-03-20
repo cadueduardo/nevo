@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { createClient } from "supabase"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { normalizeText } from "./utils.ts"
 
 export const corsHeaders = {

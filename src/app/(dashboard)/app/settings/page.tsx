@@ -1,4 +1,12 @@
-import { SettingsPageClient } from './SettingsPageClient'
+import dynamic from 'next/dynamic'
+
+const SettingsPageClient = dynamic(
+  () => import('./SettingsPageClient').then((mod) => mod.SettingsPageClient),
+  {
+    ssr: false,
+    loading: () => <div className="min-h-[320px] rounded-lg border bg-card" />,
+  }
+)
 
 export default function SettingsPage() {
   return (

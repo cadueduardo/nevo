@@ -1,5 +1,13 @@
-import { SimulatorAppClient } from '@/features/simulator/components/SimulatorAppClient'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
+
+const SimulatorAppClient = dynamic(
+  () => import('@/features/simulator/components/SimulatorAppClient').then((mod) => mod.SimulatorAppClient),
+  {
+    ssr: false,
+    loading: () => <div className="h-full min-h-[320px] bg-background" />,
+  }
+)
 
 export default function SimulatorPage() {
   return (

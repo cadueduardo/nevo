@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { normalizeText } from "./utils.ts"
 import type { SimulatorState } from "./types.ts"
 
@@ -20,6 +20,15 @@ export function isGreeting(text: string): boolean {
     /^(tudo bem|tudo certo|tranquilo|suave|beleza)$/,
   ]
   return greetingPatterns.some(pattern => pattern.test(cleaned))
+}
+
+export function isBusinessContextQuestion(text: string): boolean {
+  const msg = normalizeText(text)
+  const compact = msg.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim()
+  const asksStatus = /\bcomo\s+(ta|esta|estao|vao|vai|andam|andando)\b/.test(compact)
+  const mentionsBusinessMoment = /\b(hoje|movimento|movimentado|correria|fluxo|coisas|dia)\b/.test(compact)
+  const mentionsThere = /\b(ai|por ai)\b/.test(compact)
+  return asksStatus && (mentionsBusinessMoment || mentionsThere)
 }
 
 export function isWhoAreYou(text: string): boolean {
@@ -124,7 +133,22 @@ export function isAvailabilityQuestion(text: string): boolean {
 
 export function isYes(text: string): boolean {
   const msg = normalizeText(text)
-  return /^(sim|pode|ok|claro|isso|tudo bem|beleza|ta bom)/.test(msg)
+  if (!msg) return false
+  // Botão explícito do fluxo de agendamento.
+  if (/^confirmar\s+agendamento\b/.test(msg)) return true
+  // "pode confirmar" é eco do assistente — não confirmação inequívoca.
+  if (/^pode\s+confirmar\b/.test(msg)) return false
+  return (
+    /^sim\b/.test(msg) ||
+    /^ok\b/.test(msg) ||
+    /^claro\b/.test(msg) ||
+    /^isso\b/.test(msg) ||
+    /^tudo bem\b/.test(msg) ||
+    /^beleza\b/.test(msg) ||
+    /^ta bom\b/.test(msg) ||
+    /^pode\s+ser\b/.test(msg) ||
+    msg === "pode"
+  )
 }
 
 export function isNo(text: string): boolean {
@@ -188,6 +212,16 @@ export function isThanksOrClosingPhrase(text: string): boolean {
   return hasThanks && isShort
 }
 
+export function isConversationClosing(text: string): boolean {
+  const msg = normalizeText(text)
+  if (!msg) return false
+  return (
+    /^(encerrar|encerrrar|terminar|finalizar|fechar)(\s+(conversa|atendimento|sessao))?$/.test(msg) ||
+    /^(tchau|ate mais|ate logo|falou|flw|bye|encerro por aqui)$/.test(msg) ||
+    isThanksOrClosingPhrase(text)
+  )
+}
+
 export function detectModeFromText(text: string): "booking" | "quote" | null {
   const msg = normalizeText(text)
   const booking = /(agendar|agenda|horario|marcar|consulta|atendimento)/.test(msg)
@@ -198,3 +232,5 @@ export function detectModeFromText(text: string): "booking" | "quote" | null {
   if (booking && quote) return "quote"
   return null
 }
+
+

@@ -45,6 +45,19 @@ interface CollectedDataForMigration {
   dynamic_variables?: Array<{ key: string; label: string; type: string }>
   quote_services?: Array<{ name: string; pricing_type: string }>
   quote_external_variable_keys?: string[]
+  business_profile?: {
+    business_name?: string
+    business_type?: string
+    services?: Array<{
+      name: string
+      description?: string
+      duration_minutes?: number
+      base_price?: number
+      bookable?: boolean
+      catalog_visible?: boolean
+      sequence_eligible?: boolean
+    }>
+  }
   holidays_attend?: string[]
   closure_periods?: Array<{ start: string; end: string; reason?: string }>
   allow_sequence_booking?: boolean
@@ -75,6 +88,18 @@ interface MigrationResult {
   tenant_id?: string
   agent_id?: string
   error?: string
+}
+
+function projectServiceViewsFromBusinessProfile(profile: CollectedDataForMigration["business_profile"]) {
+  const services = Array.isArray(profile?.services) ? profile.services : []
+  return {
+    services,
+    booking_services: services.filter((service) => service.bookable !== false),
+    catalog_services: services.filter((service) => service.catalog_visible !== false),
+    sequence_eligible_services: services
+      .filter((service) => service.sequence_eligible === true)
+      .map((service) => service.name),
+  }
 }
 
 export async function migrateOnboardingToTenant(
@@ -128,19 +153,28 @@ export async function migrateOnboardingToTenant(
       return { success: false, error: `Erro ao criar tenant_user: ${tenantUserError.message}` }
     }
 
-    const catalogServices = Array.isArray(collectedData.catalog_services)
-      ? collectedData.catalog_services
-      : Array.isArray(collectedData.services)
-        ? collectedData.services
-        : []
-    const bookingServices = Array.isArray(collectedData.booking_services)
-      ? collectedData.booking_services
-      : Array.isArray(collectedData.services)
-        ? collectedData.services
-        : []
+    const projectedProfileServices = projectServiceViewsFromBusinessProfile(collectedData.business_profile)
+    const catalogServices = projectedProfileServices.catalog_services.length > 0
+      ? projectedProfileServices.catalog_services
+      : Array.isArray(collectedData.catalog_services)
+        ? collectedData.catalog_services
+        : Array.isArray(collectedData.services)
+          ? collectedData.services
+          : []
+    const bookingServices = projectedProfileServices.booking_services.length > 0
+      ? projectedProfileServices.booking_services
+      : Array.isArray(collectedData.booking_services)
+        ? collectedData.booking_services
+        : Array.isArray(collectedData.services)
+          ? collectedData.services
+          : []
+    const canonicalServices = projectedProfileServices.services.length > 0
+      ? projectedProfileServices.services
+      : bookingServices
 
     const businessConfig: Record<string, any> = {
       business_config_version: 2,
+      business_profile: collectedData.business_profile ?? null,
       catalog_services:
         catalogServices?.map((s) => ({
           name: s.name,
@@ -155,7 +189,7 @@ export async function migrateOnboardingToTenant(
         })) ?? [],
       // Compat legado durante depreciação
       services:
-        bookingServices?.map((s) => ({
+        canonicalServices?.map((s) => ({
           name: s.name,
           duration_minutes: s.duration_minutes ?? undefined,
           base_price: s.base_price ?? undefined,
@@ -173,7 +207,10 @@ export async function migrateOnboardingToTenant(
       holidays_attend: collectedData.holidays_attend ?? [],
       closure_periods: collectedData.closure_periods ?? [],
       allow_sequence_booking: collectedData.allow_sequence_booking ?? false,
-      sequence_eligible_services: collectedData.sequence_eligible_services ?? [],
+      sequence_eligible_services:
+        projectedProfileServices.sequence_eligible_services.length > 0
+          ? projectedProfileServices.sequence_eligible_services
+          : collectedData.sequence_eligible_services ?? [],
       target_audience: collectedData.target_audience ?? { mode: 'all' },
       interaction_style: collectedData.interaction_style ?? 'hybrid',
       context_mode: collectedData.context ?? 'booking',

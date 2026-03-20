@@ -16,6 +16,19 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
 import { normalizePhoneNumber } from '@/lib/actor'
+import { z } from 'zod'
+import {
+  buildEvolutionBaseCandidates,
+  buildEvolutionWebhookUrl,
+  ensureEvolutionWebhookSecret,
+  resolveEvolutionApiKey,
+  sanitizeEvolutionBaseUrl,
+} from '@/lib/whatsapp/evolution'
+
+const whatsappConnectStartSchema = z.object({
+  agent_id: z.string().trim().min(1),
+  phone: z.string().trim().min(1),
+})
 
 export const dynamic = 'force-dynamic'
 
@@ -37,7 +50,7 @@ function sanitizeInstanceName(raw: string): string {
 }
 
 function getEvolutionEnvConfig() {
-  const baseUrl =
+  const configuredBaseUrl =
     process.env.EVOLUTION_AUTO_BASE_URL?.trim() ||
     process.env.EVOLUTION_BASE_URL?.trim() ||
     null
@@ -45,18 +58,10 @@ function getEvolutionEnvConfig() {
     process.env.EVOLUTION_AUTO_API_KEY?.trim() ||
     process.env.EVOLUTION_API_KEY?.trim() ||
     null
-  return { baseUrl: baseUrl ? baseUrl.replace(/\/$/, '') : null, apiKey }
-}
-
-function buildEvolutionBaseCandidates(baseUrl: string): string[] {
-  const normalized = baseUrl.replace(/\/$/, '')
-  const candidates = [normalized]
-  if (normalized.endsWith('/api')) {
-    candidates.push(normalized.replace(/\/api$/, ''))
-  } else {
-    candidates.push(`${normalized}/api`)
-  }
-  return Array.from(new Set(candidates))
+  const normalizedBaseUrl = configuredBaseUrl
+    ? sanitizeEvolutionBaseUrl(configuredBaseUrl)
+    : { value: null, error: null }
+  return { baseUrl: normalizedBaseUrl.value, apiKey, baseUrlError: normalizedBaseUrl.error }
 }
 
 async function fetchWithTimeout(
@@ -171,6 +176,9 @@ export async function POST(req: NextRequest) {
 
     const appOrigin = resolveAppOrigin()
     const envConfig = getEvolutionEnvConfig()
+    if (envConfig.baseUrlError) {
+      return NextResponse.json({ error: envConfig.baseUrlError }, { status: 400 })
+    }
     const supabaseAdmin = createAdminClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -178,21 +186,23 @@ export async function POST(req: NextRequest) {
 
     const { data: existingChannel } = await supabaseAdmin
       .from('agent_channel_whatsapp')
-      .select('evolution_base_url, evolution_instance, evolution_api_key_encrypted')
+      .select('evolution_base_url, evolution_instance, evolution_api_key_encrypted, webhook_secret')
       .eq('agent_id', agentId)
       .eq('provider', 'evolution')
       .maybeSingle()
 
     const configuredBaseUrl =
       (typeof existingChannel?.evolution_base_url === 'string'
-        ? existingChannel.evolution_base_url.trim()
+        ? sanitizeEvolutionBaseUrl(existingChannel.evolution_base_url.trim()).value
         : null) ||
       envConfig.baseUrl
-    const resolvedApiKey =
-      (typeof existingChannel?.evolution_api_key_encrypted === 'string'
-        ? existingChannel.evolution_api_key_encrypted.trim()
-        : null) ||
-      envConfig.apiKey
+    const resolvedApiKey = resolveEvolutionApiKey({
+      storedValue:
+        typeof existingChannel?.evolution_api_key_encrypted === 'string'
+          ? existingChannel.evolution_api_key_encrypted
+          : null,
+      envValue: envConfig.apiKey,
+    })
 
     if (!configuredBaseUrl || !resolvedApiKey || !appOrigin) {
       const missing = [
@@ -213,6 +223,9 @@ export async function POST(req: NextRequest) {
         ? existingChannel.evolution_instance.trim()
         : null) ||
       sanitizeInstanceName(`nevo-${tenantId.slice(0, 8)}-${agentId.slice(0, 8)}`)
+    const webhookSecret = ensureEvolutionWebhookSecret(
+      typeof existingChannel?.webhook_secret === 'string' ? existingChannel.webhook_secret : null
+    )
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -264,7 +277,11 @@ export async function POST(req: NextRequest) {
     // Nesses casos, seguimos para o "connect" e deixamos a validação final depender do pairingCode.
 
     // 2) Configurar webhook
-    const webhookUrl = `${appOrigin}/api/webhooks/evolution/${agentId}`
+    const webhookUrl = buildEvolutionWebhookUrl({
+      appOrigin,
+      agentId,
+      webhookSecret,
+    })
     const webhookUrls = evolutionBases.flatMap((b) => ([
       { base: b, url: `${b}/webhook/set/${encodeURIComponent(instance)}` },
       { base: b, url: `${b}/v1/webhook/set/${encodeURIComponent(instance)}` },
@@ -355,8 +372,9 @@ export async function POST(req: NextRequest) {
           status: 'error',
           evolution_base_url: workingBaseUrl,
           evolution_instance: instance,
-          evolution_api_key_encrypted: resolvedApiKey,
+          evolution_api_key_encrypted: existingChannel?.evolution_api_key_encrypted ?? null,
           webhook_url: webhookUrl,
+          webhook_secret: webhookSecret,
           last_error: `${createContext}${connectError || 'Evolution não retornou pairing code'}`.trim(),
         },
         { onConflict: 'agent_id' }
@@ -389,8 +407,9 @@ export async function POST(req: NextRequest) {
         status: 'connecting',
         evolution_base_url: workingBaseUrl,
         evolution_instance: instance,
-        evolution_api_key_encrypted: resolvedApiKey,
+        evolution_api_key_encrypted: existingChannel?.evolution_api_key_encrypted ?? null,
         webhook_url: webhookUrl,
+        webhook_secret: webhookSecret,
         phone_number: phone,
         last_error: null,
       },
@@ -412,3 +431,4 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+

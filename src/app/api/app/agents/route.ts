@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import type { Agent, AgentWhatsAppSummary } from '@/types/agent'
 import { resolvePrimaryTenantId } from '@/lib/app/tenant'
+import { getCanonicalServiceCountFromConfig } from '@/lib/business-profile'
+import { z } from 'zod'
+
+const agentCreateSchema = z.object({
+  name: z.string().trim().max(120).optional(),
+  business_type: z.string().trim().max(120).optional(),
+})
 
 /** Fluxo vazio mínimo para agente criado "em branco". */
 const EMPTY_FLOW_DEFINITION = {
@@ -77,8 +84,11 @@ export async function GET() {
   }
 
   const result: Agent[] = agents.map((a) => {
-    const bc = settingsByAgent.get(a.id)?.business_config as { services?: unknown[] } | undefined
-    const servicesCount = Array.isArray(bc?.services) ? bc.services.length : 0
+    const bc = settingsByAgent.get(a.id)?.business_config as Record<string, unknown> | undefined
+    const servicesCount = getCanonicalServiceCountFromConfig(bc, {
+      business_name: a.name,
+      business_type: a.business_type ?? undefined,
+    })
     return {
       id: a.id,
       name: a.name,
@@ -116,13 +126,13 @@ export async function POST(req: NextRequest) {
   if (!tenantId) {
     return NextResponse.json({ error: 'Tenant n?o encontrado' }, { status: 404 })
   }
-  const body = await req.json().catch(() => ({}))
-  const name = typeof body === 'object' && body !== null && typeof body.name === 'string'
-    ? body.name.trim() || 'Novo agente'
-    : 'Novo agente'
-  const businessType = typeof body === 'object' && body !== null && typeof body.business_type === 'string'
-    ? body.business_type.trim() || null
-    : null
+  const rawBody = await req.json().catch(() => ({}))
+  const parsedBody = agentCreateSchema.safeParse(rawBody)
+  if (!parsedBody.success) {
+    return NextResponse.json({ error: 'Body invalido' }, { status: 400 })
+  }
+  const name = parsedBody.data.name || 'Novo agente'
+  const businessType = parsedBody.data.business_type || null
 
   const { data: agent, error: agentError } = await supabase
     .from('agent')
@@ -177,3 +187,4 @@ export async function POST(req: NextRequest) {
     updated_at: agent.updated_at,
   })
 }
+
