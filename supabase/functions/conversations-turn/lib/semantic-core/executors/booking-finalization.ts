@@ -43,7 +43,7 @@ export function executeBookingFinalization(
   )
 
   // Etapa 1: quando chegamos no "confirm_booking", primeiro perguntamos se o cliente realmente
-  // quer confirmar. Só na próxima resposta "sim" é que o agendamento é finalizado.
+  // quer confirmar. SÃƒÆ’Ã‚Â³ na prÃƒÆ’Ã‚Â³xima resposta "sim" ÃƒÆ’Ã‚Â© que o agendamento ÃƒÆ’Ã‚Â© finalizado.
   if (!waitingFinalConfirmation && !explicitConfirmation && !autoFinalizeFromContactReply) {
     return buildExecutorResult({
       executor: "booking-finalization",
@@ -51,18 +51,18 @@ export function executeBookingFinalization(
       state_patch: {
         pending_final_confirmation: true,
         slots: pendingSlots,
-        // Ainda não faz sentido oferecer calendário antes do agendamento ser confirmado.
+        // Ainda nÃƒÆ’Ã‚Â£o faz sentido oferecer calendÃƒÆ’Ã‚Â¡rio antes do agendamento ser confirmado.
         pending_calendar_offer: false,
         last_confirm_options: ["Confirmar agendamento"],
       },
-      // A UI do simulador usa ação-option para o usuário responder facilmente.
+      // A UI do simulador usa aÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o-option para o usuÃƒÆ’Ã‚Â¡rio responder facilmente.
       action_options: ["Confirmar agendamento"],
       metadata: {},
     })
   }
 
-  // Etapa 2: aguardando confirmação do cliente.
-  // Se o cliente negar, desfaz a pendência e volta a permitir escolher outro horário/continuidade.
+  // Etapa 2: aguardando confirmaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o do cliente.
+  // Se o cliente negar, desfaz a pendÃƒÆ’Ã‚Âªncia e volta a permitir escolher outro horÃƒÆ’Ã‚Â¡rio/continuidade.
   if (isNo(rawMsg)) {
     return buildExecutorResult({
       executor: "booking-finalization",
@@ -76,7 +76,7 @@ export function executeBookingFinalization(
     })
   }
 
-  // Se o cliente não confirmou claramente, manter o estado pedindo a confirmação.
+  // Se o cliente nÃƒÆ’Ã‚Â£o confirmou claramente, manter o estado pedindo a confirmaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o.
   if (!explicitConfirmation && !autoFinalizeFromContactReply) {
     return buildExecutorResult({
       executor: "booking-finalization",
@@ -98,14 +98,14 @@ export function executeBookingFinalization(
   const needsSecondaryContact =
     !postConfirmationPlan.has_more_people &&
     completedBookings.length >= 2 &&
-    // só faz sentido se o agendamento atual não tem telefone próprio e é para outra pessoa
+    // sÃƒÆ’Ã‚Â³ faz sentido se o agendamento atual nÃƒÆ’Ã‚Â£o tem telefone prÃƒÆ’Ã‚Â³prio e ÃƒÆ’Ã‚Â© para outra pessoa
     !completedPhone &&
     String(completedBooking?.attendee_name || "").trim() &&
     String((completedBookings[0] as any)?.attendee_name || "").trim() &&
     String(completedBooking.attendee_name).trim().toLowerCase() !== String((completedBookings[0] as any)?.attendee_name).trim().toLowerCase() &&
-    // se já houve notificação planejada, não pedir de novo
+    // se jÃƒÆ’Ã‚Â¡ houve notificaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o planejada, nÃƒÆ’Ã‚Â£o pedir de novo
     (postConfirmationPlan.outbound_notifications || []).length === 0 &&
-    // se o telefone do titular não existe, primeiro precisa coletar o contato principal
+    // se o telefone do titular nÃƒÆ’Ã‚Â£o existe, primeiro precisa coletar o contato principal
     Boolean(primaryPhone)
   const schedule = getScheduleForStaff(context.business_brain.raw_config, completedBooking.staff_name)
   const intervalMinutes = schedule?.interval_minutes ?? 30
@@ -151,6 +151,7 @@ export function executeBookingFinalization(
         staff_name: completedBooking.staff_name,
       },
       pending_additional_booking: postConfirmationPlan.has_more_people,
+      pending_additional_count: postConfirmationPlan.remaining_additional_count,
       pending_attendee_queue: postConfirmationPlan.remaining_queue.slice(1),
       pending_attendee_name: postConfirmationPlan.has_more_people && !postConfirmationPlan.next_attendee_name,
       pending_template_choice: Boolean(

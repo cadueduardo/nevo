@@ -126,7 +126,7 @@ Deno.test("semantic runtime fixture answers open business-context question witho
         sequence_request: false,
       },
       risks: { ambiguities: [] },
-      meta: { raw_user_message: "oi, bom dia tudo bem? Como tá o movimento aí hoje?" },
+      meta: { raw_user_message: "oi, bom dia tudo bem? Como tÃƒÆ’Ã‚Â¡ o movimento aÃƒÆ’Ã‚Â­ hoje?" },
     } as any,
   })
 
@@ -251,7 +251,7 @@ Deno.test("semantic runtime fixture offers sequence template for inferred next a
 
   assertEquals(semantic.decision.action, "offer_sequence_template")
   assertIncludes(result.message, "Davi")
-  assertEquals(normalizeAssertText(result.message).includes(normalizeAssertText("logo após")), true)
+  assertEquals(normalizeAssertText(result.message).includes(normalizeAssertText("na sequência")), true)
 })
 
 Deno.test("semantic runtime fixture offers primary contact reuse option for additional booking", async () => {
@@ -1080,7 +1080,7 @@ Deno.test("semantic runtime fixture answers concrete price when service pricing 
       ],
     } as any,
     state: createBaseState({
-      last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviço você quer consultar?",
+      last_prompt: "Posso te informar os valores certinhos e te ajudar a agendar. Qual serviÃƒÆ’Ã‚Â§o vocÃƒÆ’Ã‚Âª quer consultar?",
       last_action_options: ["Corte de cabelo", "Barba"],
     }),
     snapshot: {
@@ -1370,7 +1370,7 @@ Deno.test("semantic runtime fixture offers sequence template after short continu
 
   assertEquals(semantic.decision.action, "offer_sequence_template")
   assertIncludes(result.message, "Davi")
-  assertEquals(normalizeAssertText(result.message).includes(normalizeAssertText("logo após")), true)
+  assertEquals(normalizeAssertText(result.message).includes(normalizeAssertText("na sequência")), true)
 })
 
 Deno.test("semantic runtime fixture recovers after same_next unavailable by asking for date on next turn", async () => {
@@ -1686,7 +1686,7 @@ Deno.test("semantic runtime fixture preserves first-turn date/time through audie
             requires_confirmation: true,
             blocked: false,
             reason: "audience_needs_confirmation",
-            prompt: "Só para confirmar: aqui atendemos homens e crianças. Vocês se encaixam nesse perfil?",
+            prompt: "SÃƒÆ’Ã‚Â³ para confirmar: aqui atendemos homens e crianÃƒÆ’Ã‚Â§as. VocÃƒÆ’Ã‚Âªs se encaixam nesse perfil?",
             inferred_fit: null,
           },
           ambiguities: [],
@@ -1914,7 +1914,7 @@ Deno.test("semantic runtime fixture answers calendar acceptance without generic 
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
     state: createBaseState({
-      last_action_options: ["Adicionar no calendário", "Não, obrigado"],
+      last_action_options: ["Adicionar no calendÃ¡rio", "NÃƒÆ’Ã‚Â£o, obrigado"],
       pending_calendar_offer: false,
       pending_final_confirmation: false,
       last_booking: {
@@ -1953,7 +1953,7 @@ Deno.test("semantic runtime fixture answers calendar decline without generic fal
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
     state: createBaseState({
-      last_action_options: ["Adicionar no calendário", "Não, obrigado"],
+      last_action_options: ["Adicionar no calendÃ¡rio", "NÃƒÆ’Ã‚Â£o, obrigado"],
       pending_calendar_offer: false,
       pending_final_confirmation: false,
       last_booking: {
@@ -2472,7 +2472,7 @@ Deno.test("semantic runtime fixture uses singular audience option for self booki
   })
 
   assertEquals(result.action_options, ["Sim, me encaixo", "Quero agendar"])
-  if (result.message.toLowerCase().includes("vocês se encaixam")) {
+  if (result.message.toLowerCase().includes("vocÃƒÆ’Ã‚Âªs se encaixam")) {
     throw new Error("Expected singular audience prompt for self booking")
   }
 })
@@ -2501,7 +2501,7 @@ Deno.test("semantic runtime fixture keeps known date after phone reply in same b
           additional_count: 0,
         },
         risks: { ambiguities: [] },
-        meta: { raw_user_message: "quanto tá o corte de cabelo?" },
+        meta: { raw_user_message: "quanto tÃƒÆ’Ã‚Â¡ o corte de cabelo?" },
       } as any,
       {
         intents: { primary: "booking", secondary: ["availability_check"], booking: true, confidence: 0.94 },
@@ -2682,3 +2682,60 @@ Deno.test("semantic runtime fixture keeps date and time when AI jumps directly t
   assertIncludes(outputs[1].result.message, "09:00")
 })
 
+
+Deno.test("semantic runtime fixture does not offer another sequence step when the last additional attendee was confirmed", async () => {
+  const { semantic, result } = await runSemanticFixture({
+    config: createBaseConfig() as any,
+    state: createBaseState({
+      pending_additional_booking: true,
+      pending_additional_count: 1,
+      contact_preference: "phone",
+      slots: {
+        attendee_name: "Davi",
+        service: "Corte",
+        date: "2026-03-26",
+        time: "15:00",
+        staff_name: "Cadu",
+        customer_phone: "11978787888",
+      },
+      completed_bookings: [
+        {
+          attendee_name: "Eduardo",
+          service: "Corte",
+          duration_minutes: 30,
+          date: "2026-03-26",
+          time: "14:30",
+          staff_name: "Cadu",
+          customer_phone: "11978785444",
+        },
+      ],
+      pending_attendee_queue: [],
+    }),
+    snapshot: {
+      intents: { primary: "booking_sequence", secondary: [], booking: true, confidence: 0.97 },
+      entities: {
+        people: [{ name: "Davi", relation: "filho", confidence: 0.9 }],
+        attendee_names: ["Davi"],
+        services: [{ name: "Corte", normalized_name: "corte" }],
+        date: { iso_date: "2026-03-26" },
+        time: { hhmm: "15:00" },
+      },
+      signals: {
+        includes_self: false,
+        additional_count: 0,
+        sequence_request: false,
+        contact_phone: "11978787888",
+      },
+      risks: { ambiguities: [] },
+      meta: { raw_user_message: "11978787888" },
+    } as any,
+  })
+
+  assertEquals(semantic.decision.action, "confirm_booking")
+  assertEquals(result.state.pending_additional_booking, true)
+  assertEquals(result.state.pending_additional_count, 1)
+  assertEquals(result.state.pending_calendar_offer, false)
+  if (result.message.includes("Davi") && result.message.includes("na sequência do atendimento anterior")) {
+    throw new Error("Expected continuation flow to avoid reusing the current attendee name as if it were the next booking")
+  }
+})

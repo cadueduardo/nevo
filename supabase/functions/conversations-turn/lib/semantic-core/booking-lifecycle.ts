@@ -46,9 +46,9 @@ export function buildCompletedBookingDraft(
     ? getServicesTotalDurationOrFallback(context.business_brain.raw_config, serviceValue)
     : undefined
   const isAdditional = Array.isArray(context.state.completed_bookings) && context.state.completed_bookings.length > 0
-  // Para o 2º agendamento, não herdar automaticamente o telefone do titular.
-  // Só grava customer_phone se o cliente explicitamente informou um telefone neste turno
-  // (ou se for o 1º agendamento e já temos customer_phone no estado).
+  // Para o 2ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº agendamento, nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o herdar automaticamente o telefone do titular.
+  // SÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ grava customer_phone se o cliente explicitamente informou um telefone neste turno
+  // (ou se for o 1ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº agendamento e jÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ temos customer_phone no estado).
   const phoneFromTurn = decision.slot_updates?.customer_phone || snapshot.signals.contact_phone || undefined
   const emailFromTurn = decision.slot_updates?.customer_email || snapshot.signals.contact_email || undefined
   const reusedPrimaryPhone =
@@ -97,6 +97,7 @@ export function buildPostConfirmationPlan(
   const hasOtherStaff = anchorBooking?.staff_name
     ? getOtherStaffOptions(context.business_brain.raw_config, anchorBooking.staff_name).length > 0
     : false
+  const pendingAdditionalCount = Math.max(0, Number(context.state.pending_additional_count || 0))
   const nextActionOptions = remainingQueue.length > 0
     ? [
         "Mesmo dia e colaborador (proximo horario)",
@@ -122,6 +123,14 @@ export function buildPostConfirmationPlan(
     inferredTotal || 0,
     existingCompleted + 1 + remainingQueue.length
   ) || undefined
+  const remainingFromExpected = expectedTotalPeople
+    ? Math.max(0, expectedTotalPeople - (existingCompleted + 1))
+    : 0
+  const remainingAdditionalCount = Math.max(
+    remainingQueue.length,
+    pendingAdditionalCount,
+    remainingFromExpected
+  )
   const allBookings = [
     ...(Array.isArray(context.state.completed_bookings) ? context.state.completed_bookings : []),
     ...(completedBooking ? [completedBooking] : []),
@@ -151,9 +160,10 @@ export function buildPostConfirmationPlan(
     })
   }
   return {
-    has_more_people: remainingQueue.length > 0 || (context.state.pending_additional_count || 0) > 0,
+    has_more_people: remainingAdditionalCount > 0,
     next_attendee_name: remainingQueue[0],
     remaining_queue: remainingQueue,
+    remaining_additional_count: remainingAdditionalCount || undefined,
     expected_total_people: expectedTotalPeople,
     completed_count_after_confirmation: existingCompleted + 1,
     next_action_options: nextActionOptions,

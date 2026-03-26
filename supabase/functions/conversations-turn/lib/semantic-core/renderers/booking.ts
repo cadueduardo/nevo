@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { generateAdaptiveGreetingWithAI, generateBookingReplyWithAI } from "../../ai.ts"
 import { deriveBookingContext } from "../booking-context.ts"
 import type { SemanticRuntimeResult } from "../runtime.ts"
@@ -66,8 +66,8 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
   const booking = deriveBookingContext(semantic.snapshot, semantic.context)
   const attendeeName = getAttendeeName(semantic) || booking.current_attendee_name
   const serviceNames = getServiceNames(semantic)
-  // Importante: em passos como `ask_contact`, o usuÃ¡rio frequentemente nÃ£o repete data/hora.
-  // EntÃ£o precisamos herdar do estado persistido, senÃ£o o texto pode usar um valor antigo do snapshot.
+  // Importante: em passos como `ask_contact`, o usuário frequentemente não repete data/hora.
+  // Então precisamos herdar do estado persistido, senão o texto pode usar um valor antigo do snapshot.
   let dateIso = getDate(semantic)
   if (!dateIso) dateIso = semantic.context.state?.slots?.date || booking.slot_updates?.date
   const time = getTime(semantic) || semantic.context.state?.slots?.time || booking.slot_updates?.time
@@ -130,7 +130,7 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
 
     const lower = txt.toLowerCase()
     if (opts?.avoidSpecificDays) {
-      // Se ainda nÃ£o escolheu data (ask_date), nÃ£o deixar a IA mencionar "hoje/amanhÃ£" nem datas explÃ­citas.
+      // Se ainda não escolheu data (ask_date), não deixar a IA mencionar "hoje/amanhã" nem datas explícitas.
       const mentionsDay =
         /\b(hoje|amanhÃ£|amanha)\b/.test(lower) ||
         /\b(segunda|terÃ§a|terca|quarta|quinta|sexta|sabado|sÃ¡bado|domingo)\b/.test(lower) ||
@@ -140,7 +140,7 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
     }
 
     if (opts?.avoidSpecificTimes) {
-      // Se ainda nÃ£o escolheu hora (ask_time), nÃ£o deixar a IA mencionar horÃ¡rios especÃ­ficos.
+      // Se ainda não escolheu hora (ask_time), não deixar a IA mencionar horários específicos.
       const mentionsTime = /\b\d{1,2}:\d{2}\b/.test(lower) || /\bÃ s\s+\d{1,2}:\d{2}\b/.test(lower)
       if (mentionsTime) return null
     }
@@ -218,7 +218,7 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
     case "ask_service":
       if (booking.template_choice === "same_next") {
         return {
-          message: `Perfeito. Antes de sugerir o prÃ³ximo horÃ¡rio em sequÃªncia para ${
+          message: `Perfeito. Antes de sugerir o próximo horário em sequência para ${
             attendeeName || "a prÃ³xima pessoa"
           }, preciso confirmar o serviÃ§o.`,
           action_options: execution?.action_options || booking.service_options,
@@ -246,7 +246,7 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
         return {
           message:
             (await tryContextualReply("ask_date")) ||
-            "NÃ£o encontrei um prÃ³ximo horÃ¡rio livre na sequÃªncia desse atendimento. Vamos escolher outro dia ou outro horÃ¡rio para continuar.",
+            "Não encontrei um próximo horário livre na sequência desse atendimento. Vamos escolher outro dia ou outro horário para continuar.",
           action_options: execution?.action_options,
         }
       }
@@ -256,9 +256,9 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
           (() => {
             const timeLabel = isValidHHMM(time) ? ` Ã s ${time}` : ""
             if (attendeeName && (semantic.execution?.metadata?.attendee_name || booking.current_attendee_name)) {
-              return `Perfeito, ${attendeeName}. Para o seu agendamento${timeLabel}, qual dia vocÃª prefere?`
+              return `Perfeito, ${attendeeName}. Para o seu agendamento${timeLabel}, qual dia você prefere?`
             }
-            return timeLabel ? `Para o horÃ¡rio${timeLabel}, qual dia vocÃª prefere?` : buildDateQuestion()
+            return timeLabel ? `Para o horário${timeLabel}, qual dia você prefere?` : buildDateQuestion()
           })(),
         action_options: execution?.action_options,
       }
@@ -266,7 +266,7 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
       return {
         message:
           (await safeTryContextualReply("ask_time", { avoidSpecificTimes: true })) ||
-          (dateLabel ? `Para ${dateLabel}, qual horÃ¡rio vocÃª prefere?` : buildTimeQuestion()),
+          (dateLabel ? `Para ${dateLabel}, qual horário você prefere?` : buildTimeQuestion()),
         action_options: execution?.action_options,
       }
     case "ask_contact":
@@ -288,14 +288,14 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
       if (semantic.context.channel === "whatsapp" && semantic.context.state?.pending_contact_field === "phone") {
         return { message: buildPrimaryPhoneQuestion() }
       }
-      // Quando o usuÃ¡rio perguntou disponibilidade com horÃ¡rio (ex.: "tem para hoje Ã s 16?"),
-      // apresentamos isso de forma determinÃ­stica antes de pedir o contato.
+      // Quando o usuário perguntou disponibilidade com horário (ex.: "tem para hoje às 16?"),
+      // apresentamos isso de forma determinística antes de pedir o contato.
       if (semantic.snapshot.signals.availability_check === true && isValidHHMM(time)) {
         return {
-          message: `Tenho horÃ¡rio disponÃ­vel ${dateLabel} Ã s ${time}. Podemos marcar? ${buildContactQuestion()}`,
+          message: `Tenho horário disponível ${dateLabel} às ${time}. Podemos marcar? ${buildContactQuestion()}`,
         }
       }
-      // Blindagem: nÃ£o permitir que a IA "confirme" agendamento no passo de contato.
+      // Blindagem: não permitir que a IA "confirme" agendamento no passo de contato.
       return { message: buildContactQuestion(), action_options: decision.action_options }
     case "confirm_booking":
       if (execution?.metadata?.completed_booking) {
@@ -305,13 +305,7 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
         if (postPlan?.has_more_people) {
           lines.push(buildNextAttendeePrompt(postPlan))
         } else {
-          // Se houver notificaÃ§Ãµes automÃ¡ticas jÃ¡ planejadas, informar (mas ainda oferecer calendÃ¡rio).
-          if ((postPlan?.outbound_notifications || []).length > 0) {
-            lines.push(
-              `Enviei a confirmaÃ§Ã£o dos outros agendamentos para ${(postPlan.outbound_notifications || []).length} contato(s) via WhatsApp.`
-            )
-          }
-          // Se ainda falta telefone da 2Âª pessoa, perguntar aqui (sem depender de botÃµes).
+          // Se ainda falta telefone da 2ª pessoa, perguntar aqui (sem depender de botões).
           if (semantic.context.state?.pending_secondary_contact) {
             lines.push(
               buildSecondaryContactQuestion({
@@ -331,10 +325,10 @@ export async function renderBooking(semantic: SemanticRuntimeResult): Promise<Re
         }
       }
       return {
-        // Blindagem: quando ainda NÃƒO finalizamos (pendÃªncia de confirmaÃ§Ã£o),
-        // nÃ£o deixamos o AI reescrever a mensagem como se estivesse "confirmado".
+        // Blindagem: quando ainda não finalizamos (pendência de confirmação),
+        // não deixamos o AI reescrever a mensagem como se estivesse "confirmado".
         message: buildBookingConfirmationMessage(serviceNames, attendeeName, dateLabel, time),
-        // Quando ainda nÃ£o finalizamos (pendÃªncia de confirmaÃ§Ã£o), mostrar a opÃ§Ã£o para o usuÃ¡rio.
+        // Quando ainda não finalizamos (pendência de confirmação), mostrar a opção para o usuário.
         action_options: execution?.action_options,
       }
     case "offer_calendar":

@@ -200,7 +200,7 @@ export interface SemanticMetaSnapshot {
     next_question_hint?: string
     waiting_for?: "attendee_name" | "service" | "date" | "time" | "contact"
   }
-  /** Quando preenchido pela IA, define a próxima ação de booking sem ordem fixa (decisão por contexto). */
+  /** Quando preenchido pela IA, define a prÃ³xima aÃ§Ã£o de booking sem ordem fixa (decisÃ£o por contexto). */
   suggested_booking_action?: string
 }
 

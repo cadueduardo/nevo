@@ -13,14 +13,22 @@ export type RenderedSemanticMessage = {
 function tryRepairUtf8Mojibake(value: string): string {
   const suspiciousPattern = /(?:Ã|Â|â)/u
   if (!suspiciousPattern.test(value)) return value
-  try {
-    const repaired = decodeURIComponent(escape(value))
-    const originalNoise = (value.match(/(?:Ã|Â|â|�)/gu) || []).length
-    const repairedNoise = (repaired.match(/(?:Ã|Â|â|�)/gu) || []).length
-    return repairedNoise < originalNoise ? repaired : value
-  } catch {
-    return value
+
+  let current = value
+  for (let i = 0; i < 3; i += 1) {
+    if (!suspiciousPattern.test(current)) break
+    try {
+      const repaired = decodeURIComponent(escape(current))
+      const originalNoise = (current.match(/(?:Ã|Â|â|�)/gu) || []).length
+      const repairedNoise = (repaired.match(/(?:Ã|Â|â|�)/gu) || []).length
+      if (repairedNoise >= originalNoise) break
+      current = repaired
+    } catch {
+      break
+    }
   }
+
+  return current
 }
 
 function repairReplacementCharArtifacts(value: string): string {
@@ -50,8 +58,6 @@ function sanitizeRenderedText(value?: string): string {
   if (!trimmed) return trimmed
   return repairReplacementCharArtifacts(tryRepairUtf8Mojibake(trimmed))
 }
-
-
 
 function sanitizeRenderedOptions(options?: string[]): string[] | undefined {
   if (!Array.isArray(options) || options.length === 0) return undefined
