@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import type { SemanticDecisionResult, SemanticTurnContext, TurnSemanticSnapshot } from "../types.ts"
 import { deriveBookingContext } from "../booking-context.ts"
 
@@ -26,6 +26,18 @@ function buildBookingChannelHints(
     prefer_numbered_options: preferNumberedOptions,
     prefer_multi_select: preferMultiSelect,
   }
+}
+
+function pickDefinedSlots(
+  source: ReturnType<typeof deriveBookingContext>["slot_updates"],
+  keys: Array<keyof ReturnType<typeof deriveBookingContext>["slot_updates"]>
+): SemanticDecisionResult["slot_updates"] | undefined {
+  const picked = Object.fromEntries(
+    keys
+      .map((key) => [key, source?.[key]])
+      .filter(([, value]) => value !== undefined)
+  ) as SemanticDecisionResult["slot_updates"]
+  return Object.keys(picked).length > 0 ? picked : undefined
 }
 
 function buildBookingDecision(params: {
@@ -89,7 +101,7 @@ export function decideBooking(
   const preferNumberedOptions = interactionStyle !== "conversational"
   const booking = deriveBookingContext(snapshot, context)
 
-  // Log extra para depuraÃ§Ã£o do booking (evita adivinhar por que â€œpulaâ€ para â€œQual contato?â€)
+  // Log extra para depuração do booking (evita adivinhar por que "pula" para "Qual contato?")
   // Ativo quando SEMANTIC_CORE_DEBUG estiver setado no ambiente da edge function.
   const debugEnabled = String(Deno.env.get("SEMANTIC_CORE_DEBUG") || "")
     .trim()
@@ -126,7 +138,7 @@ export function decideBooking(
     )
   }
 
-  // PÃ³s-finalizaÃ§Ã£o: se temos 2Âº agendamento e ainda falta telefone para avisar a 2Âª pessoa.
+  // Pós-finalização: se temos 2º agendamento e ainda falta telefone para avisar a 2ª pessoa.
   if (context.state.pending_secondary_contact) {
     return buildBookingDecision({
       snapshot,
@@ -138,7 +150,7 @@ export function decideBooking(
     })
   }
 
-  // ApÃ³s finalizar, oferecer calendÃ¡rio imediatamente (sem depender do cliente encerrar a conversa).
+  // Após finalizar, oferecer calendário imediatamente (sem depender do cliente encerrar a conversa).
   if (context.state.pending_calendar_offer === true && !context.state.pending_secondary_contact) {
     return buildBookingDecision({
       snapshot,
@@ -150,7 +162,7 @@ export function decideBooking(
     })
   }
 
-  // WhatsApp: antes de pedir "preferÃªncia de contato", confirmar se pode usar o nÃºmero do remetente.
+  // WhatsApp: antes de pedir "preferência de contato", confirmar se pode usar o número do remetente.
   if (
     booking.missing_step === "contact" &&
     context.channel === "whatsapp" &&
@@ -169,7 +181,7 @@ export function decideBooking(
     })
   }
 
-  // WhatsApp: usuÃ¡rio disse "nÃ£o" para usar o mesmo; agora aguardamos ele informar um telefone.
+  // WhatsApp: usuário disse "não" para usar o mesmo; agora aguardamos ele informar um telefone.
   if (context.state.pending_contact_field === "phone") {
     return buildBookingDecision({
       snapshot,
@@ -301,7 +313,7 @@ export function decideBooking(
   })
 }
 
-/** Monta a decisÃ£o de booking a partir da aÃ§Ã£o sugerida pela IA (sem ordem fixa). Reutiliza deriveBookingContext e buildBookingDecision. */
+/** Monta a decisão de booking a partir da ação sugerida pela IA (sem ordem fixa). Reutiliza deriveBookingContext e buildBookingDecision. */
 export function buildBookingDecisionFromSuggestedAction(
   snapshot: TurnSemanticSnapshot,
   context: SemanticTurnContext,
@@ -333,39 +345,39 @@ export function buildBookingDecisionFromSuggestedAction(
     ],
   }
 
-  // Importante: ao usar a sugestÃ£o da IA, NÃƒO devemos aplicar slot_updates "inteiros"
-  // em aÃ§Ãµes que sÃ³ perguntam um Ãºnico item. Caso contrÃ¡rio, o modelo pode extrair
-  // nÃºmeros/frases como se fossem date/time e contaminar o estado (alucinaÃ§Ãµes).
+  // Importante: ao usar a sugestão da IA, NÃO devemos aplicar slot_updates "inteiros"
+  // em ações que só perguntam um único item. Caso contrário, o modelo pode extrair
+  // números/frases como se fossem date/time e contaminar o estado (alucinações).
   const su = booking.slot_updates || {}
   let filteredSlotUpdates: SemanticDecisionResult["slot_updates"] | undefined
   switch (suggestedAction) {
     case "ask_attendee_name":
     case "ask_first_attendee_name":
     case "ask_next_attendee_name": {
-      filteredSlotUpdates = su.attendee_name
-        ? { attendee_name: su.attendee_name }
-        : undefined
+      filteredSlotUpdates = pickDefinedSlots(su, ["attendee_name"])
       break
     }
     case "ask_service":
-      filteredSlotUpdates = su.service ? { service: su.service } : undefined
+      filteredSlotUpdates = pickDefinedSlots(su, ["attendee_name", "service"])
       break
     case "offer_sequence_template":
       filteredSlotUpdates = su
       break
     case "ask_date":
-      filteredSlotUpdates = su.date ? { date: su.date } : undefined
+      filteredSlotUpdates = pickDefinedSlots(su, ["attendee_name", "service", "date"])
       break
     case "ask_time":
-      filteredSlotUpdates = su.time || su.date ? { ...(su.date ? { date: su.date } : {}), ...(su.time ? { time: su.time } : {}) } : undefined
+      filteredSlotUpdates = pickDefinedSlots(su, ["attendee_name", "service", "date", "time"])
       break
     case "ask_contact":
-      filteredSlotUpdates = su.customer_phone || su.customer_email || su.contact_preference
-        ? {
-            customer_phone: su.customer_phone,
-            customer_email: su.customer_email,
-          }
-        : undefined
+      filteredSlotUpdates = pickDefinedSlots(su, [
+        "attendee_name",
+        "service",
+        "date",
+        "time",
+        "customer_phone",
+        "customer_email",
+      ])
       break
     default:
       filteredSlotUpdates = su

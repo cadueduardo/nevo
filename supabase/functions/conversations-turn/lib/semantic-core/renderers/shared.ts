@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import type { SimulatorResult, SimulatorState } from "../../types.ts"
 import type { SemanticRuntimeResult } from "../runtime.ts"
 
@@ -8,6 +8,54 @@ export type RenderedSemanticMessage = {
   render_hints?: {
     service_multi_select?: boolean
   }
+}
+
+function tryRepairUtf8Mojibake(value: string): string {
+  const suspiciousPattern = /(?:Ã|Â|â)/u
+  if (!suspiciousPattern.test(value)) return value
+  try {
+    const repaired = decodeURIComponent(escape(value))
+    const originalNoise = (value.match(/(?:Ã|Â|â|�)/gu) || []).length
+    const repairedNoise = (repaired.match(/(?:Ã|Â|â|�)/gu) || []).length
+    return repairedNoise < originalNoise ? repaired : value
+  } catch {
+    return value
+  }
+}
+
+function repairReplacementCharArtifacts(value: string): string {
+  if (!value.includes("�")) return value
+  return value
+    .replace(/Voc�\?/g, "Você?")
+    .replace(/voc�\?/g, "você?")
+    .replace(/Voc�/g, "Você")
+    .replace(/voc�/g, "você")
+    .replace(/S�/g, "Só")
+    .replace(/amanh�/gi, "amanhã")
+    .replace(/calend�rio/gi, "calendário")
+    .replace(/ap�s/gi, "após")
+    .replace(/n�o/gi, "não")
+    .replace(/ser�/gi, "será")
+    .replace(/hor�rio/gi, "horário")
+    .replace(/servi�o/gi, "serviço")
+    .replace(/servi�os/gi, "serviços")
+    .replace(/dispon�vel/gi, "disponível")
+    .replace(/aqui �/gi, "aqui é")
+    .replace(/� disposição/gi, "à disposição")
+    .replace(/\b�s\b/gi, "às")
+}
+
+function sanitizeRenderedText(value?: string): string {
+  const trimmed = String(value || "")
+  if (!trimmed) return trimmed
+  return repairReplacementCharArtifacts(tryRepairUtf8Mojibake(trimmed))
+}
+
+
+
+function sanitizeRenderedOptions(options?: string[]): string[] | undefined {
+  if (!Array.isArray(options) || options.length === 0) return undefined
+  return options.map((option) => sanitizeRenderedText(option))
 }
 
 function numberActionOptions(options: string[]): string[] {
@@ -60,26 +108,30 @@ export function mergeSemanticState(
   }
 }
 
-
 export function buildSemanticResult(
   baseState: SimulatorState,
   semantic: SemanticRuntimeResult,
   rendered: RenderedSemanticMessage
 ): SimulatorResult {
-  const formattedActionOptions = formatSemanticActionOptions(semantic, rendered.action_options)
+  const sanitizedRendered = {
+    ...rendered,
+    message: sanitizeRenderedText(rendered.message),
+    action_options: sanitizeRenderedOptions(rendered.action_options),
+  }
+  const formattedActionOptions = formatSemanticActionOptions(semantic, sanitizedRendered.action_options)
   const mergedState = mergeSemanticState(baseState, semantic, formattedActionOptions)
   const isAudienceStep = semantic.decision.action === "ask_audience_confirmation"
   const didConfirmAudience = semantic.snapshot?.meta?.continuation?.kind === "audience_confirmation"
   return {
-    message: rendered.message,
+    message: sanitizedRendered.message,
     state: {
       ...mergedState,
-      last_prompt: rendered.message,
+      last_prompt: sanitizedRendered.message,
       last_action_options: formattedActionOptions,
       pending_audience_confirmation: isAudienceStep ? true : false,
       ...(didConfirmAudience ? { audience_confirmed: true } : {}),
     },
     action_options: formattedActionOptions,
-    render_hints: rendered.render_hints,
+    render_hints: sanitizedRendered.render_hints,
   }
 }

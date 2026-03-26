@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import {
   getBookingNextActionFromAI,
   interpretSemanticTurnWithAI,
@@ -42,9 +42,9 @@ import type {
   TurnSemanticSnapshot,
 } from "./types.ts"
 
-const MALE_RELATIONS = ["irmao", "irmÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o", "marido", "pai", "primo", "amigo", "namorado", "filho", "menino", "garoto"]
-const FEMALE_RELATIONS = ["irma", "irmÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£", "esposa", "mae", "mÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£e", "prima", "amiga", "namorada", "filha", "menina", "garota"]
-const CHILD_RELATIONS = ["filho", "filha", "crianca", "crianÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§a", "bebe", "bebÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âª", "menino", "menina", "muleque", "moleque"]
+const MALE_RELATIONS = ["irmao", "irmão", "marido", "pai", "primo", "amigo", "namorado", "filho", "menino", "garoto"]
+const FEMALE_RELATIONS = ["irma", "irmã", "esposa", "mae", "mãe", "prima", "amiga", "namorada", "filha", "menina", "garota"]
+const CHILD_RELATIONS = ["filho", "filha", "crianca", "criança", "bebe", "bebê", "menino", "menina", "muleque", "moleque"]
 
 function inferWaitingFor(
   state: SemanticTurnContext["state"]
@@ -83,7 +83,7 @@ export function inferContactPreferenceSignal(
   if (hasSkipPrimaryOption && /\b(esse mesmo|o mesmo|mesmo contato|mesmo numero|mesmo celular|pular|titular)\b/.test(normalized)) {
     return "skip_primary"
   }
-  // "O meu mesmo", "pode ser o meu", "usa o meu" etc. = usar o contato jÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ disponÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­vel (ex.: WhatsApp do remetente).
+  // "O meu mesmo", "pode ser o meu", "usa o meu" etc. = usar o contato já disponível (ex.: WhatsApp do remetente).
   if (/\b(o )?meu mesmo\b/.test(normalized) || /\b(pode ser|pode usar|quero usar)\s+(o )?meu\b/.test(normalized)) {
     return "phone"
   }
@@ -221,7 +221,7 @@ export function inferDeterministicBookingHints(
     (hasBookingContext && Boolean(date || time)) ||
     (Boolean(date || time) && /\b(vaga|horario|disponibilidade)\b/.test(normalized))
   const mentionsOtherPerson =
-    /\b(meu|minha|pro|pra|para)\s+(filho|filha|marido|esposa|irmao|irmÃƒÆ’Ã‚Â£o|irma|irmÃƒÆ’Ã‚Â£|pai|mae|mÃƒÆ’Ã‚Â£e|amigo|amiga|namorado|namorada)\b/.test(normalized)
+    /\b(meu|minha|pro|pra|para)\s+(filho|filha|marido|esposa|irmao|irmão|irma|irmã|pai|mae|mãe|amigo|amiga|namorado|namorada)\b/.test(normalized)
   const includesSelf = bookingIntent && !mentionsOtherPerson
   return {
     booking_intent: bookingIntent,
@@ -281,7 +281,7 @@ function inferSecondaryIntents(
   if (continuationKind === "price_followup") secondary.add("booking_with_price")
   if (primary === "booking" || primary === "booking_sequence") {
     if (isPriceQuestion(message)) secondary.add("booking_with_price")
-    if (/\b(depois do outro|um depois do outro|em sequencia|em sequÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia|logo depois|proximo horario|prÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ximo horÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡rio)\b/.test(normalized)) {
+    if (/\b(depois do outro|um depois do outro|em sequencia|em sequência|logo depois|proximo horario|próximo horário)\b/.test(normalized)) {
       secondary.add("availability_check")
     }
     if (bookingRequest?.additional_count && bookingRequest.additional_count > 0) {
@@ -396,13 +396,13 @@ function buildAudienceRisk(
     return { requires_confirmation: false, inferred_fit: true }
   }
 
-  // NinguÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©m foi mencionado (sem nome, sem "para meu filho" etc.): nÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o pedir confirmaÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o de pÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºblico.
+  // Ninguém foi mencionado (sem nome, sem "para meu filho" etc.): não pedir confirmação de público.
   if (people.length === 0) {
     return { requires_confirmation: false, inferred_fit: null }
   }
 
-  // Agendamento ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºnico para si: cliente nÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o mencionou outra pessoa (ex.: "para meu filho").
-  // NÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o exibir CTA "Sim, nos encaixamos?" ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â a IA segue direto para serviÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§o/data/horÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡rio.
+  // Agendamento único para si: cliente não mencionou outra pessoa (ex.: "para meu filho").
+  // Não exibir CTA "Sim, nos encaixamos?"; a IA segue direto para serviço/data/horário.
   const onlySelf =
     includesSelf &&
     people.length <= 1 &&
@@ -504,7 +504,7 @@ export function resolveNextQuestionHint(
 function inferSequenceRequest(message: string, bookingRequest: BookingRequestInterpretation | null): boolean {
   const normalized = normalizeText(message)
   if (bookingRequest?.additional_count && bookingRequest.additional_count > 0) return true
-  return /\b(em sequencia|em sequÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia|um depois do outro|logo depois|proximo horario|prÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ximo horÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡rio|na sequencia|na sequÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âªncia|tambem|tambÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©m|mais um|tbm)\b/.test(normalized)
+  return /\b(em sequencia|em sequência|um depois do outro|logo depois|proximo horario|próximo horário|na sequencia|na sequência|tambem|também|mais um|tbm)\b/.test(normalized)
 }
 
 function deriveIntentConfidence(

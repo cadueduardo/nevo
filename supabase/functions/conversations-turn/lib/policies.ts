@@ -30,16 +30,16 @@ function inferRequestedAudienceFromText(text: string): RequestedAudience {
   return null
 }
 
-/** Cliente estÃ¡ pedindo agendamento para o prÃ³prio pÃºblico permitido (ex.: "agendar pra mim" em men_only). */
+/** Cliente está pedindo agendamento para o próprio público permitido (ex.: "agendar pra mim" em men_only). */
 function textIndicatesBookingForAllowedAudience(config: SimulatorConfig, text: string): boolean {
   const mode = (config.target_audience?.mode || "all") as AudienceMode
   if (mode === "all" || mode === "custom") return false
   const msg = normalizeText(text || "")
   if (!msg) return false
 
-  const agendarParaMim = /(quero\s+)?agendar\s+(ent[Ã£a]o\s+)?(pra|para)\s+(mim|eu)(\s+e\s+meu\s+filho)?/i
+  const agendarParaMim = /(quero\s+)?agendar\s+(ent[ãa]o\s+)?(pra|para)\s+(mim|eu)(\s+e\s+meu\s+filho)?/i
   const simQueroAgendar = /^(sim|ok|entendi|beleza)[,\s]*\s*(quero\s+)?agendar/i
-  const soQueroAgendar = /^s[oÃ³]\s+quero\s+agendar/i
+  const soQueroAgendar = /^s[oó]\s+quero\s+agendar/i
 
   if (mode === "men_only") {
     // "agendar pra mim", "agendar pra mim e meu filho" (eu + filho = masculino), "sim, quero agendar"
@@ -101,7 +101,7 @@ export function buildTargetAudienceRestrictionMessage(config: SimulatorConfig): 
   return MODE_RESTRICTION_MESSAGES[mode] || "No momento, atendemos todos os publicos."
 }
 
-/** Config tem pÃºblico masculino + infantil (Homens e infantil). */
+/** Config tem público masculino + infantil (Homens e infantil). */
 function configHasMenAndKidsAudience(config: SimulatorConfig): boolean {
   const ta = config.target_audience
   if (!ta) return false
@@ -109,7 +109,7 @@ function configHasMenAndKidsAudience(config: SimulatorConfig): boolean {
   return modes.includes("men_only") && modes.includes("kids_only")
 }
 
-/** Mensagem pede agendamento "pra mim e meu filho" (ambÃ­guo: gÃªnero + idade do filho). */
+/** Mensagem pede agendamento "pra mim e meu filho" (ambíguo: gênero + idade do filho). */
 function textMentionsMeAndChild(text: string): boolean {
   const msg = normalizeText(text || "")
   if (!msg) return false
@@ -128,7 +128,7 @@ function textMentionsSelfAndAnotherPerson(text: string): boolean {
 
 /**
  * Mensagem de esclarecimento quando cliente pede "pra mim e meu filho" e o estabelecimento
- * atende homens e infantil (opÃ§Ã£o 2): confirmar perfil antes de seguir com agendamento.
+ * atende homens e infantil (opção 2): confirmar perfil antes de seguir com agendamento.
  */
 export function buildAudienceClarificationMessage(config: SimulatorConfig): string {
   const ta = config.target_audience
@@ -136,17 +136,17 @@ export function buildAudienceClarificationMessage(config: SimulatorConfig): stri
   const ageMin = ta?.kids_age_min
   const kidsPart =
     ageMin != null && ageMin > 0
-      ? `crianÃ§as a partir de ${ageMin} anos`
-      : "crianÃ§as (de qualquer idade)"
+      ? `crianças a partir de ${ageMin} anos`
+      : "crianças (de qualquer idade)"
   const intro = business
-    ? `Podemos sim agendar! SÃ³ pra alinhar: aqui na ${business} atendemos **homens e ${kidsPart}**.`
-    : `Podemos sim agendar! SÃ³ pra alinhar: aqui atendemos **homens e ${kidsPart}**.`
-  return `${intro} VocÃªs se encaixam nesse perfil? Se sim, escolho um horÃ¡rio pra vocÃªs.`
+    ? `Podemos sim agendar! Só pra alinhar: aqui na ${business} atendemos **homens e ${kidsPart}**.`
+    : `Podemos sim agendar! Só pra alinhar: aqui atendemos **homens e ${kidsPart}**.`
+  return `${intro} Vocês se encaixam nesse perfil? Se sim, escolho um horário pra vocês.`
 }
 
 /**
- * Retorna true quando devemos mostrar a mensagem de esclarecimento (opÃ§Ã£o 2)
- * em vez de ir direto ao agendamento: pÃºblico homens + infantil e cliente disse "pra mim e meu filho".
+ * Retorna true quando devemos mostrar a mensagem de esclarecimento (opção 2)
+ * em vez de ir direto ao agendamento: público homens + infantil e cliente disse "pra mim e meu filho".
  */
 export function needsAudienceClarification(config: SimulatorConfig, text: string): boolean {
   if (!configHasMenAndKidsAudience(config)) return false
@@ -164,7 +164,7 @@ export function shouldBlockByTargetAudience(
   const expected = expectedByMode(mode)
   if (!expected && allowedAudiences.length === 0) return false
 
-  // Cliente aceitou a restriÃ§Ã£o e pede agendamento para o pÃºblico permitido (ex.: "agendar pra mim e meu filho" em men_only).
+  // Cliente aceitou a restrição e pede agendamento para o público permitido (ex.: "agendar pra mim e meu filho" em men_only).
   if (textIndicatesBookingForAllowedAudience(config, text)) return false
 
   const requested = inferRequestedAudienceFromText(text)
