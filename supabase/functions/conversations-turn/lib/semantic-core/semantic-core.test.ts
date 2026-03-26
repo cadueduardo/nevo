@@ -763,6 +763,21 @@ Deno.test("inferCalendarResponseSignal detects calendar accept and decline from 
   assertEquals(inferCalendarResponseSignal("nao, obrigado", { state } as any), "decline")
 })
 
+Deno.test("resolvePrimaryIntent prioritizes calendar response continuation over generic intents", () => {
+  const brain = buildBusinessBrain(createBaseConfig() as any)
+  const result = resolvePrimaryIntent(
+    "Adicionar no calendário",
+    brain,
+    null,
+    null,
+    "calendar_response"
+  )
+
+  assertEquals(result.primary, "fallback")
+  assertEquals(result.source, "continuation")
+})
+
+
 Deno.test("deriveBookingContext treats snapshot contact preference as completed contact step", () => {
   const context = {
     channel: "web_simulator",
@@ -778,6 +793,7 @@ Deno.test("deriveBookingContext treats snapshot contact preference as completed 
         date: "2026-03-09",
         time: "09:30",
         staff_name: "Cadu",
+
       },
     }),
   }

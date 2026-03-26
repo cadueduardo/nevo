@@ -244,6 +244,7 @@ export function resolvePrimaryIntent(
 ): ResolvedPrimaryIntent {
   if (continuationKind === "audience_confirmation") return { primary: "booking", source: "continuation" }
   if (continuationKind === "price_followup") return { primary: "price", source: "continuation" }
+  if (continuationKind === "calendar_response") return { primary: "fallback", source: "continuation" }
   if (waitingFor === "attendee_name" && fallbackAttendeeNames.length > 0) {
     return { primary: isAdditionalBooking ? "booking_sequence" : "booking", source: "continuation" }
   }
@@ -279,6 +280,7 @@ function inferSecondaryIntents(
   const normalized = normalizeText(message)
   if (continuationKind === "audience_confirmation") secondary.add("audience_confirmation")
   if (continuationKind === "price_followup") secondary.add("booking_with_price")
+  if (continuationKind === "calendar_response") secondary.add("calendar_request")
   if (primary === "booking" || primary === "booking_sequence") {
     if (isPriceQuestion(message)) secondary.add("booking_with_price")
     if (/\b(depois do outro|um depois do outro|em sequencia|em sequência|logo depois|proximo horario|próximo horário)\b/.test(normalized)) {
@@ -288,9 +290,9 @@ function inferSecondaryIntents(
       secondary.add("booking_with_faq")
     }
   }
-  if (isAvailabilityQuestion(message)) secondary.add("availability_check")
   return Array.from(secondary)
 }
+
 
 function inferAudienceHint(relation?: string, includesSelf?: boolean): SemanticPersonCandidate["audience_hint"] {
   const rel = normalizeText(relation || "")

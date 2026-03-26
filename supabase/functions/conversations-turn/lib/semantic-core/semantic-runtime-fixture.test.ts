@@ -1948,6 +1948,7 @@ Deno.test("semantic runtime fixture answers calendar acceptance without generic 
   assertEquals(normalizeAssertText(result.message).includes(normalizeAssertText("calendário")), true)
 })
 
+
 Deno.test("semantic runtime fixture answers calendar decline without generic fallback", async () => {
   const { semantic, result } = await runSemanticFixture({
     config: createBaseConfig() as any,
